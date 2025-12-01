@@ -1,0 +1,48 @@
+{
+  "traders": [
+    {
+      "id": "paper_trader_001",
+      "name": "纸上交易 - 带手续费和滑点",
+      "ai_model": "deepseek",
+      "exchange": "binance",
+      "initial_balance": 10000,
+      "scan_interval_minutes": 3,
+      
+      "paper_trading_mode": true,
+      "paper_trading_taker_fee_rate": 0.0004,
+      "paper_trading_slippage_rate": 0.0005,
+      
+      "binance_api_key": "your_api_key_here",
+      "binance_secret_key": "your_secret_key_here",
+      "deepseek_key": "your_deepseek_key_here"
+    },
+    {
+      "id": "paper_trader_002",
+      "name": "纸上交易 - 无费用（旧行为）",
+      "ai_model": "deepseek",
+      "exchange": "binance",
+      "initial_balance": 10000,
+      "scan_interval_minutes": 3,
+      
+      "paper_trading_mode": true,
+      "paper_trading_taker_fee_rate": 0,
+      "paper_trading_slippage_rate": 0,
+      
+      "binance_api_key": "your_api_key_here",
+      "binance_secret_key": "your_secret_key_here",
+      "deepseek_key": "your_deepseek_key_here"
+    }
+  ],
+  "use_default_coins": true,
+  "default_coins": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+  "api_server_port": 8080,
+  "max_daily_loss": 5.0,
+  "max_drawdown": 10.0,
+  "stop_trading_minutes": 60,
+  "leverage": {
+    "btc_eth_leverage": 5,
+    "altcoin_leverage": 5
+  },
+  "min_risk_reward": 2.0
+}
+
