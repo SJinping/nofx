@@ -53,6 +53,9 @@ type AutoTraderConfig struct {
 	// 扫描配置
 	ScanInterval time.Duration // 扫描间隔（建议3分钟）
 
+	// 新增：是否开启录制
+	EnableRecording bool
+
 	// 账户配置
 	InitialBalance float64 // 初始金额（用于计算盈亏，需手动设置）
 
@@ -655,6 +658,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Positions:      positionInfos,
 		CandidateCoins: candidateCoins,
 		Performance:    performance, // 添加历史表现分析
+		EnableRecording: at.config.EnableRecording,
+		TraderID:        at.config.ID,
 	}
 
 	// 注入可插拔策略，默认使用 StrategyA

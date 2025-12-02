@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 	"strings"
+	"time"
 )
 
 // TraderConfig 单个trader的配置
@@ -48,7 +48,7 @@ type TraderConfig struct {
 	// 纸上交易配置（仅在PaperTradingMode=true时有效）
 	// 设置为0可以禁用相应的费用，默认使用币安标准费率
 	PaperTradingTakerFeeRate float64 `json:"paper_trading_taker_fee_rate,omitempty"` // Taker手续费率（0.04%=0.0004，设为0禁用）
-	PaperTradingSlippageRate float64 `json:"paper_trading_slippage_rate,omitempty"` // 滑点比例（0.05%=0.0005，设为0禁用）
+	PaperTradingSlippageRate float64 `json:"paper_trading_slippage_rate,omitempty"`  // 滑点比例（0.05%=0.0005，设为0禁用）
 
 	// 最小风险回报比
 	MinRiskReward float64 `json:"min_risk_reward,omitempty"`
@@ -76,6 +76,9 @@ type Config struct {
 	StopTradingMinutes int            `json:"stop_trading_minutes"`
 	Leverage           LeverageConfig `json:"leverage"`        // 杠杆配置
 	MinRiskReward      float64        `json:"min_risk_reward"` // 最小风险回报比
+
+	// 新增：是否开启数据录制（用于回测）
+	EnableRecording bool `json:"enable_recording"` // 是否开启录制
 }
 
 // LoadConfig 从文件加载配置
@@ -194,8 +197,6 @@ func (c *Config) Validate() error {
 	if len(c.Traders) == 0 {
 		return fmt.Errorf("至少需要配置一个trader")
 	}
-
-	
 
 	traderIDs := make(map[string]bool)
 	for i, trader := range c.Traders {

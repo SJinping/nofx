@@ -146,7 +146,7 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 		"model":       defaultConfig.Model,
 		"messages":    messages,
 		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
-		"max_tokens":  8000,
+		"max_tokens":  6000,
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持

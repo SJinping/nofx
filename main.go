@@ -68,7 +68,8 @@ func main() {
 			cfg.MaxDailyLoss,
 			cfg.MaxDrawdown,
 			cfg.StopTradingMinutes,
-			cfg.Leverage, // 传递杠杆配置
+			cfg.Leverage,        // 传递杠杆配置
+			cfg.EnableRecording, // 传递录制开关
 		)
 		if err != nil {
 			log.Fatalf("❌ 初始化trader失败: %v", err)

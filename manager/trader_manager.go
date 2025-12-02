@@ -6,9 +6,9 @@ import (
 	"nofx/config"
 	"nofx/decision"
 	"nofx/trader"
+	"strings"
 	"sync"
 	"time"
-	"strings"
 )
 
 // TraderManager 管理多个trader实例
@@ -24,10 +24,11 @@ func NewTraderManager() *TraderManager {
 	}
 }
 
-// AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig) error {
+	// AddTrader 添加一个trader
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+
 
 	if _, exists := tm.traders[cfg.ID]; exists {
 		return fmt.Errorf("trader ID '%s' 已存在", cfg.ID)
@@ -64,6 +65,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		PaperTradingTakerFeeRate: cfg.PaperTradingTakerFeeRate,
 		PaperTradingSlippageRate: cfg.PaperTradingSlippageRate,
 		MinRiskReward:            cfg.MinRiskReward,
+		EnableRecording:          enableRecording,
 	}
 
 	// 创建trader实例
