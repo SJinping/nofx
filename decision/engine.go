@@ -407,9 +407,9 @@ func buildSystemPromptB(accountEquity float64, btcEthLeverage, altcoinLeverage i
 
 	sb.WriteString("# 4️⃣ 基于绩效的自我调节（抽象版）\n\n")
 	sb.WriteString("外部系统会简化为一个当前绩效状态（夏普比率），你需要据此调节：\n")
-	sb.WriteString("- 当表现不佳（夏普<0）：提高开仓门槛，降低频率，更多 wait，减小仓位。\n")
-	sb.WriteString("- 当表现正常（夏普0-0.7）：维持当前标准，保持风控。\n")
-	sb.WriteString("- 当表现优异（夏普>0.7）：在严格风控下可适度积极。\n\n")
+	sb.WriteString("- **初始/中性状态** (夏普 ≈ 0 且无显著回撤)：此时视为 **正常状态**。保持标准风控，**积极寻找**符合逻辑的交易机会，不要因缺乏利润而过度保守。\n")
+	sb.WriteString("- **表现不佳** (夏普 < -0.2 或 回撤 > 2%)：提高门槛，防守为主，保持风控。\n")
+	sb.WriteString("- **表现优异** (夏普 > 0.5)：保持稳健，可适度乘胜追击。\n\n")
 
 	sb.WriteString("# 5️⃣ 风险与仓位\n\n")
 	sb.WriteString(fmt.Sprintf("当前账户净值: %.2f\n", accountEquity))

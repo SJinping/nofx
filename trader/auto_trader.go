@@ -6,7 +6,6 @@ import (
 	"log"
 	"nofx/decision"
 	"nofx/logger"
-	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
 	"nofx/stats"
@@ -90,11 +89,11 @@ type AutoTrader struct {
 	lastResetTime         time.Time
 	stopUntil             time.Time
 	isRunning             bool
-	isPaused              bool             // 是否暂停（仅停止交易循环，不退出程序）
-	startTime             time.Time        // 系统启动时间
-	callCount             int              // AI调用次数
+	isPaused              bool                    // 是否暂停（仅停止交易循环，不退出程序）
+	startTime             time.Time               // 系统启动时间
+	callCount             int                     // AI调用次数
 	promptStrategy        decision.PromptStrategy // 当前使用的Prompt策略（默认StrategyA）
-	positionFirstSeenTime map[string]int64 // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 }
 
 // NewAutoTrader 创建自动交易器
@@ -655,9 +654,9 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			MarginUsedPct:    marginUsedPct,
 			PositionCount:    len(positionInfos),
 		},
-		Positions:      positionInfos,
-		CandidateCoins: candidateCoins,
-		Performance:    performance, // 添加历史表现分析
+		Positions:       positionInfos,
+		CandidateCoins:  candidateCoins,
+		Performance:     performance, // 添加历史表现分析
 		EnableRecording: at.config.EnableRecording,
 		TraderID:        at.config.ID,
 	}
@@ -683,6 +682,12 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 		return at.executeCloseLongWithRecord(decision, actionRecord)
 	case "close_short":
 		return at.executeCloseShortWithRecord(decision, actionRecord)
+	case "update_stop_loss":
+		return at.executeUpdateStopLossWithRecord(decision, actionRecord)
+	case "update_take_profit":
+		return at.executeUpdateTakeProfitWithRecord(decision, actionRecord)
+	case "partial_close":
+		return at.executePartialCloseWithRecord(decision, actionRecord)
 	case "hold", "wait":
 		// 无需执行，仅记录
 		return nil
@@ -706,15 +711,15 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
 	if err != nil {
 		return err
 	}
 
 	// 计算数量
-	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
+	quantity := decision.PositionSizeUSD / currentPrice
 	actionRecord.Quantity = quantity
-	actionRecord.Price = marketData.CurrentPrice
+	actionRecord.Price = currentPrice
 
 	// 开仓
 	order, err := at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
@@ -759,15 +764,15 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	}
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
 	if err != nil {
 		return err
 	}
 
 	// 计算数量
-	quantity := decision.PositionSizeUSD / marketData.CurrentPrice
+	quantity := decision.PositionSizeUSD / currentPrice
 	actionRecord.Quantity = quantity
-	actionRecord.Price = marketData.CurrentPrice
+	actionRecord.Price = currentPrice
 
 	// 开仓
 	order, err := at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
@@ -802,11 +807,11 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	log.Printf("  🔄 平多仓: %s", decision.Symbol)
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
 	if err != nil {
 		return err
 	}
-	actionRecord.Price = marketData.CurrentPrice
+	actionRecord.Price = currentPrice
 
 	// 平仓
 	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = 全部平仓
@@ -828,11 +833,11 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	log.Printf("  🔄 平空仓: %s", decision.Symbol)
 
 	// 获取当前价格
-	marketData, err := market.Get(decision.Symbol)
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
 	if err != nil {
 		return err
 	}
-	actionRecord.Price = marketData.CurrentPrice
+	actionRecord.Price = currentPrice
 
 	// 平仓
 	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = 全部平仓
@@ -846,6 +851,239 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	}
 
 	log.Printf("  ✓ 平仓成功")
+	return nil
+}
+
+// executeUpdateStopLossWithRecord 执行更新止损并记录详细信息
+// 1. 获取目标持仓
+// 2. 获取持仓方向和数量
+// 3. 获取当前价格用于记录
+// 4. 基于当前价格做方向校验，避免明显无效/瞬间触发的止损
+// 5. 更新止损
+// 6. 记录详细信息
+func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🛡️ 更新止损: %s -> %.4f", decision.Symbol, decision.NewStopLoss)
+
+	// 获取当前持仓信息
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+
+	// 查找目标持仓
+	var targetPosition map[string]interface{}
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol {
+			targetPosition = pos
+			break
+		}
+	}
+
+	if targetPosition == nil {
+		return fmt.Errorf("未找到 %s 的持仓", decision.Symbol)
+	}
+
+	// 获取持仓方向和数量
+	side, _ := targetPosition["side"].(string)
+	quantity := 0.0
+	if qty, ok := targetPosition["positionAmt"].(float64); ok {
+		quantity = qty
+		if quantity < 0 {
+			quantity = -quantity
+		}
+	}
+
+	if quantity == 0 {
+		return fmt.Errorf("持仓数量为0")
+	}
+
+	// 获取当前价格，用于记录与有效性校验
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	if err != nil {
+		return fmt.Errorf("获取市场价格失败: %w", err)
+	}
+	if currentPrice <= 0 {
+		return fmt.Errorf("当前价格无效: %.4f", currentPrice)
+	}
+
+	actionRecord.Price = currentPrice
+	actionRecord.Quantity = quantity
+
+	switch strings.ToLower(side) {
+	case "long":
+		// 多仓止损必须在当前价之下，否则会立即触发
+		if decision.NewStopLoss >= currentPrice {
+			return fmt.Errorf("new_stop_loss(%.4f) 必须低于当前价(%.4f) 才是有效多仓止损", decision.NewStopLoss, currentPrice)
+		}
+	case "short":
+		// 空仓止损必须在当前价之上，否则会立即触发
+		if decision.NewStopLoss <= currentPrice {
+			return fmt.Errorf("new_stop_loss(%.4f) 必须高于当前价(%.4f) 才是有效空仓止损", decision.NewStopLoss, currentPrice)
+		}
+	default:
+		return fmt.Errorf("未知持仓方向: %s", side)
+	}
+
+	// 更新止损
+	// TODO: 如果有旧止损单，需要先取消旧止损单
+	positionSide := strings.ToUpper(side)
+	if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.NewStopLoss); err != nil {
+		return fmt.Errorf("设置止损失败: %w", err)
+	}
+
+	log.Printf("  ✓ 止损更新成功")
+	return nil
+}
+
+// executeUpdateTakeProfitWithRecord 执行更新止盈并记录详细信息
+func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🎯 更新止盈: %s -> %.4f", decision.Symbol, decision.NewTakeProfit)
+
+	// 获取当前持仓信息
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+
+	// 查找目标持仓
+	var targetPosition map[string]interface{}
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol {
+			targetPosition = pos
+			break
+		}
+	}
+
+	if targetPosition == nil {
+		return fmt.Errorf("未找到 %s 的持仓", decision.Symbol)
+	}
+
+	// 获取持仓方向和数量
+	side, _ := targetPosition["side"].(string)
+	quantity := 0.0
+	if qty, ok := targetPosition["positionAmt"].(float64); ok {
+		quantity = qty
+		if quantity < 0 {
+			quantity = -quantity
+		}
+	}
+
+	if quantity == 0 {
+		return fmt.Errorf("持仓数量为0")
+	}
+
+	// 获取当前价格，用于记录与有效性校验
+	// 基于当前价格做方向校验，避免明显无效/瞬间触发的止盈
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	if err != nil {
+		return fmt.Errorf("获取市场价格失败: %w", err)
+	}
+	if currentPrice <= 0 {
+		return fmt.Errorf("当前价格无效: %.4f", currentPrice)
+	}
+	actionRecord.Price = currentPrice
+	actionRecord.Quantity = quantity
+
+	switch strings.ToLower(side) {
+	case "long":
+		// 多仓止盈应该在当前价之上，否则意义不大/可能瞬间触发
+		if decision.NewTakeProfit <= currentPrice {
+			return fmt.Errorf("new_take_profit(%.4f) 应高于当前价(%.4f) 才是合理多仓止盈", decision.NewTakeProfit, currentPrice)
+		}
+	case "short":
+		// 空仓止盈应该在当前价之下
+		if decision.NewTakeProfit >= currentPrice {
+			return fmt.Errorf("new_take_profit(%.4f) 应低于当前价(%.4f) 才是合理空仓止盈", decision.NewTakeProfit, currentPrice)
+		}
+	default:
+		return fmt.Errorf("未知持仓方向: %s", side)
+	}
+
+	// 更新止盈
+	positionSide := strings.ToUpper(side)
+	if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.NewTakeProfit); err != nil {
+		return fmt.Errorf("设置止盈失败: %w", err)
+	}
+
+	log.Printf("  ✓ 止盈更新成功")
+	return nil
+}
+
+// executePartialCloseWithRecord 执行部分平仓并记录详细信息
+func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  📊 部分平仓: %s (%.0f%%)", decision.Symbol, decision.ClosePercentage)
+
+	// 获取当前持仓信息
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+
+	// 查找目标持仓
+	var targetPosition map[string]interface{}
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol {
+			targetPosition = pos
+			break
+		}
+	}
+
+	if targetPosition == nil {
+		return fmt.Errorf("未找到 %s 的持仓", decision.Symbol)
+	}
+
+	// 获取持仓方向和数量
+	side, _ := targetPosition["side"].(string)
+	quantity := 0.0
+	if qty, ok := targetPosition["positionAmt"].(float64); ok {
+		quantity = qty
+		if quantity < 0 {
+			quantity = -quantity
+		}
+	}
+
+	if quantity == 0 {
+		return fmt.Errorf("持仓数量为0")
+	}
+
+	// 计算要平仓的数量
+	closeQuantity := quantity * (decision.ClosePercentage / 100.0)
+
+	// 获取当前价格
+	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	actionRecord.Price = currentPrice
+	actionRecord.Quantity = closeQuantity
+
+	// 执行部分平仓
+	var order map[string]interface{}
+	if side == "long" {
+		order, err = at.trader.CloseLong(decision.Symbol, closeQuantity)
+	} else if side == "short" {
+		order, err = at.trader.CloseShort(decision.Symbol, closeQuantity)
+	} else {
+		return fmt.Errorf("未知的持仓方向: %s", side)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// 记录订单ID
+	if orderID, ok := order["orderId"].(int64); ok {
+		actionRecord.OrderID = orderID
+	}
+
+	log.Printf("  ✓ 部分平仓成功，平仓数量: %.4f (%.0f%%)", closeQuantity, decision.ClosePercentage)
+
+	// 平仓后，如果还有剩余持仓，可能需要更新止损止盈的数量
+	remainingQuantity := quantity - closeQuantity
+	if remainingQuantity > 0 {
+		log.Printf("  ℹ️ 剩余持仓数量: %.4f", remainingQuantity)
+	}
+
 	return nil
 }
 
@@ -1127,7 +1365,7 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 	// 定义优先级
 	getActionPriority := func(action string) int {
 		switch action {
-		case "close_long", "close_short":
+		case "close_long", "close_short", "partial_close":
 			return 1 // 最高优先级：先平仓
 		case "open_long", "open_short":
 			return 2 // 次优先级：后开仓
