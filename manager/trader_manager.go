@@ -24,11 +24,10 @@ func NewTraderManager() *TraderManager {
 	}
 }
 
-	// AddTrader 添加一个trader
+// AddTrader 添加一个trader
 func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
-
 
 	if _, exists := tm.traders[cfg.ID]; exists {
 		return fmt.Errorf("trader ID '%s' 已存在", cfg.ID)
@@ -78,6 +77,8 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 	switch strings.ToUpper(strings.TrimSpace(cfg.PromptStrategy)) {
 	case "B":
 		at.SetPromptStrategy(decision.StrategyB{})
+	case "V":
+		at.SetPromptStrategy(decision.StrategyV{})
 	default:
 		at.SetPromptStrategy(decision.StrategyA{})
 	}

@@ -226,8 +226,8 @@ func (c *Config) Validate() error {
 		// 新增：校验 PromptStrategy
 		if trader.PromptStrategy != "" {
 			ps := strings.ToUpper(trader.PromptStrategy)
-			if ps != "A" && ps != "B" {
-				return fmt.Errorf("trader[%d]: prompt_strategy必须是 'A' 或 'B'", i)
+			if ps != "A" && ps != "B" && ps != "V" {
+				return fmt.Errorf("trader[%d]: prompt_strategy必须是 'A' 或 'B' 或 'V'", i)
 			}
 		}
 

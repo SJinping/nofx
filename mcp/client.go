@@ -29,14 +29,16 @@ type Config struct {
 	Model      string
 	Timeout    time.Duration
 	UseFullURL bool // 是否使用完整URL（不添加/chat/completions）
+	MaxTokens  int
 }
 
 // 默认配置
 var defaultConfig = Config{
-	Provider: ProviderDeepSeek,
-	BaseURL:  "https://api.deepseek.com/v1",
-	Model:    "deepseek-reasoner",
-	Timeout:  120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
+	Provider:  ProviderDeepSeek,
+	BaseURL:   "https://api.deepseek.com/v1",
+	Model:     "deepseek-reasoner",
+	Timeout:   120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
+	MaxTokens: 4000,
 }
 
 // SetDeepSeekAPIKey 设置DeepSeek API密钥
@@ -89,7 +91,7 @@ func CallWithMessages(systemPrompt, userPrompt string) (string, error) {
 	}
 
 	// 重试配置
-	maxRetries := 3
+	maxRetries := 1 // 只调用一次
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -146,7 +148,7 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 		"model":       defaultConfig.Model,
 		"messages":    messages,
 		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
-		"max_tokens":  6000,
+		"max_tokens":  defaultConfig.MaxTokens,
 	}
 
 	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持

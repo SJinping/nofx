@@ -126,6 +126,80 @@ type FullDecision struct {
 	Timestamp  time.Time  `json:"timestamp"`
 }
 
+// 可插拔策略接口与默认/示例实现
+type PromptStrategy interface {
+	Name() string
+	BuildSystemPrompt(ctx *Context) string
+	BuildUserPrompt(ctx *Context) string
+
+	// 策略自己的“硬规则”（比如自动止盈）
+	GenerateAutoDecisions(ctx *Context) []Decision
+
+	// 策略自己的额外校验（在通用校验之后）
+	ExtraValidate(d *Decision, ctx *Context) error
+}
+
+// 默认策略：复用现有 buildSystemPrompt / buildUserPrompt
+type StrategyA struct{}
+
+func (StrategyA) Name() string { return "A" }
+func (StrategyA) BuildSystemPrompt(ctx *Context) string {
+	return buildSystemPrompt(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+}
+func (StrategyA) BuildUserPrompt(ctx *Context) string {
+	return buildUserPrompt(ctx)
+}
+func (StrategyA) GenerateAutoDecisions(ctx *Context) []Decision {
+	return nil
+}
+func (StrategyA) ExtraValidate(d *Decision, ctx *Context) error {
+	return nil
+}
+
+// 示例策略B：展示如何定制一部分提示词逻辑
+type StrategyB struct{}
+
+func (StrategyB) Name() string { return "B" }
+func (StrategyB) BuildSystemPrompt(ctx *Context) string {
+	return buildSystemPromptB(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+}
+func (StrategyB) BuildUserPrompt(ctx *Context) string {
+	return buildUserPromptB(ctx)
+}
+
+func (StrategyB) GenerateAutoDecisions(ctx *Context) []Decision {
+	// TODO: 实现自动止盈
+	// return generateAutoProfitTakingDecisions(ctx)
+	return nil
+}
+
+// 短期/波动交易策略 V：专注日内波动捕捉
+type StrategyV struct{}
+
+func (StrategyV) Name() string { return "V" }
+func (StrategyV) BuildSystemPrompt(ctx *Context) string {
+	return buildSystemPromptShortTerm(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+}
+func (StrategyV) BuildUserPrompt(ctx *Context) string {
+	return buildUserPromptB(ctx)
+}
+func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
+	return nil
+}
+func (StrategyV) ExtraValidate(d *Decision, ctx *Context) error {
+	return nil
+}
+
+// 示例：B策略额外要求开仓时confidence >= 75
+func (StrategyB) ExtraValidate(d *Decision, ctx *Context) error {
+	// if d.Action == "open_long" || d.Action == "open_short" {
+	// 	if d.Confidence > 0 && d.Confidence < 75 {
+	// 		return fmt.Errorf("策略B要求开仓信心度≥75，当前: %d", d.Confidence)
+	// 	}
+	// }
+	return nil
+}
+
 // GetFullDecision 获取AI的完整交易决策（批量分析所有币种和持仓）
 func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	// 1. 为所有币种获取市场数据
@@ -135,7 +209,7 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 		return nil, fmt.Errorf("获取市场数据失败: %w", err)
 	}
 
-	// === [新增] 数据录制 ===
+	// 数据录制，方便离线回测
 	if ctx.EnableRecording {
 		if err := saveContextToFile(ctx, ctx.TraderID); err != nil {
 			// 录制失败不影响主流程，仅打印日志
@@ -149,12 +223,32 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	if strategy == nil {
 		strategy = StrategyA{} // 默认策略
 	}
+
+	// 3. 执行策略级自动规则，相当于策略的硬约束条件，先于LLM策略执行，例如自动止盈止损策略
+	// TODO: 注意autoDecisions要兼容validateDecisions中的验证条件
+	autoDecisions := strategy.GenerateAutoDecisions(ctx)
+	if len(autoDecisions) > 0 {
+		if err := validateDecisions(autoDecisions, ctx); err != nil {
+			errType := stats.ClassifyDecisionValidateError(err.Error())
+			recordError(errType, err.Error(), "")
+			return nil, fmt.Errorf("自动决策验证失败: %w", err)
+		}
+
+		return &FullDecision{
+			UserPrompt: "(auto-strategy)",
+			CoTTrace:   fmt.Sprintf("策略%s触发自动规则，无需AI。", strategy.Name()),
+			Decisions:  autoDecisions,
+			Timestamp:  time.Now(),
+		}, nil
+	}
+
+	// 4. 否则构建System/User Prompt，让LLM决策
 	systemPrompt := strategy.BuildSystemPrompt(ctx)
 	userPrompt := strategy.BuildUserPrompt(ctx)
 	// 在用户提示前加上策略标识，便于日志对比
 	userPrompt = fmt.Sprintf("**策略版本**: %s\n\n%s", strategy.Name(), userPrompt)
 
-	// 3. 调用AI API（使用 system + user prompt）
+	// 5. 调用AI API（使用 system + user prompt）
 	aiResponse, err := mcp.CallWithMessages(systemPrompt, userPrompt)
 	if err != nil {
 		errType := stats.ClassifyLLMError(err.Error())
@@ -162,8 +256,31 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 		return nil, fmt.Errorf("调用AI API失败: %w", err)
 	}
 
-	// 4. 解析AI响应
-	decision, err := parseFullDecisionResponse(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	// 6. 解析AI响应
+	decision, err := parseFullDecisionResponse(aiResponse, ctx)
+	if err != nil {
+		errType := stats.ClassifyDecisionParseError(err.Error())
+		recordError(errType, err.Error(), "")
+		return nil, fmt.Errorf("解析AI响应失败: %w", err)
+	}
+
+	decision.Timestamp = time.Now()
+	decision.UserPrompt = userPrompt // 保存输入prompt
+	return decision, nil
+}
+
+// 用于回测，从文本中获取完整决策
+func GetFullDecisionFromText(ctx *Context, systemPrompt, userPrompt string) (*FullDecision, error) {
+	// 调用AI API（使用 system + user prompt）
+	aiResponse, err := mcp.CallWithMessages(systemPrompt, userPrompt)
+	if err != nil {
+		errType := stats.ClassifyLLMError(err.Error())
+		recordError(errType, err.Error(), "")
+		return nil, fmt.Errorf("调用AI API失败: %w", err)
+	}
+
+	// 解析AI响应
+	decision, err := parseFullDecisionResponse(aiResponse, ctx)
 	if err != nil {
 		errType := stats.ClassifyDecisionParseError(err.Error())
 		recordError(errType, err.Error(), "")
@@ -685,8 +802,83 @@ func buildUserPromptB(ctx *Context) string {
 	return sb.String()
 }
 
+// 专注短期/波动交易的 System Prompt（策略 V）
+func buildSystemPromptShortTerm(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
+    var sb strings.Builder
+
+    sb.WriteString("你是一个专门做短期/高波动交易的加密货币合约交易 AI。\n")
+    sb.WriteString("你关注的是 5–60 分钟级别的短期走势和波动机会，在严格风控下高效利用日内波动。\n")
+    sb.WriteString("数据（价格、技术指标、资金数据、绩效指标等）由外部系统提供，你只负责分析并给出决策建议。\n\n")
+
+    // 1️⃣ 核心目标：短期波动 + 风险控制
+    sb.WriteString("# 1️⃣ 核心目标（短期/波动交易）\n\n")
+    sb.WriteString("- 在可控回撤下，**高效捕捉日内波动和短期趋势**。\n")
+    sb.WriteString("- 关注 5–60 分钟内的走势演化，而不是多日/多周级别的大趋势。\n")
+    sb.WriteString("- 利用波动放大、趋势加速、假突破等形态做高性价比交易。\n")
+    sb.WriteString("- 严格控制单笔风险和整体回撤，避免连续亏损放大。\n\n")
+
+    // 2️⃣ 时间尺度与交易频率
+    sb.WriteString("# 2️⃣ 时间尺度与交易频率\n\n")
+    sb.WriteString("- 主要时间尺度：3 分钟 K 线 + 1 小时 / 4 小时背景。\n")
+    sb.WriteString("- 典型持仓时间：5–60 分钟，除非趋势非常强，不应频繁几十秒进出。\n")
+    sb.WriteString("- 每小时 0–3 笔新开仓是合理区间，**连续很多周期都在交易通常是不健康的**。\n")
+    sb.WriteString("- 如果信号一般或方向不清晰，宁可观望，不要为了“做点什么”而下单。\n\n")
+
+    // 3️⃣ 波动与信号强度
+    sb.WriteString("# 3️⃣ 波动与信号强度\n\n")
+    sb.WriteString("你应重点利用以下信息构建短期交易逻辑：\n")
+    sb.WriteString("- normalized_volatility (ATR14/price)：波动率放大/收缩。\n")
+    sb.WriteString("- 3 分钟价格序列：突破/回踩/震荡区间边缘、假突破形态。\n")
+    sb.WriteString("- EMA/MACD 序列：短周期趋势方向、背离、动能衰减。\n")
+    sb.WriteString("- RSI7/RSI14：短期超买超卖、急跌急涨后的情绪极值。\n")
+    sb.WriteString("- 成交量 / OI 序列：放量突破、缩量反弹、持仓量急剧上升/下降。\n\n")
+    sb.WriteString("典型可交易场景示例（不限于此）：\n")
+    sb.WriteString("- 强势趋势中的回调结束 → 顺势继续跟随（做多或做空）。\n")
+    sb.WriteString("- 区间震荡中，价格触及上/下沿且出现反转信号 → 做短线反转。\n")
+    sb.WriteString("- 突然放量+波动率放大，价格突破关键区间 → 短线追随突破方向。\n")
+    sb.WriteString("- 单边极端拉升/下跌后的明显衰竭信号 → 短线反向博回撤（仅在证据充分时）。\n\n")
+    sb.WriteString("每次建议开仓前，请综合多维信号给出主观 **信心度 (0–100)**，\n")
+    sb.WriteString("只有在你认为“置信度足够高”（例如 ≥80）时才建议开仓。\n\n")
+
+    // 4️⃣ 风险与仓位（复用现有约束）
+    sb.WriteString("# 4️⃣ 风险与仓位约束\n\n")
+    sb.WriteString(fmt.Sprintf("当前账户净值: %.2f\n", accountEquity))
+    sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
+    sb.WriteString("- 不孤注一掷：单一标的的风险不应占用账户的绝大部分。\n")
+    sb.WriteString(fmt.Sprintf("- 每笔交易的风险回报比应 ≥ 1:%.0f（理想 ≥ 1:3）。\n", minRiskReward))
+    sb.WriteString("- 止损价格和止盈价格必须与方向一致，不能出现做多止损高于止盈等明显错误。\n\n")
+
+    // 5️⃣ 基于绩效（Sharpe）的自我调节（短期版）
+    sb.WriteString("# 5️⃣ 基于绩效的自我调节（短期版）\n\n")
+    sb.WriteString("- Sharpe 很差（< -0.5）或最近多笔连续亏损：\n")
+    sb.WriteString("  • 明显收缩交易频率，优先观望；\n")
+    sb.WriteString("  • 只做非常高置信度的机会，适当减小仓位。\n")
+    sb.WriteString("- Sharpe 略负/接近 0：\n")
+    sb.WriteString("  • 严格筛选信号，避免情绪化加仓；\n")
+    sb.WriteString("  • 不要在震荡噪音中过度博弈小波动。\n")
+    sb.WriteString("- Sharpe 为正且稳定：\n")
+    sb.WriteString("  • 可以保持当前风格，正常捕捉短期机会；\n")
+    sb.WriteString("  • 仍需避免无效高频交易。\n\n")
+
+    // 6️⃣ 决策流程 & 输出格式（复用 B 的 JSON 规范）
+    sb.WriteString("# 6️⃣ 决策流程\n\n")
+    sb.WriteString("1. 判断当前是趋势阶段、震荡阶段，还是高波动/事件驱动阶段。\n")
+    sb.WriteString("2. 结合短周期价格/指标/波动/资金信息，评估是否存在高性价比短线机会。\n")
+    sb.WriteString("3. 如果有持仓，优先考虑止盈/止损/部分减仓等风险管理动作。\n")
+    sb.WriteString("4. 如果信号不足或方向不清晰，请选择 `hold` 或 `wait`。\n")
+    sb.WriteString("5. 只在信号充分、逻辑清晰、风险回报合理时，才给出开仓建议。\n\n")
+
+    sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
+    sb.WriteString("先输出思维链（文本），再输出 JSON 决策数组。\n")
+    sb.WriteString("JSON 数组的格式、字段与策略 B 一致：\n")
+    sb.WriteString("- action: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
+    sb.WriteString("- 开仓时必须提供: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+
+    return sb.String()
+}
+
 // parseFullDecisionResponse 解析AI的完整决策响应
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, ctx *Context) (*FullDecision, error) {
 	// 1. 提取思维链
 	cotTrace := extractCoTTrace(aiResponse)
 
@@ -700,7 +892,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	}
 
 	// 3. 验证决策
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+	if err := validateDecisions(decisions, ctx); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
 			Decisions: decisions,
@@ -774,13 +966,20 @@ func fixMissingQuotes(jsonStr string) string {
 }
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
+func validateDecisions(decisions []Decision, ctx *Context) error {
 	for i, decision := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+		if err := coreValidateDecision(&decisions[i], ctx); err != nil {
 			errType := stats.ClassifyDecisionValidateError(err.Error())
 			recordError(errType, err.Error(), decision.Symbol)
 			return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
 		}
+
+		// 策略自己的额外校验（在通用校验之后）
+		// if err := strategy.ExtraValidate(&decisions[i], ctx); err != nil {
+		// 	errType := stats.ClassifyDecisionValidateError(err.Error())
+		// 	recordError(errType, err.Error(), decision.Symbol)
+		// 	return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
+		// }
 	}
 	return nil
 }
@@ -807,21 +1006,23 @@ func findMatchingBracket(s string, start int) int {
 	return -1
 }
 
-// validateDecision 验证单个决策的有效性
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
+// coreValidateDecision 验证单个决策的有效性
+func coreValidateDecision(d *Decision, ctx *Context) error {
+	accountEquity := ctx.Account.TotalEquity
+	btcEthLeverage := ctx.BTCETHLeverage
+	altcoinLeverage := ctx.AltcoinLeverage
+
 	// 验证action
 	validActions := map[string]bool{
-		"open_long":   true,
-		"open_short":  true,
-		"close_long":  true,
-		"close_short": true,
-		"hold":        true,
-		"wait":        true,
-		// === 新增 Action ===
+		"open_long":          true,
+		"open_short":         true,
+		"close_long":         true,
+		"close_short":        true,
+		"hold":               true,
+		"wait":               true,
 		"update_stop_loss":   true,
 		"update_take_profit": true,
 		"partial_close":      true,
-		// ==================
 	}
 
 	if !validActions[d.Action] {
@@ -938,33 +1139,4 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 	}
 
 	return nil
-}
-
-// 可插拔策略接口与默认/示例实现
-type PromptStrategy interface {
-	Name() string
-	BuildSystemPrompt(ctx *Context) string
-	BuildUserPrompt(ctx *Context) string
-}
-
-// 默认策略：复用现有 buildSystemPrompt / buildUserPrompt
-type StrategyA struct{}
-
-func (StrategyA) Name() string { return "A" }
-func (StrategyA) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPrompt(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
-}
-func (StrategyA) BuildUserPrompt(ctx *Context) string {
-	return buildUserPrompt(ctx)
-}
-
-// 示例策略B：展示如何定制一部分提示词逻辑
-type StrategyB struct{}
-
-func (StrategyB) Name() string { return "B" }
-func (StrategyB) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPromptB(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
-}
-func (StrategyB) BuildUserPrompt(ctx *Context) string {
-	return buildUserPromptB(ctx)
 }
