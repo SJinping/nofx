@@ -76,6 +76,9 @@ func NewPaperTraderWithConfig(realTrader Trader, initialBalance float64, traderN
 
 // GetBalance 获取模拟账户余额
 func (pt *PaperTrader) GetBalance() (map[string]interface{}, error) {
+	// 先清理无效持仓（定期清理，避免累积）
+	pt.cleanInvalidPositions()
+
 	pt.mutex.RLock()
 	defer pt.mutex.RUnlock()
 
@@ -84,10 +87,16 @@ func (pt *PaperTrader) GetBalance() (map[string]interface{}, error) {
 	totalMarginUsed := 0.0
 
 	for _, pos := range pt.positions {
+		// 验证symbol是否有效
+		if strings.TrimSpace(pos.Symbol) == "" {
+			log.Printf("⚠️  [%s] 发现无效持仓(symbol为空)，跳过计算", pt.traderName)
+			continue
+		}
+
 		// 获取当前市价计算未实现盈亏
 		currentPrice, err := pt.realTrader.GetMarketPrice(pos.Symbol)
 		if err != nil {
-			log.Printf("⚠️  [%s] 获取 %s 市价失败: %v", pt.traderName, pos.Symbol, err)
+			log.Printf("⚠️  [%s] 获取 %s 市价失败: %v (跳过此持仓盈亏计算)", pt.traderName, pos.Symbol, err)
 			continue
 		}
 
@@ -125,14 +134,19 @@ func (pt *PaperTrader) GetPositions() ([]map[string]interface{}, error) {
 	var positions []map[string]interface{}
 
 	for _, pos := range pt.positions {
+		// 验证symbol是否有效
+		if strings.TrimSpace(pos.Symbol) == "" {
+			log.Printf("⚠️  [%s] 发现无效持仓(symbol为空)，跳过不返回", pt.traderName)
+			continue
+		}
+
 		// 获取当前市价
 		currentPrice, err := pt.realTrader.GetMarketPrice(pos.Symbol)
 		if err != nil {
-			log.Printf("⚠️  [%s] 获取 %s 市价失败: %v", pt.traderName, pos.Symbol, err)
-			// 网络失败时使用入场价兜底，避免丢失持仓导致上层崩溃
-			// 但使用入场价会导致净值曲线波动很大
-			// TODO: 如果使用市场价失败，使用上一次的市场价。但是太麻烦了，先勉强用
-			currentPrice = pos.EntryPrice
+			log.Printf("⚠️  [%s] 获取 %s 市价失败: %v (跳过此持仓)", pt.traderName, pos.Symbol, err)
+			// ⚠️ 改进：不再使用入场价兜底，直接跳过无效持仓
+			// 原来使用入场价会导致净值曲线波动很大
+			continue
 		}
 
 		// 计算未实现盈亏
@@ -359,6 +373,37 @@ func (pt *PaperTrader) calculateUnrealizedPnL(pos *PaperPosition, currentPrice f
 	} else {
 		return (pos.EntryPrice - currentPrice) * pos.Quantity
 	}
+}
+
+// cleanInvalidPositions 清理无效持仓（symbol为空或无法获取价格的持仓）
+func (pt *PaperTrader) cleanInvalidPositions() int {
+	pt.mutex.Lock()
+	defer pt.mutex.Unlock()
+
+	cleaned := 0
+	for key, pos := range pt.positions {
+		// 检查symbol是否有效
+		if strings.TrimSpace(pos.Symbol) == "" {
+			log.Printf("🧹 [%s] 清理无效持仓: key=%s (symbol为空)", pt.traderName, key)
+			delete(pt.positions, key)
+			cleaned++
+			continue
+		}
+
+		// 检查是否能获取市场价格
+		// 暂时不检查，防止调用太多API
+		// _, err := pt.realTrader.GetMarketPrice(pos.Symbol)
+		// if err != nil {
+		// 	log.Printf("🧹 [%s] 清理无效持仓: %s (无法获取市场价格: %v)", pt.traderName, pos.Symbol, err)
+		// 	delete(pt.positions, key)
+		// 	cleaned++
+		// }
+	}
+
+	if cleaned > 0 {
+		log.Printf("✅ [%s] 已清理 %d 个无效持仓", pt.traderName, cleaned)
+	}
+	return cleaned
 }
 
 // calculateRealizedPnL 计算已实现盈亏

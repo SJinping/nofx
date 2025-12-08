@@ -12,6 +12,43 @@ import (
 	"time"
 )
 
+// Action 交易动作常量
+const (
+	ActionOpenLong         = "open_long"
+	ActionOpenShort        = "open_short"
+	ActionCloseLong        = "close_long"
+	ActionCloseShort       = "close_short"
+	ActionHold             = "hold"
+	ActionWait             = "wait"
+	ActionUpdateStopLoss   = "update_stop_loss"
+	ActionUpdateTakeProfit = "update_take_profit"
+	ActionPartialClose     = "partial_close"
+)
+
+// ValidActions 所有合法的交易动作
+var ValidActions = map[string]bool{
+	ActionOpenLong:         true,
+	ActionOpenShort:        true,
+	ActionCloseLong:        true,
+	ActionCloseShort:       true,
+	ActionHold:             true,
+	ActionWait:             true,
+	ActionUpdateStopLoss:   true,
+	ActionUpdateTakeProfit: true,
+	ActionPartialClose:     true,
+}
+
+// ActionsNeedingSymbol 需要提供symbol的交易动作
+var ActionsNeedingSymbol = map[string]bool{
+	ActionOpenLong:         true,
+	ActionOpenShort:        true,
+	ActionCloseLong:        true,
+	ActionCloseShort:       true,
+	ActionUpdateStopLoss:   true,
+	ActionUpdateTakeProfit: true,
+	ActionPartialClose:     true,
+}
+
 // 当前使用的错误统计实例（由外部设置）
 var currentErrorStats *stats.ErrorStats
 var currentCycleNum int
@@ -377,7 +414,7 @@ func calculateMaxCandidates(ctx *Context) int {
 
 // buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
 // 注意风险回报比要与minRiskReward保持一致
-func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
+func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	var sb strings.Builder
 
 	// === 核心使命 ===
@@ -399,7 +436,8 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
 	sb.WriteString(fmt.Sprintf("1. **风险回报比**: 必须 ≥ 1:%.0f(冒1%%风险，赚%.0f%%+收益) \n", minRiskReward, minRiskReward))
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
-	sb.WriteString(fmt.Sprintf("3. **单币最大仓位**: 山寨不超过 %.0f U (约1.5x净值) | BTC/ETH 不超过 %.0f U (约10x净值)\n", accountEquity*1.5, accountEquity*10))
+	sb.WriteString("3. **单币最大仓位**: 山寨币不超过当前账户净值的 1.5 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n")
+	sb.WriteString("   当前账户净值会在用户消息中给出，你需要基于该数值自行判断仓位是否超限。\n")
 	sb.WriteString("4. **保证金**: 总使用率 ≤ 90%\n\n")
 
 	// === 交易频率认知 ===
@@ -462,15 +500,20 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("# 📤 输出格式\n\n")
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
 	sb.WriteString("简洁分析你的思考过程\n\n")
-	sb.WriteString("**第二步: JSON决策数组**\n\n")
+	sb.WriteString("**第二步: JSON决策数组（示例如下）**\n\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
+	sb.WriteString(fmt.Sprintf(
+		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": 3000, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n",
+		btcEthLeverage,
+	))
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("**字段说明**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short等涉及币种仓位的操作时，`symbol`字段必填\n")
+	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从“当前持仓列表”和“候选币种列表”中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
 
 	// === 关键提醒 ===
 	sb.WriteString("---\n\n")
@@ -484,7 +527,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 }
 
 // B策略的System Prompt
-func buildSystemPromptB(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
+func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	var sb strings.Builder
 
 	sb.WriteString("你是一个专业的加密货币合约交易决策 AI。\n")
@@ -522,14 +565,14 @@ func buildSystemPromptB(accountEquity float64, btcEthLeverage, altcoinLeverage i
 	sb.WriteString("- 尽量避免：在刚刚平仓后立刻反向再开；在明显震荡/噪音期强行寻找趋势；为了“做点什么”而交易\n")
 	sb.WriteString("- 当你评估一个开仓信号时，请给出一个主观信心度（0–100），并且只有在你认为“置信度足够高”（例如 >75）时，才建议开新仓。\n\n")
 
-	sb.WriteString("# 4️⃣ 基于绩效的自我调节（抽象版）\n\n")
+	sb.WriteString("# 4️⃣ 基于绩效的自我调节\n\n")
 	sb.WriteString("外部系统会简化为一个当前绩效状态（夏普比率），你需要据此调节：\n")
 	sb.WriteString("- **初始/中性状态** (夏普 ≈ 0 且无显著回撤)：此时视为 **正常状态**。保持标准风控，**积极寻找**符合逻辑的交易机会，不要因缺乏利润而过度保守。\n")
 	sb.WriteString("- **表现不佳** (夏普 < -0.2 或 回撤 > 2%)：提高门槛，防守为主，保持风控。\n")
 	sb.WriteString("- **表现优异** (夏普 > 0.5)：保持稳健，可适度乘胜追击。\n\n")
 
 	sb.WriteString("# 5️⃣ 风险与仓位\n\n")
-	sb.WriteString(fmt.Sprintf("当前账户净值: %.2f\n", accountEquity))
+	sb.WriteString("当前账户净值、实时盈亏、保证金使用率会在用户消息中给出，你需要基于这些数值评估回撤和风险承受度。\n")
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
 	sb.WriteString("- **不孤注一掷**：单一标的的风险不应占用账户的绝大部分。\n")
 	sb.WriteString("- **风险回报思维**：每次建议开仓时，确保风险回报比合理（建议 > 1:2，理想 > 1:3）。\n\n")
@@ -544,9 +587,12 @@ func buildSystemPromptB(accountEquity float64, btcEthLeverage, altcoinLeverage i
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
 	sb.WriteString("简要说明你如何解读当前行情，为什么选择观望/加仓/减仓/反向？简要写出关键因素。\n\n")
 
-	sb.WriteString("**第二步: JSON决策数组**\n\n")
+	sb.WriteString("**第二步: JSON决策数组（示例如下）**\n\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 95000, \"take_profit\": 105000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"顺势突破+放量\"},\n", btcEthLeverage, accountEquity*5))
+	sb.WriteString(fmt.Sprintf(
+		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": 3000, \"stop_loss\": 95000, \"take_profit\": 105000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"顺势突破+放量\"},\n",
+		btcEthLeverage,
+	))
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"update_stop_loss\", \"new_stop_loss\": 2800, \"reasoning\": \"移动止损保护利润\"},\n")
 	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"partial_close\", \"close_percentage\": 50, \"reasoning\": \"触及R1阻力，止盈一半\"}\n")
 	sb.WriteString("]\n```\n\n")
@@ -557,6 +603,8 @@ func buildSystemPromptB(accountEquity float64, btcEthLeverage, altcoinLeverage i
 	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`\n")
 	sb.WriteString("- `partial_close`: 必须提供 `close_percentage` (0-100)\n")
 	sb.WriteString("- 如果暂时没有足够好的机会，请坦然输出 wait 或仅对已有持仓做风控调整。\n")
+	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close等涉及币种仓位的操作时，`symbol`字段必填\n")
+	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从“当前持仓列表”和“候选币种列表”中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
 
 	return sb.String()
 }
@@ -803,78 +851,96 @@ func buildUserPromptB(ctx *Context) string {
 }
 
 // 专注短期/波动交易的 System Prompt（策略 V）
-func buildSystemPromptShortTerm(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
-    var sb strings.Builder
+func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) string {
+	var sb strings.Builder
 
-    sb.WriteString("你是一个专门做短期/高波动交易的加密货币合约交易 AI。\n")
-    sb.WriteString("你关注的是 5–60 分钟级别的短期走势和波动机会，在严格风控下高效利用日内波动。\n")
-    sb.WriteString("数据（价格、技术指标、资金数据、绩效指标等）由外部系统提供，你只负责分析并给出决策建议。\n\n")
+	sb.WriteString("你是一个专门做短期/高波动交易的加密货币合约交易 AI。\n")
+	sb.WriteString("你关注的是 5–60 分钟级别的短期走势和波动机会，在严格风控下高效利用日内波动。\n")
+	sb.WriteString("数据（价格、技术指标、资金数据、绩效指标等）由外部系统提供，你只负责分析并给出决策建议。\n\n")
 
-    // 1️⃣ 核心目标：短期波动 + 风险控制
-    sb.WriteString("# 1️⃣ 核心目标（短期/波动交易）\n\n")
-    sb.WriteString("- 在可控回撤下，**高效捕捉日内波动和短期趋势**。\n")
-    sb.WriteString("- 关注 5–60 分钟内的走势演化，而不是多日/多周级别的大趋势。\n")
-    sb.WriteString("- 利用波动放大、趋势加速、假突破等形态做高性价比交易。\n")
-    sb.WriteString("- 严格控制单笔风险和整体回撤，避免连续亏损放大。\n\n")
+	// 1️⃣ 核心目标：短期波动 + 风险控制
+	sb.WriteString("# 1️⃣ 核心目标（短期/波动交易）\n\n")
+	sb.WriteString("- 在可控回撤下，**高效捕捉日内波动和短期趋势**。\n")
+	sb.WriteString("- 关注 5–60 分钟内的走势演化，而不是多日/多周级别的大趋势。\n")
+	sb.WriteString("- 利用波动放大、趋势加速、假突破等形态做高性价比交易。\n")
+	sb.WriteString("- 严格控制单笔风险和整体回撤，避免连续亏损放大。\n\n")
 
-    // 2️⃣ 时间尺度与交易频率
-    sb.WriteString("# 2️⃣ 时间尺度与交易频率\n\n")
-    sb.WriteString("- 主要时间尺度：3 分钟 K 线 + 1 小时 / 4 小时背景。\n")
-    sb.WriteString("- 典型持仓时间：5–60 分钟，除非趋势非常强，不应频繁几十秒进出。\n")
-    sb.WriteString("- 每小时 0–3 笔新开仓是合理区间，**连续很多周期都在交易通常是不健康的**。\n")
-    sb.WriteString("- 如果信号一般或方向不清晰，宁可观望，不要为了“做点什么”而下单。\n\n")
+	// 2️⃣ 时间尺度与交易频率
+	sb.WriteString("# 2️⃣ 时间尺度与交易频率\n\n")
+	sb.WriteString("- 主要时间尺度：3 分钟 K 线 + 1 小时 / 4 小时背景。\n")
+	sb.WriteString("- 典型持仓时间：5–60 分钟，除非趋势非常强，不应频繁几十秒进出。\n")
+	sb.WriteString("- 每小时 0–3 笔新开仓是合理区间，**连续很多周期都在交易通常是不健康的**。\n")
+	sb.WriteString("- 如果信号一般或方向不清晰，宁可观望，不要为了“做点什么”而下单。\n\n")
 
-    // 3️⃣ 波动与信号强度
-    sb.WriteString("# 3️⃣ 波动与信号强度\n\n")
-    sb.WriteString("你应重点利用以下信息构建短期交易逻辑：\n")
-    sb.WriteString("- normalized_volatility (ATR14/price)：波动率放大/收缩。\n")
-    sb.WriteString("- 3 分钟价格序列：突破/回踩/震荡区间边缘、假突破形态。\n")
-    sb.WriteString("- EMA/MACD 序列：短周期趋势方向、背离、动能衰减。\n")
-    sb.WriteString("- RSI7/RSI14：短期超买超卖、急跌急涨后的情绪极值。\n")
-    sb.WriteString("- 成交量 / OI 序列：放量突破、缩量反弹、持仓量急剧上升/下降。\n\n")
-    sb.WriteString("典型可交易场景示例（不限于此）：\n")
-    sb.WriteString("- 强势趋势中的回调结束 → 顺势继续跟随（做多或做空）。\n")
-    sb.WriteString("- 区间震荡中，价格触及上/下沿且出现反转信号 → 做短线反转。\n")
-    sb.WriteString("- 突然放量+波动率放大，价格突破关键区间 → 短线追随突破方向。\n")
-    sb.WriteString("- 单边极端拉升/下跌后的明显衰竭信号 → 短线反向博回撤（仅在证据充分时）。\n\n")
-    sb.WriteString("每次建议开仓前，请综合多维信号给出主观 **信心度 (0–100)**，\n")
-    sb.WriteString("只有在你认为“置信度足够高”（例如 ≥80）时才建议开仓。\n\n")
+	// 3️⃣ 波动与信号强度
+	sb.WriteString("# 3️⃣ 波动与信号强度\n\n")
+	sb.WriteString("你应重点利用以下信息构建短期交易逻辑：\n")
+	sb.WriteString("- normalized_volatility (ATR14/price)：波动率放大/收缩。\n")
+	sb.WriteString("- 3 分钟价格序列：突破/回踩/震荡区间边缘、假突破形态。\n")
+	sb.WriteString("- EMA/MACD 序列：短周期趋势方向、背离、动能衰减。\n")
+	sb.WriteString("- RSI7/RSI14：短期超买超卖、急跌急涨后的情绪极值。\n")
+	sb.WriteString("- 成交量 / OI 序列：放量突破、缩量反弹、持仓量急剧上升/下降。\n\n")
+	sb.WriteString("典型可交易场景示例（但不限于此）：\n")
+	sb.WriteString("- 强势趋势中的回调结束 → 顺势继续跟随（做多或做空）。\n")
+	sb.WriteString("- 区间震荡中，价格触及上/下沿且出现反转信号 → 做短线反转。\n")
+	sb.WriteString("- 突然放量+波动率放大，价格突破关键区间 → 短线追随突破方向。\n")
+	sb.WriteString("- 单边极端拉升/下跌后的明显衰竭信号 → 短线反向博回撤（仅在证据充分时）。\n\n")
+	sb.WriteString("每次建议开仓前，请综合多维信号给出主观 **信心度 (0–100)**，\n")
+	sb.WriteString("只有在你认为“置信度足够高”（例如 ≥80）时才建议开仓。\n\n")
 
-    // 4️⃣ 风险与仓位（复用现有约束）
-    sb.WriteString("# 4️⃣ 风险与仓位约束\n\n")
-    sb.WriteString(fmt.Sprintf("当前账户净值: %.2f\n", accountEquity))
-    sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
-    sb.WriteString("- 不孤注一掷：单一标的的风险不应占用账户的绝大部分。\n")
-    sb.WriteString(fmt.Sprintf("- 每笔交易的风险回报比应 ≥ 1:%.0f（理想 ≥ 1:3）。\n", minRiskReward))
-    sb.WriteString("- 止损价格和止盈价格必须与方向一致，不能出现做多止损高于止盈等明显错误。\n\n")
+	// 4️⃣ 风险与仓位（复用现有约束）
+	sb.WriteString("# 4️⃣ 风险与仓位约束\n\n")
+	sb.WriteString("当前账户净值、浮动盈亏、保证金使用率会在用户消息中给出，你需要基于这些数据评估整体风险承受能力。\n")
+	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
+	sb.WriteString("- 不孤注一掷：单一标的的风险不应占用账户的绝大部分。\n")
+	sb.WriteString(fmt.Sprintf("- 每笔交易的风险回报比应 ≥ 1:%.0f（理想 ≥ 1:3）。\n", minRiskReward))
+	sb.WriteString("- 止损价格和止盈价格必须与方向一致，不能出现做多止损高于止盈等明显错误。\n\n")
 
-    // 5️⃣ 基于绩效（Sharpe）的自我调节（短期版）
-    sb.WriteString("# 5️⃣ 基于绩效的自我调节（短期版）\n\n")
-    sb.WriteString("- Sharpe 很差（< -0.5）或最近多笔连续亏损：\n")
-    sb.WriteString("  • 明显收缩交易频率，优先观望；\n")
-    sb.WriteString("  • 只做非常高置信度的机会，适当减小仓位。\n")
-    sb.WriteString("- Sharpe 略负/接近 0：\n")
-    sb.WriteString("  • 严格筛选信号，避免情绪化加仓；\n")
-    sb.WriteString("  • 不要在震荡噪音中过度博弈小波动。\n")
-    sb.WriteString("- Sharpe 为正且稳定：\n")
-    sb.WriteString("  • 可以保持当前风格，正常捕捉短期机会；\n")
-    sb.WriteString("  • 仍需避免无效高频交易。\n\n")
+	// 5️⃣ 基于绩效（Sharpe）的自我调节（短期版）
+	sb.WriteString("# 5️⃣ 基于绩效的自我调节\n\n")
+	sb.WriteString("- Sharpe 很差（< -0.5）或最近多笔连续亏损：\n")
+	sb.WriteString("  • 明显收缩交易频率，优先观望；\n")
+	sb.WriteString("  • 只做非常高置信度的机会，适当减小仓位。\n")
+	sb.WriteString("- Sharpe 略负/接近 0：\n")
+	sb.WriteString("  • 严格筛选信号，避免情绪化加仓；\n")
+	sb.WriteString("  • 不要在震荡噪音中过度博弈小波动。\n")
+	sb.WriteString("- Sharpe 为正且稳定：\n")
+	sb.WriteString("  • 可以保持当前风格，正常捕捉短期机会；\n")
+	sb.WriteString("  • 仍需避免无效高频交易。\n\n")
 
-    // 6️⃣ 决策流程 & 输出格式（复用 B 的 JSON 规范）
-    sb.WriteString("# 6️⃣ 决策流程\n\n")
-    sb.WriteString("1. 判断当前是趋势阶段、震荡阶段，还是高波动/事件驱动阶段。\n")
-    sb.WriteString("2. 结合短周期价格/指标/波动/资金信息，评估是否存在高性价比短线机会。\n")
-    sb.WriteString("3. 如果有持仓，优先考虑止盈/止损/部分减仓等风险管理动作。\n")
-    sb.WriteString("4. 如果信号不足或方向不清晰，请选择 `hold` 或 `wait`。\n")
-    sb.WriteString("5. 只在信号充分、逻辑清晰、风险回报合理时，才给出开仓建议。\n\n")
+	// 6️⃣ 决策流程 & 输出格式（复用 B 的 JSON 规范）
+	sb.WriteString("# 6️⃣ 决策流程\n\n")
+	sb.WriteString("1. 判断当前是趋势阶段、震荡阶段，还是高波动/事件驱动阶段。\n")
+	sb.WriteString("2. 结合短周期价格/指标/波动/资金信息，评估是否存在高性价比短线机会。\n")
+	sb.WriteString("3. 如果有持仓，优先考虑止盈/止损/部分减仓等风险管理动作。\n")
+	sb.WriteString("4. 如果信号不足或方向不清晰，请选择 `hold` 或 `wait`。\n")
+	sb.WriteString("5. 只在信号充分、逻辑清晰、风险回报合理时，才给出开仓建议。\n\n")
 
-    sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
-    sb.WriteString("先输出思维链（文本），再输出 JSON 决策数组。\n")
-    sb.WriteString("JSON 数组的格式、字段与策略 B 一致：\n")
-    sb.WriteString("- action: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
-    sb.WriteString("- 开仓时必须提供: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+	sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
+	sb.WriteString("# 📤 输出格式\n\n")
+	sb.WriteString("**第一步: 思维链（纯文本）**\n")
+	sb.WriteString("简要说明你如何解读当前行情，为什么选择观望/加仓/减仓/反向？简要写出关键因素即可。\n\n")
 
-    return sb.String()
+	sb.WriteString("**第二步: JSON决策数组（示例如下）**\n\n")
+	sb.WriteString("```json\n[\n")
+	sb.WriteString(fmt.Sprintf(
+		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": 3000, \"stop_loss\": 95000, \"take_profit\": 105000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"顺势突破+放量\"},\n",
+		btcEthLeverage,
+	))
+	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"update_stop_loss\", \"new_stop_loss\": 2800, \"reasoning\": \"移动止损保护利润\"},\n")
+	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"partial_close\", \"close_percentage\": 50, \"reasoning\": \"触及R1阻力，止盈一半\"}\n")
+	sb.WriteString("]\n```\n\n")
+
+	sb.WriteString("**字段说明**:\n")
+	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`\n")
+	sb.WriteString("- `partial_close`: 必须提供 `close_percentage` (0-100)\n")
+	sb.WriteString("- 如果暂时没有足够好的机会，请坦然输出 wait 或仅对已有持仓做风控调整。\n")
+	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close等涉及币种仓位的操作时，`symbol`字段必填\n")
+	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从“当前持仓列表”和“候选币种列表”中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
+
+	return sb.String()
 }
 
 // parseFullDecisionResponse 解析AI的完整决策响应
@@ -1013,26 +1079,19 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 	altcoinLeverage := ctx.AltcoinLeverage
 
 	// 验证action
-	validActions := map[string]bool{
-		"open_long":          true,
-		"open_short":         true,
-		"close_long":         true,
-		"close_short":        true,
-		"hold":               true,
-		"wait":               true,
-		"update_stop_loss":   true,
-		"update_take_profit": true,
-		"partial_close":      true,
+	if !ValidActions[d.Action] {
+		return fmt.Errorf("无效的action: %s", d.Action)
 	}
 
-	if !validActions[d.Action] {
-		return fmt.Errorf("无效的action: %s", d.Action)
+	// 验证需要symbol的操作必须提供有效的symbol字段
+	if ActionsNeedingSymbol[d.Action] && strings.TrimSpace(d.Symbol) == "" {
+		return fmt.Errorf("action '%s' 必须提供有效的symbol字段，当前为空", d.Action)
 	}
 
 	// === 针对不同 Action 的校验逻辑 ===
 
 	// 1. 移动止损逻辑
-	if d.Action == "update_stop_loss" {
+	if d.Action == ActionUpdateStopLoss {
 		if d.NewStopLoss <= 0 {
 			// 为了兼容性，如果 LLM 填到了原来的 StopLoss 字段，也可，并自动迁移数据
 			if d.StopLoss > 0 {
@@ -1045,7 +1104,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 	}
 
 	// 1b. 移动止盈逻辑
-	if d.Action == "update_take_profit" {
+	if d.Action == ActionUpdateTakeProfit {
 		if d.NewTakeProfit <= 0 {
 			// 兼容旧字段 take_profit
 			if d.TakeProfit > 0 {
@@ -1058,7 +1117,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 	}
 
 	// 2. 部分平仓逻辑
-	if d.Action == "partial_close" {
+	if d.Action == ActionPartialClose {
 		if d.ClosePercentage <= 0 || d.ClosePercentage > 100 {
 			return fmt.Errorf("partial_close 必须提供 close_percentage 且在 0-100 之间，当前: %.2f", d.ClosePercentage)
 		}
@@ -1066,7 +1125,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 	}
 
 	// 开仓操作必须提供完整参数
-	if d.Action == "open_long" || d.Action == "open_short" {
+	if d.Action == ActionOpenLong || d.Action == ActionOpenShort {
 		// 根据币种使用配置的杠杆上限
 		maxLeverage := altcoinLeverage          // 山寨币使用配置的杠杆
 		maxPositionValue := accountEquity * 1.5 // 山寨币最多1.5倍账户净值
@@ -1095,7 +1154,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		}
 
 		// 验证止损止盈的合理性
-		if d.Action == "open_long" {
+		if d.Action == ActionOpenLong {
 			if d.StopLoss >= d.TakeProfit {
 				return fmt.Errorf("做多时止损价必须小于止盈价")
 			}
@@ -1108,7 +1167,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		// 验证风险回报比（必须≥1:minRiskReward）
 		// 计算入场价（假设当前市价）
 		var entryPrice float64
-		if d.Action == "open_long" {
+		if d.Action == ActionOpenLong {
 			// 做多：入场价在止损和止盈之间
 			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // 假设在20%位置入场
 		} else {
@@ -1117,7 +1176,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		}
 
 		var riskPercent, rewardPercent, riskRewardRatio float64
-		if d.Action == "open_long" {
+		if d.Action == ActionOpenLong {
 			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
 			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
 			if riskPercent > 0 {

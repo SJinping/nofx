@@ -357,14 +357,14 @@ func (at *AutoTrader) runCycle() error {
 
 	// 4. 调用AI获取完整决策
 	log.Println("🤖 正在请求AI分析并决策...")
-	decision, err := decision.GetFullDecision(ctx)
+	engeinDecision, err := decision.GetFullDecision(ctx)
 
 	// 即使有错误，也保存思维链、决策和输入prompt（用于debug）
-	if decision != nil {
-		record.InputPrompt = decision.UserPrompt
-		record.CoTTrace = decision.CoTTrace
-		if len(decision.Decisions) > 0 {
-			decisionJSON, _ := json.MarshalIndent(decision.Decisions, "", "  ")
+	if engeinDecision != nil {
+		record.InputPrompt = engeinDecision.UserPrompt
+		record.CoTTrace = engeinDecision.CoTTrace
+		if len(engeinDecision.Decisions) > 0 {
+			decisionJSON, _ := json.MarshalIndent(engeinDecision.Decisions, "", "  ")
 			record.DecisionJSON = string(decisionJSON)
 		}
 	}
@@ -375,11 +375,11 @@ func (at *AutoTrader) runCycle() error {
 		cycleSuccess = false
 
 		// 打印AI思维链（即使有错误）
-		if decision != nil && decision.CoTTrace != "" {
+		if engeinDecision != nil && engeinDecision.CoTTrace != "" {
 			log.Printf("\n" + strings.Repeat("-", 70))
 			log.Println("💭 AI思维链分析（错误情况）:")
 			log.Println(strings.Repeat("-", 70))
-			log.Println(decision.CoTTrace)
+			log.Println(engeinDecision.CoTTrace)
 			log.Printf(strings.Repeat("-", 70) + "\n")
 		}
 
@@ -392,14 +392,14 @@ func (at *AutoTrader) runCycle() error {
 	log.Printf("\n" + strings.Repeat("-", 70))
 	log.Println("💭 AI思维链分析:")
 	log.Println(strings.Repeat("-", 70))
-	log.Println(decision.CoTTrace)
+	log.Println(engeinDecision.CoTTrace)
 	log.Printf(strings.Repeat("-", 70) + "\n")
 
 	// 6. 打印AI决策
-	log.Printf("📋 AI决策列表 (%d 个):\n", len(decision.Decisions))
-	for i, d := range decision.Decisions {
+	log.Printf("📋 AI决策列表 (%d 个):\n", len(engeinDecision.Decisions))
+	for i, d := range engeinDecision.Decisions {
 		log.Printf("  [%d] %s: %s - %s", i+1, d.Symbol, d.Action, d.Reasoning)
-		if d.Action == "open_long" || d.Action == "open_short" {
+		if d.Action == decision.ActionOpenLong || d.Action == decision.ActionOpenShort {
 			log.Printf("      杠杆: %dx | 仓位: %.2f USDT | 止损: %.4f | 止盈: %.4f",
 				d.Leverage, d.PositionSizeUSD, d.StopLoss, d.TakeProfit)
 		}
@@ -407,7 +407,7 @@ func (at *AutoTrader) runCycle() error {
 	log.Println()
 
 	// 7. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
-	sortedDecisions := sortDecisionsByPriority(decision.Decisions)
+	sortedDecisions := sortDecisionsByPriority(engeinDecision.Decisions)
 
 	log.Println("🔄 执行顺序（已优化）: 先平仓→后开仓")
 	for i, d := range sortedDecisions {
@@ -672,27 +672,27 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 }
 
 // executeDecisionWithRecord 执行AI决策并记录详细信息
-func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
-	switch decision.Action {
-	case "open_long":
-		return at.executeOpenLongWithRecord(decision, actionRecord)
-	case "open_short":
-		return at.executeOpenShortWithRecord(decision, actionRecord)
-	case "close_long":
-		return at.executeCloseLongWithRecord(decision, actionRecord)
-	case "close_short":
-		return at.executeCloseShortWithRecord(decision, actionRecord)
-	case "update_stop_loss":
-		return at.executeUpdateStopLossWithRecord(decision, actionRecord)
-	case "update_take_profit":
-		return at.executeUpdateTakeProfitWithRecord(decision, actionRecord)
-	case "partial_close":
-		return at.executePartialCloseWithRecord(decision, actionRecord)
-	case "hold", "wait":
+func (at *AutoTrader) executeDecisionWithRecord(dec *decision.Decision, actionRecord *logger.DecisionAction) error {
+	switch dec.Action {
+	case decision.ActionOpenLong:
+		return at.executeOpenLongWithRecord(dec, actionRecord)
+	case decision.ActionOpenShort:
+		return at.executeOpenShortWithRecord(dec, actionRecord)
+	case decision.ActionCloseLong:
+		return at.executeCloseLongWithRecord(dec, actionRecord)
+	case decision.ActionCloseShort:
+		return at.executeCloseShortWithRecord(dec, actionRecord)
+	case decision.ActionUpdateStopLoss:
+		return at.executeUpdateStopLossWithRecord(dec, actionRecord)
+	case decision.ActionUpdateTakeProfit:
+		return at.executeUpdateTakeProfitWithRecord(dec, actionRecord)
+	case decision.ActionPartialClose:
+		return at.executePartialCloseWithRecord(dec, actionRecord)
+	case decision.ActionHold, decision.ActionWait:
 		// 无需执行，仅记录
 		return nil
 	default:
-		return fmt.Errorf("未知的action: %s", decision.Action)
+		return fmt.Errorf("未知的action: %s", dec.Action)
 	}
 }
 
@@ -1365,11 +1365,11 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 	// 定义优先级
 	getActionPriority := func(action string) int {
 		switch action {
-		case "close_long", "close_short", "partial_close":
+		case decision.ActionCloseLong, decision.ActionCloseShort, decision.ActionPartialClose:
 			return 1 // 最高优先级：先平仓
-		case "open_long", "open_short":
+		case decision.ActionOpenLong, decision.ActionOpenShort:
 			return 2 // 次优先级：后开仓
-		case "hold", "wait":
+		case decision.ActionHold, decision.ActionWait:
 			return 3 // 最低优先级：观望
 		default:
 			return 999 // 未知动作放最后
