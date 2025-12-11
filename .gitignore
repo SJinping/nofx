@@ -44,6 +44,8 @@ paper_trade.log
 test/
 v2ray/
 v2ray_cli/
+data/
+reports/
 test.sh
 test_binance
 
