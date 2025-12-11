@@ -290,18 +290,23 @@ type TradeOutcome struct {
 
 // PerformanceAnalysis 交易表现分析
 type PerformanceAnalysis struct {
-	TotalTrades   int                           `json:"total_trades"`   // 总交易数
-	WinningTrades int                           `json:"winning_trades"` // 盈利交易数
-	LosingTrades  int                           `json:"losing_trades"`  // 亏损交易数
-	WinRate       float64                       `json:"win_rate"`       // 胜率
-	AvgWin        float64                       `json:"avg_win"`        // 平均盈利
-	AvgLoss       float64                       `json:"avg_loss"`       // 平均亏损
-	ProfitFactor  float64                       `json:"profit_factor"`  // 盈亏比
-	SharpeRatio   float64                       `json:"sharpe_ratio"`   // 夏普比率（风险调整后收益）
-	RecentTrades  []TradeOutcome                `json:"recent_trades"`  // 最近N笔交易
-	SymbolStats   map[string]*SymbolPerformance `json:"symbol_stats"`   // 各币种表现
-	BestSymbol    string                        `json:"best_symbol"`    // 表现最好的币种
-	WorstSymbol   string                        `json:"worst_symbol"`   // 表现最差的币种
+	TotalTrades   int     `json:"total_trades"`   // 总交易数
+	WinningTrades int     `json:"winning_trades"` // 盈利交易数
+	LosingTrades  int     `json:"losing_trades"`  // 亏损交易数
+	WinRate       float64 `json:"win_rate"`       // 胜率
+	AvgWin        float64 `json:"avg_win"`        // 平均盈利
+	AvgLoss       float64 `json:"avg_loss"`       // 平均亏损
+	ProfitFactor  float64 `json:"profit_factor"`  // 盈亏比
+	SharpeRatio   float64 `json:"sharpe_ratio"`   // 夏普比率（风险调整后收益）
+
+	// 连续亏损统计（基于最近 lookbackCycles 内完成的交易）
+	CurrentLosingStreak int `json:"current_losing_streak"` // 当前连续亏损笔数
+	MaxLosingStreak     int `json:"max_losing_streak"`     // 最大连续亏损笔数
+
+	RecentTrades []TradeOutcome                `json:"recent_trades"` // 最近N笔交易
+	SymbolStats  map[string]*SymbolPerformance `json:"symbol_stats"`  // 各币种表现
+	BestSymbol   string                        `json:"best_symbol"`   // 表现最好的币种
+	WorstSymbol  string                        `json:"worst_symbol"`  // 表现最差的币种
 }
 
 // SymbolPerformance 币种表现统计
@@ -333,6 +338,10 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		RecentTrades: []TradeOutcome{},
 		SymbolStats:  make(map[string]*SymbolPerformance),
 	}
+
+	// 连续亏损统计
+	currentLosingStreak := 0
+	maxLosingStreak := 0
 
 	// 追踪持仓状态：symbol_side -> {side, openPrice, openTime, quantity, leverage}
 	openPositions := make(map[string]map[string]interface{})
@@ -401,6 +410,18 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 
 					analysis.RecentTrades = append(analysis.RecentTrades, outcome)
 					analysis.TotalTrades++
+
+					// 更新连续亏损统计
+					if pnl < 0 {
+						currentLosingStreak++
+						if currentLosingStreak > maxLosingStreak {
+							maxLosingStreak = currentLosingStreak
+						}
+					} else if pnl > 0 {
+						// 盈利交易会打断亏损连击
+						currentLosingStreak = 0
+					}
+					// 持平 (pnl == 0) 的情况既不增加也不清空连败，可以根据需要调整逻辑
 
 					if pnl > 0 {
 						analysis.WinningTrades++
@@ -486,6 +507,10 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
 		}
 	}
+
+	// 写入连续亏损统计
+	analysis.CurrentLosingStreak = currentLosingStreak
+	analysis.MaxLosingStreak = maxLosingStreak
 
 	// 计算夏普比率（需要至少2个数据点）
 	analysis.SharpeRatio = l.calculateSharpeRatio(records)

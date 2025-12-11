@@ -1,0 +1,108 @@
+package decision
+
+import (
+	"nofx/market"
+	"time"
+)
+
+// PositionInfo 持仓信息
+type PositionInfo struct {
+	Symbol           string  `json:"symbol"`
+	Side             string  `json:"side"` // "long" or "short"
+	EntryPrice       float64 `json:"entry_price"`
+	MarkPrice        float64 `json:"mark_price"`
+	Quantity         float64 `json:"quantity"`
+	Leverage         int     `json:"leverage"`
+	UnrealizedPnL    float64 `json:"unrealized_pnl"`
+	UnrealizedPnLPct float64 `json:"unrealized_pnl_pct"`
+	LiquidationPrice float64 `json:"liquidation_price"`
+	MarginUsed       float64 `json:"margin_used"`
+	UpdateTime       int64   `json:"update_time"` // 持仓更新时间戳（毫秒）
+}
+
+// AccountInfo 账户信息
+type AccountInfo struct {
+	TotalEquity      float64 `json:"total_equity"`      // 账户净值
+	AvailableBalance float64 `json:"available_balance"` // 可用余额
+	TotalPnL         float64 `json:"total_pnl"`         // 总盈亏
+	TotalPnLPct      float64 `json:"total_pnl_pct"`     // 总盈亏百分比
+	MarginUsed       float64 `json:"margin_used"`       // 已用保证金
+	MarginUsedPct    float64 `json:"margin_used_pct"`   // 保证金使用率
+	PositionCount    int     `json:"position_count"`    // 持仓数量
+}
+
+// CandidateCoin 候选币种（来自币种池）
+type CandidateCoin struct {
+	Symbol  string   `json:"symbol"`
+	Sources []string `json:"sources"` // 来源: "ai500" 和/或 "oi_top"
+}
+
+// OITopData 持仓量增长Top数据（用于AI决策参考）
+type OITopData struct {
+	Rank              int     // OI Top排名
+	OIDeltaPercent    float64 // 持仓量变化百分比（1小时）
+	OIDeltaValue      float64 // 持仓量变化价值
+	PriceDeltaPercent float64 // 价格变化百分比
+	NetLong           float64 // 净多仓
+	NetShort          float64 // 净空仓
+}
+
+// Context 交易上下文（传递给AI的完整信息）
+type Context struct {
+	CurrentTime     string                  `json:"current_time"`
+	RuntimeMinutes  int                     `json:"runtime_minutes"`
+	CallCount       int                     `json:"call_count"`
+	Account         AccountInfo             `json:"account"`
+	Positions       []PositionInfo          `json:"positions"`
+	CandidateCoins  []CandidateCoin         `json:"candidate_coins"`
+	MarketDataMap   map[string]*market.Data `json:"-"` // 不序列化，但内部使用
+	OITopDataMap    map[string]*OITopData   `json:"-"` // OI Top数据映射
+	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
+	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
+	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	PromptStrategy  PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
+
+	// 录制回放专用字段
+	EnableRecording bool   `json:"-"` // 是否开启录制
+	TraderID        string `json:"-"` // TraderID (用于区分目录)
+}
+
+// Decision AI的交易决策
+type Decision struct {
+	Symbol          string  `json:"symbol"`
+	Action          string  `json:"action"` // 支持 "update_stop_loss", "partial_close" 等
+	Leverage        int     `json:"leverage,omitempty"`
+	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
+	StopLoss        float64 `json:"stop_loss,omitempty"`
+	TakeProfit      float64 `json:"take_profit,omitempty"`
+
+	NewStopLoss     float64 `json:"new_stop_loss,omitempty"`    // 用于 update_stop_loss
+	NewTakeProfit   float64 `json:"new_take_profit,omitempty"`  // 用于 update_take_profit
+	ClosePercentage float64 `json:"close_percentage,omitempty"` // 用于 partial_close (0-100)
+
+	Confidence int     `json:"confidence,omitempty"`
+	RiskUSD    float64 `json:"risk_usd,omitempty"`
+	Reasoning  string  `json:"reasoning"`
+}
+
+// FullDecision AI的完整决策（包含思维链）
+type FullDecision struct {
+	UserPrompt string     `json:"user_prompt"` // 发送给AI的输入prompt
+	CoTTrace   string     `json:"cot_trace"`   // 思维链分析（AI输出）
+	Decisions  []Decision `json:"decisions"`   // 具体决策列表
+	Timestamp  time.Time  `json:"timestamp"`
+}
+
+// PromptStrategy 可插拔策略接口
+type PromptStrategy interface {
+	Name() string
+	BuildSystemPrompt(ctx *Context) string
+	BuildUserPrompt(ctx *Context) string
+
+	// LLM前的硬约束条件或自动决策
+	GenerateAutoDecisions(ctx *Context) []Decision
+
+	// LLM后的硬约束条件
+	ExtraValidate(d *Decision, ctx *Context) error
+}
+
