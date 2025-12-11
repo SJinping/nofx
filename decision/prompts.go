@@ -148,7 +148,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- **顺势而为**：尊重趋势，避免逆势硬刚\n")
 	sb.WriteString("- **适配波动**：根据波动环境与账户状况动态调整仓位与节奏\n\n")
 
-	sb.WriteString("**避免的典型错误**\n")
+	sb.WriteString("**避免以下典型错误**\n")
 	sb.WriteString("- 过度交易：在信号一般甚至模糊时频繁进出\n")
 	sb.WriteString("- 复仇式交易：连续亏损后立刻加大仓位试图\"扳回\"\n")
 	sb.WriteString("- 分析瘫痪：过度追求完美信号导致长期不作为\n")
