@@ -59,9 +59,9 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
 
     console.log(`[${new Date().toISOString()}] Recalculating chart data...`);
 
-    // 新方案：按时间戳分组，不再依赖 cycle_number（因为后端会重置）
-    // 收集所有时间戳
-    const timestampMap = new Map<string, {
+    // 按 cycle_number 分组，同一个 cycle 的不同 trader 数据合并到一起
+    const cycleMap = new Map<number, {
+      cycle: number;
       timestamp: string;
       time: string;
       traders: Map<string, { pnl_pct: number; equity: number }>;
@@ -74,35 +74,36 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       console.log(`Trader ${trader.trader_id}: ${history.data.length} data points`);
 
       history.data.forEach((point: any) => {
-        const ts = point.timestamp;
+        const cycle = point.cycle_number;
 
-        if (!timestampMap.has(ts)) {
-          const time = new Date(ts).toLocaleTimeString('zh-CN', {
+        if (!cycleMap.has(cycle)) {
+          const time = new Date(point.timestamp).toLocaleTimeString('zh-CN', {
             hour: '2-digit',
             minute: '2-digit',
           });
-          timestampMap.set(ts, {
-            timestamp: ts,
+          cycleMap.set(cycle, {
+            cycle: cycle,
+            timestamp: point.timestamp,
             time,
             traders: new Map()
           });
         }
 
-        timestampMap.get(ts)!.traders.set(trader.trader_id, {
+        cycleMap.get(cycle)!.traders.set(trader.trader_id, {
           pnl_pct: point.total_pnl_pct,
           equity: point.total_equity
         });
       });
     });
 
-    // 按时间戳排序，转换为数组
-    const combined = Array.from(timestampMap.entries())
-      .sort(([tsA], [tsB]) => new Date(tsA).getTime() - new Date(tsB).getTime())
-      .map(([ts, data], index) => {
+    // 按 cycle_number 排序，转换为数组
+    const combined = Array.from(cycleMap.entries())
+      .sort(([cycleA], [cycleB]) => cycleA - cycleB)
+      .map(([cycle, data]) => {
         const entry: any = {
-          index: index + 1,  // 使用序号代替cycle
+          index: cycle,  // 使用真实的 cycle_number
           time: data.time,
-          timestamp: ts
+          timestamp: data.timestamp
         };
 
         traders.forEach((trader) => {
@@ -118,13 +119,14 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
 
     if (combined.length > 0) {
       const lastPoint = combined[combined.length - 1];
-      console.log(`Chart: ${combined.length} data points, last time: ${lastPoint.time}, timestamp: ${lastPoint.timestamp}`);
-      console.log('Last 3 points:', combined.slice(-3).map(p => ({
-        time: p.time,
-        timestamp: p.timestamp,
-        deepseek: p.deepseek_trader_pnl_pct,
-        qwen: p.qwen_trader_pnl_pct
-      })));
+      console.log(`Chart: ${combined.length} cycles, last cycle: ${lastPoint.index}, time: ${lastPoint.time}`);
+      console.log('Last 3 cycles:', combined.slice(-3).map(p => {
+        const cycleInfo: any = { cycle: p.index, time: p.time };
+        traders.forEach(trader => {
+          cycleInfo[trader.trader_id] = p[`${trader.trader_id}_pnl_pct`];
+        });
+        return cycleInfo;
+      }));
     }
 
     return combined;
@@ -207,7 +209,7 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
       return (
         <div className="rounded p-3 shadow-xl" style={{ background: '#1E2329', border: '1px solid #2B3139' }}>
           <div className="text-xs mb-2" style={{ color: '#848E9C' }}>
-            {data.time} - #{data.index}
+            Cycle #{data.index} ({data.time})
           </div>
           {traders.map((trader) => {
             const pnlPct = data[`${trader.trader_id}_pnl_pct`];
@@ -268,13 +270,13 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
           <CartesianGrid strokeDasharray="3 3" stroke="#2B3139" />
 
           <XAxis
-            dataKey="time"
+            dataKey="index"
             stroke="#5E6673"
             tick={{ fill: '#848E9C', fontSize: 11 }}
             tickLine={{ stroke: '#2B3139' }}
             interval={Math.floor(displayData.length / 12)}
-            angle={-15}
-            textAnchor="end"
+            angle={0}
+            textAnchor="middle"
             height={60}
           />
 
