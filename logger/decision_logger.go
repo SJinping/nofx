@@ -365,13 +365,12 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 
 			switch action.Action {
 			case "open_long", "open_short":
-				// 记录开仓（包括数量和杠杆）
+				// 记录开仓（包括数量）
 				openPositions[posKey] = map[string]interface{}{
 					"side":      side,
 					"openPrice": action.Price,
 					"openTime":  action.Timestamp,
 					"quantity":  action.Quantity,
-					"leverage":  action.Leverage,
 				}
 
 			case "close_long", "close_short":
@@ -381,7 +380,6 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 					openTime := openPos["openTime"].(time.Time)
 					side := openPos["side"].(string)
 					quantity := openPos["quantity"].(float64)
-					leverage := openPos["leverage"].(int)
 
 					// 计算盈亏百分比
 					pnlPct := 0.0
@@ -392,9 +390,13 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 					}
 
 					// 计算实际盈亏（USDT）
-					// PnL = 仓位价值 × 价格变化百分比 × 杠杆倍数
-					positionValue := quantity * openPrice
-					pnl := positionValue * (pnlPct / 100) * float64(leverage)
+					// ✅ 注意：USDT盈亏不应再乘杠杆。杠杆只影响保证金占用；数量/名义仓位已体现杠杆效果。
+					pnl := 0.0
+					if side == "long" {
+						pnl = (action.Price - openPrice) * quantity
+					} else {
+						pnl = (openPrice - action.Price) * quantity
+					}
 
 					// 记录交易结果
 					outcome := TradeOutcome{
@@ -456,7 +458,7 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 
 	// 计算统计指标
 	if analysis.TotalTrades > 0 {
-		analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades)) * 100
+		analysis.WinRate = (float64(analysis.WinningTrades) / float64(analysis.TotalTrades))
 
 		// 计算总盈利和总亏损
 		totalWinAmount := analysis.AvgWin   // 当前是累加的总和

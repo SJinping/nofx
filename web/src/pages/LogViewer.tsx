@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { api } from '../lib/api';
 import { useLanguage } from '../contexts/LanguageContext';
-import { t } from '../i18n/translations';
 
 interface LogEntry {
   filename: string;
@@ -12,7 +11,7 @@ interface LogEntry {
 }
 
 export function LogViewer() {
-  const { language } = useLanguage();
+  useLanguage(); // keep context initialization (language not used in this page yet)
   const [selectedTrader, setSelectedTrader] = useState<string>('');
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [logContent, setLogContent] = useState<any | null>(null);

@@ -165,15 +165,16 @@ export function EquityChart({ traderId }: EquityChartProps) {
     }
   };
 
-  // 判断是否包含真实交易（open/close），忽略 hold / wait
-  const hasRealTrade = (list?: DecisionAction[]) =>
-    !!list?.some(
-      (d) =>
-        d.action === 'open_long' ||
-        d.action === 'close_short' ||
-        d.action === 'open_short' ||
-        d.action === 'close_long'
-    );
+  // 判断是否包含真实交易（open/close 且 success=true），忽略 hold / wait 和失败的下单记录
+  // 失败下单在日志里会保留 action，但 price/quantity 可能为 0（例如网络/交易所错误）。
+  const isExecutedTrade = (d: DecisionAction) =>
+    !!d.success &&
+    (d.action === 'open_long' ||
+      d.action === 'close_short' ||
+      d.action === 'open_short' ||
+      d.action === 'close_long');
+
+  const hasRealTrade = (list?: DecisionAction[]) => !!list?.some(isExecutedTrade);
 
   // 自定义Tooltip - Binance Style with Trading Actions
   const CustomTooltip = ({ active, payload }: any) => {
@@ -182,16 +183,16 @@ export function EquityChart({ traderId }: EquityChartProps) {
       const allDecisions = data.decisions as DecisionAction[] | undefined;
       const hasTradingDecisions = hasRealTrade(allDecisions);
       
-      // 分类决策
+      // 分类决策（只展示成功执行的交易动作）
       const buys =
         allDecisions?.filter(
           (d: DecisionAction) =>
-            d.action === 'open_long' || d.action === 'close_short'
+            d.success && (d.action === 'open_long' || d.action === 'close_short')
         ) || [];
       const sells =
         allDecisions?.filter(
           (d: DecisionAction) =>
-            d.action === 'open_short' || d.action === 'close_long'
+            d.success && (d.action === 'open_short' || d.action === 'close_long')
         ) || [];
       
       return (

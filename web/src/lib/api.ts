@@ -6,6 +6,8 @@ import type {
   Statistics,
   TraderInfo,
   CompetitionData,
+  TradedSymbolsResponse,
+  TradedSymbolStatus,
 } from '../types';
 
 const API_BASE = '/api';
@@ -110,6 +112,108 @@ export const api = {
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取AI学习数据失败');
     return res.json();
+  },
+
+  // 获取“交易币种”汇总（前端基于 /performance + /positions 做 best-effort 聚合）
+  // 注意：后端目前没有单独的 traded-symbols 端点，因此这里做轻量聚合以保证页面可用。
+  async getTradedSymbols(traderId: string): Promise<TradedSymbolsResponse> {
+    // 复用现有接口
+    const [performance, positions] = await Promise.all([
+      api.getPerformance(traderId),
+      api.getPositions(traderId),
+    ]);
+
+    const symbolStats: Record<
+      string,
+      {
+        total_trades?: number;
+        winning_trades?: number;
+        losing_trades?: number;
+        win_rate?: number;
+        total_pn_l?: number;
+        avg_pn_l?: number;
+      }
+    > = performance?.symbol_stats || {};
+
+    const positionsBySymbol = new Map<string, Position>();
+    (positions || []).forEach((p: Position) => {
+      positionsBySymbol.set(p.symbol, p);
+    });
+
+    const allSymbols = new Set<string>([
+      ...Object.keys(symbolStats),
+      ...Array.from(positionsBySymbol.keys()),
+    ]);
+
+    let totalRealized = 0;
+    let totalUnrealized = 0;
+
+    const symbols = Array.from(allSymbols).map((sym) => {
+      const stat = symbolStats[sym] || {};
+      const pos = positionsBySymbol.get(sym);
+
+      const realized = Number(stat.total_pn_l || 0);
+      const unrealized = pos ? Number(pos.unrealized_pnl || 0) : 0;
+      const total = realized + unrealized;
+
+      totalRealized += realized;
+      totalUnrealized += unrealized;
+
+      const status: TradedSymbolStatus = pos
+        ? pos.side === 'long'
+          ? 'holding_long'
+          : 'holding_short'
+        : 'closed';
+
+      return {
+        symbol: sym,
+        status,
+        total_pnl: total,
+        realized_pnl: realized,
+        unrealized_pnl: unrealized,
+        avg_pnl: Number(stat.avg_pn_l || 0),
+        total_trades: Number(stat.total_trades || 0),
+        win_rate: Number(stat.win_rate || 0),
+        win_count: Number(stat.winning_trades || 0),
+        loss_count: Number(stat.losing_trades || 0),
+        open_long_count: 0,
+        open_short_count: 0,
+        close_long_count: 0,
+        close_short_count: 0,
+        partial_close_count: 0,
+        current_position: pos
+          ? {
+              entry_price: pos.entry_price,
+              mark_price: pos.mark_price,
+              quantity: pos.quantity,
+              leverage: pos.leverage,
+            }
+          : undefined,
+        first_trade_time: '',
+        last_trade_time: '',
+      };
+    });
+
+    // 排序：持仓中的优先，然后按总盈亏降序
+    symbols.sort((a, b) => {
+      const aHolding = a.status !== 'closed';
+      const bHolding = b.status !== 'closed';
+      if (aHolding !== bHolding) return aHolding ? -1 : 1;
+      return (b.total_pnl || 0) - (a.total_pnl || 0);
+    });
+
+    const holdingCount = symbols.filter((s) => s.status !== 'closed').length;
+
+    return {
+      symbols,
+      summary: {
+        total_symbols: symbols.length,
+        holding_count: holdingCount,
+        closed_count: symbols.length - holdingCount,
+        total_realized_pnl: totalRealized,
+        total_unrealized_pnl: totalUnrealized,
+      },
+    };
   },
 
   // 平掉所有模型的所有持仓
