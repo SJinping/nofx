@@ -179,7 +179,7 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 	}
 
 	// 只有在 Sharpe 很差 或 连续亏损较多 时才触发自动降风险
-	badSharpe := perf.SharpeRatio < -0.8
+	badSharpe := perf.SharpeRatio < -0.65
 	longLosingStreak := perf.CurrentLosingStreak >= 3
 	highMargin := ctx.Account.MarginUsedPct > 85
 
