@@ -48,6 +48,7 @@ data/
 reports/
 test.sh
 test_binance
+.gocache/
 
 # 决策日志：忽略具体日志内容，但如果需要保留目录结构，可以创建一个空的 decision_logs/.gitkeep 并强制添加
 decision_logs/*
