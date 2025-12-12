@@ -57,7 +57,7 @@ func (StrategyV) BuildUserPrompt(ctx *Context) string {
 }
 
 func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
-	return nil
+	return GenerateAutoDecisions(ctx)
 }
 
 func (StrategyV) ExtraValidate(d *Decision, ctx *Context) error {

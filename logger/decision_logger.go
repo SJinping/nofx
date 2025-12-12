@@ -50,15 +50,16 @@ type PositionSnapshot struct {
 
 // DecisionAction 决策动作
 type DecisionAction struct {
-	Action    string    `json:"action"`    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
-	Symbol    string    `json:"symbol"`    // 币种
-	Quantity  float64   `json:"quantity"`  // 数量
-	Leverage  int       `json:"leverage"`  // 杠杆（开仓时）
-	Price     float64   `json:"price"`     // 执行价格
-	OrderID   int64     `json:"order_id"`  // 订单ID
-	Timestamp time.Time `json:"timestamp"` // 执行时间
-	Success   bool      `json:"success"`   // 是否成功
-	Error     string    `json:"error"`     // 错误信息
+	Action         string    `json:"action"`                    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
+	Symbol         string    `json:"symbol"`                    // 币种
+	DecisionSource string    `json:"decision_source,omitempty"` // 决策来源: llm/auto_stop_loss/auto_take_profit/...
+	Quantity       float64   `json:"quantity"`                  // 数量
+	Leverage       int       `json:"leverage"`                  // 杠杆（开仓时）
+	Price          float64   `json:"price"`                     // 执行价格
+	OrderID        int64     `json:"order_id"`                  // 订单ID
+	Timestamp      time.Time `json:"timestamp"`                 // 执行时间
+	Success        bool      `json:"success"`                   // 是否成功
+	Error          string    `json:"error"`                     // 错误信息
 }
 
 // DecisionLogger 决策日志记录器

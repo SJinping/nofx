@@ -83,6 +83,11 @@ func extractDecisions(response string) ([]Decision, error) {
 		return nil, fmt.Errorf("JSON解析失败: %w\nJSON内容: %s", err, jsonContent)
 	}
 
+	// 标记所有LLM生成的决策
+	for i := range decisions {
+		decisions[i].DecisionSource = "llm"
+	}
+
 	return decisions, nil
 }
 
@@ -116,4 +121,3 @@ func findMatchingBracket(s string, start int) int {
 
 	return -1
 }
-

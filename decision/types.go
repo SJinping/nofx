@@ -61,10 +61,25 @@ type Context struct {
 	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
 	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
 	PromptStrategy  PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
+	AutoState       *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
 
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
 	TraderID        string `json:"-"` // TraderID (用于区分目录)
+}
+
+// AutoDecisionState 自动决策跨周期状态（用于TP档位只触发一次、冷却等）
+// 注意：该状态由 trader 层持有并注入 Context，decision 层只读取/使用。
+type AutoDecisionState struct {
+	TP map[string]*AutoTPState `json:"-"` // key: symbol_side
+}
+
+// AutoTPState 单个持仓的自动止盈状态
+type AutoTPState struct {
+	Stage            int     `json:"-"` // 0=未触发, 1=已触发TP1, 2=已触发TP2
+	LastActionTimeMs int64   `json:"-"` // 上次自动止盈动作时间（毫秒）
+	BaselineEntry    float64 `json:"-"` // 基准入场价（用于检测加仓/均价变化）
+	BaselineQty      float64 `json:"-"` // 基准数量（用于检测加仓）
 }
 
 // Decision AI的交易决策
@@ -83,6 +98,9 @@ type Decision struct {
 	Confidence int     `json:"confidence,omitempty"`
 	RiskUSD    float64 `json:"risk_usd,omitempty"`
 	Reasoning  string  `json:"reasoning"`
+
+	// 决策来源标记: "llm" = LLM生成, "auto_stop_loss" = 自动止损, "auto_take_profit" = 自动止盈
+	DecisionSource string `json:"decision_source,omitempty"`
 }
 
 // FullDecision AI的完整决策（包含思维链）
@@ -105,4 +123,3 @@ type PromptStrategy interface {
 	// LLM后的硬约束条件
 	ExtraValidate(d *Decision, ctx *Context) error
 }
-

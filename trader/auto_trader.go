@@ -94,6 +94,7 @@ type AutoTrader struct {
 	callCount             int                     // AI调用次数
 	promptStrategy        decision.PromptStrategy // 当前使用的Prompt策略（默认StrategyA）
 	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	autoDecisionState     decision.AutoDecisionState
 }
 
 // NewAutoTrader 创建自动交易器
@@ -220,6 +221,9 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		startTime:             time.Now(),
 		callCount:             0,
 		positionFirstSeenTime: make(map[string]int64),
+		autoDecisionState: decision.AutoDecisionState{
+			TP: make(map[string]*decision.AutoTPState),
+		},
 	}, nil
 }
 
@@ -418,13 +422,14 @@ func (at *AutoTrader) runCycle() error {
 	// 执行决策并记录结果
 	for _, d := range sortedDecisions {
 		actionRecord := logger.DecisionAction{
-			Action:    d.Action,
-			Symbol:    d.Symbol,
-			Quantity:  0,
-			Leverage:  d.Leverage,
-			Price:     0,
-			Timestamp: time.Now(),
-			Success:   false,
+			Action:         d.Action,
+			Symbol:         d.Symbol,
+			DecisionSource: d.DecisionSource,
+			Quantity:       0,
+			Leverage:       d.Leverage,
+			Price:          0,
+			Timestamp:      time.Now(),
+			Success:        false,
 		}
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
@@ -571,6 +576,37 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		}
 		updateTime := at.positionFirstSeenTime[posKey]
 
+		// 初始化 / 更新自动止盈状态（用于TP1/TP2只触发一次）
+		// 检测明显加仓/均价变化时，重置TP阶段（更偏积极：把加仓视为“新一轮”止盈）
+		if at.autoDecisionState.TP == nil {
+			at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
+		}
+		if st, exists := at.autoDecisionState.TP[posKey]; !exists || st == nil {
+			at.autoDecisionState.TP[posKey] = &decision.AutoTPState{
+				Stage:            0,
+				LastActionTimeMs: 0,
+				BaselineEntry:    ep,
+				BaselineQty:      qty,
+			}
+		} else {
+			// 加仓/均价变化阈值（经验值）
+			entryChanged := false
+			if st.BaselineEntry > 0 {
+				diff := (ep - st.BaselineEntry) / st.BaselineEntry
+				if diff < 0 {
+					diff = -diff
+				}
+				entryChanged = diff > 0.005 // 0.5%
+			}
+			qtyIncreased := qty > st.BaselineQty*1.25 // +25%
+			if entryChanged || qtyIncreased {
+				st.Stage = 0
+				st.LastActionTimeMs = 0
+				st.BaselineEntry = ep
+				st.BaselineQty = qty
+			}
+		}
+
 		positionInfos = append(positionInfos, decision.PositionInfo{
 			Symbol:           symbol,
 			Side:             side,
@@ -590,6 +626,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	for key := range at.positionFirstSeenTime {
 		if !currentPositionKeys[key] {
 			delete(at.positionFirstSeenTime, key)
+		}
+	}
+
+	// 清理已平仓的自动止盈状态
+	for key := range at.autoDecisionState.TP {
+		if !currentPositionKeys[key] {
+			delete(at.autoDecisionState.TP, key)
 		}
 	}
 
@@ -659,6 +702,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Performance:     performance, // 添加历史表现分析
 		EnableRecording: at.config.EnableRecording,
 		TraderID:        at.config.ID,
+		AutoState:       &at.autoDecisionState,
 	}
 
 	// 注入可插拔策略，默认使用 StrategyA
@@ -1010,8 +1054,8 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 }
 
 // executePartialCloseWithRecord 执行部分平仓并记录详细信息
-func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
-	log.Printf("  📊 部分平仓: %s (%.0f%%)", decision.Symbol, decision.ClosePercentage)
+func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  📊 部分平仓: %s (%.0f%%)", dec.Symbol, dec.ClosePercentage)
 
 	// 获取当前持仓信息
 	positions, err := at.trader.GetPositions()
@@ -1022,14 +1066,14 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	// 查找目标持仓
 	var targetPosition map[string]interface{}
 	for _, pos := range positions {
-		if pos["symbol"] == decision.Symbol {
+		if pos["symbol"] == dec.Symbol {
 			targetPosition = pos
 			break
 		}
 	}
 
 	if targetPosition == nil {
-		return fmt.Errorf("未找到 %s 的持仓", decision.Symbol)
+		return fmt.Errorf("未找到 %s 的持仓", dec.Symbol)
 	}
 
 	// 获取持仓方向和数量
@@ -1047,10 +1091,10 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	}
 
 	// 计算要平仓的数量
-	closeQuantity := quantity * (decision.ClosePercentage / 100.0)
+	closeQuantity := quantity * (dec.ClosePercentage / 100.0)
 
 	// 获取当前价格
-	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	currentPrice, err := at.trader.GetMarketPrice(dec.Symbol)
 	if err != nil {
 		return err
 	}
@@ -1060,9 +1104,9 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 	// 执行部分平仓
 	var order map[string]interface{}
 	if side == "long" {
-		order, err = at.trader.CloseLong(decision.Symbol, closeQuantity)
+		order, err = at.trader.CloseLong(dec.Symbol, closeQuantity)
 	} else if side == "short" {
-		order, err = at.trader.CloseShort(decision.Symbol, closeQuantity)
+		order, err = at.trader.CloseShort(dec.Symbol, closeQuantity)
 	} else {
 		return fmt.Errorf("未知的持仓方向: %s", side)
 	}
@@ -1076,12 +1120,33 @@ func (at *AutoTrader) executePartialCloseWithRecord(decision *decision.Decision,
 		actionRecord.OrderID = orderID
 	}
 
-	log.Printf("  ✓ 部分平仓成功，平仓数量: %.4f (%.0f%%)", closeQuantity, decision.ClosePercentage)
+	log.Printf("  ✓ 部分平仓成功，平仓数量: %.4f (%.0f%%)", closeQuantity, dec.ClosePercentage)
 
 	// 平仓后，如果还有剩余持仓，可能需要更新止损止盈的数量
 	remainingQuantity := quantity - closeQuantity
 	if remainingQuantity > 0 {
 		log.Printf("  ℹ️ 剩余持仓数量: %.4f", remainingQuantity)
+	}
+
+	// ✅ 自动止盈状态更新：只有在真实执行成功后才推进TP阶段
+	// 由于 partial_close 决策本身不携带 side，这里复用已解析出的 side。
+	if dec.DecisionSource == "auto_take_profit" {
+		posKey := dec.Symbol + "_" + side
+		if at.autoDecisionState.TP == nil {
+			at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
+		}
+		st, ok := at.autoDecisionState.TP[posKey]
+		if !ok || st == nil {
+			st = &decision.AutoTPState{}
+			at.autoDecisionState.TP[posKey] = st
+		}
+		// 25% -> TP1, 50% -> TP2（更高则视为TP2）
+		if dec.ClosePercentage >= 50 {
+			st.Stage = 2
+		} else if dec.ClosePercentage >= 25 && st.Stage < 1 {
+			st.Stage = 1
+		}
+		st.LastActionTimeMs = time.Now().UnixMilli()
 	}
 
 	return nil

@@ -150,7 +150,7 @@ func RunBacktest(config *BacktestConfig) (*BacktestResult, error) {
 		// 打印进度
 		if record.CallCount%20 == 0 {
 			fmt.Printf("📊 周期 %d/%d | 权益: %.2f | 收益率: %.2f%% | 交易: %d | 胜率: %.1f%%\n",
-				record.CallCount, len(records), equity, equity/result.StartEquity*100, totalTrades,
+				record.CallCount, len(records), equity, (equity/result.StartEquity-1.0)*100, totalTrades,
 				calculateWinRate(totalTrades, winningTrades))
 		}
 	}
@@ -188,20 +188,21 @@ func RunBacktest(config *BacktestConfig) (*BacktestResult, error) {
 			// 记录强制平仓交易
 			holdTime := formatDuration(closeTime.Sub(pos.OpenTime))
 			result.TradeRecords = append(result.TradeRecords, &TradeRecord{
-				Cycle:        lastRecord.CallCount,
-				Symbol:       pos.Symbol,
-				Side:         pos.Side,
-				Action:       "force_close",
-				EntryPrice:   pos.EntryPrice,
-				ExitPrice:    price,
-				Quantity:     pos.Quantity,
-				Leverage:     pos.Leverage,
-				PnL:          pnl,
-				PnLPercent:   pct * 100,
-				IsWin:        isWin,
-				HoldTime:     holdTime,
-				CloseTime:    closeTime,
-				PartialClose: false,
+				Cycle:          lastRecord.CallCount,
+				Symbol:         pos.Symbol,
+				Side:           pos.Side,
+				Action:         "force_close",
+				DecisionSource: "backtest_force_close",
+				EntryPrice:     pos.EntryPrice,
+				ExitPrice:      price,
+				Quantity:       pos.Quantity,
+				Leverage:       pos.Leverage,
+				PnL:            pnl,
+				PnLPercent:     pct * 100,
+				IsWin:          isWin,
+				HoldTime:       holdTime,
+				CloseTime:      closeTime,
+				PartialClose:   false,
 			})
 
 			realizedFromFinalClose += pnl

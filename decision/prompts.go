@@ -271,7 +271,6 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) 
 	sb.WriteString("5. 只在信号充分、逻辑清晰、风险回报合理时，才给出开仓建议。\n\n")
 
 	sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
-	sb.WriteString("# 📤 输出格式\n\n")
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
 	sb.WriteString("简要说明你如何解读当前行情，为什么选择观望/加仓/减仓/反向？简要写出关键因素即可。\n\n")
 

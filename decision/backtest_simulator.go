@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -17,22 +18,23 @@ type VirtualPosition struct {
 
 // TradeRecord 交易记录
 type TradeRecord struct {
-	Cycle        int       `json:"cycle"`         // 周期编号
-	Symbol       string    `json:"symbol"`        // 币种
-	Side         string    `json:"side"`          // long/short
-	Action       string    `json:"action"`        // close_long/close_short/partial_close
-	EntryPrice   float64   `json:"entry_price"`   // 入场价
-	ExitPrice    float64   `json:"exit_price"`    // 出场价
-	Quantity     float64   `json:"quantity"`      // 交易数量
-	Leverage     int       `json:"leverage"`      // 杠杆
-	PnL          float64   `json:"pnl"`           // 盈亏金额（USDT）
-	PnLPercent   float64   `json:"pnl_percent"`   // 盈亏百分比
-	IsWin        bool      `json:"is_win"`        // 是否盈利
-	HoldTime     string    `json:"hold_time"`     // 持仓时长
-	CloseTime    time.Time `json:"close_time"`    // 平仓时间
-	PartialClose bool      `json:"partial_close"` // 是否部分平仓
-	ClosePercent float64   `json:"close_percent"` // 平仓百分比（部分平仓时）
-	RemainingQty float64   `json:"remaining_qty"` // 剩余数量（部分平仓时）
+	Cycle          int       `json:"cycle"`                     // 周期编号
+	Symbol         string    `json:"symbol"`                    // 币种
+	Side           string    `json:"side"`                      // long/short
+	Action         string    `json:"action"`                    // close_long/close_short/partial_close
+	DecisionSource string    `json:"decision_source,omitempty"` // 决策来源: llm/auto_stop_loss/auto_take_profit/...
+	EntryPrice     float64   `json:"entry_price"`               // 入场价
+	ExitPrice      float64   `json:"exit_price"`                // 出场价
+	Quantity       float64   `json:"quantity"`                  // 交易数量
+	Leverage       int       `json:"leverage"`                  // 杠杆
+	PnL            float64   `json:"pnl"`                       // 盈亏金额（USDT）
+	PnLPercent     float64   `json:"pnl_percent"`               // 盈亏百分比
+	IsWin          bool      `json:"is_win"`                    // 是否盈利
+	HoldTime       string    `json:"hold_time"`                 // 持仓时长
+	CloseTime      time.Time `json:"close_time"`                // 平仓时间
+	PartialClose   bool      `json:"partial_close"`             // 是否部分平仓
+	ClosePercent   float64   `json:"close_percent"`             // 平仓百分比（部分平仓时）
+	RemainingQty   float64   `json:"remaining_qty"`             // 剩余数量（部分平仓时）
 }
 
 // VirtualAccount 用于新策略回测的虚拟账户
@@ -150,20 +152,21 @@ func applyDecisions(va *VirtualAccount, decisions []Decision, prices map[string]
 				// 记录交易详情
 				holdTime := formatDuration(closeTime.Sub(pos.OpenTime))
 				tradeRecords = append(tradeRecords, &TradeRecord{
-					Cycle:        cycleNum,
-					Symbol:       d.Symbol,
-					Side:         "long",
-					Action:       "close_long",
-					EntryPrice:   pos.EntryPrice,
-					ExitPrice:    price,
-					Quantity:     pos.Quantity,
-					Leverage:     pos.Leverage,
-					PnL:          pnl,
-					PnLPercent:   pct * 100,
-					IsWin:        isWin,
-					HoldTime:     holdTime,
-					CloseTime:    closeTime,
-					PartialClose: false,
+					Cycle:          cycleNum,
+					Symbol:         d.Symbol,
+					Side:           "long",
+					Action:         "close_long",
+					DecisionSource: d.DecisionSource,
+					EntryPrice:     pos.EntryPrice,
+					ExitPrice:      price,
+					Quantity:       pos.Quantity,
+					Leverage:       pos.Leverage,
+					PnL:            pnl,
+					PnLPercent:     pct * 100,
+					IsWin:          isWin,
+					HoldTime:       holdTime,
+					CloseTime:      closeTime,
+					PartialClose:   false,
 				})
 
 				delete(va.Positions, keyLong)
@@ -183,20 +186,21 @@ func applyDecisions(va *VirtualAccount, decisions []Decision, prices map[string]
 				// 记录交易详情
 				holdTime := formatDuration(closeTime.Sub(pos.OpenTime))
 				tradeRecords = append(tradeRecords, &TradeRecord{
-					Cycle:        cycleNum,
-					Symbol:       d.Symbol,
-					Side:         "short",
-					Action:       "close_short",
-					EntryPrice:   pos.EntryPrice,
-					ExitPrice:    price,
-					Quantity:     pos.Quantity,
-					Leverage:     pos.Leverage,
-					PnL:          pnl,
-					PnLPercent:   pct * 100,
-					IsWin:        isWin,
-					HoldTime:     holdTime,
-					CloseTime:    closeTime,
-					PartialClose: false,
+					Cycle:          cycleNum,
+					Symbol:         d.Symbol,
+					Side:           "short",
+					Action:         "close_short",
+					DecisionSource: d.DecisionSource,
+					EntryPrice:     pos.EntryPrice,
+					ExitPrice:      price,
+					Quantity:       pos.Quantity,
+					Leverage:       pos.Leverage,
+					PnL:            pnl,
+					PnLPercent:     pct * 100,
+					IsWin:          isWin,
+					HoldTime:       holdTime,
+					CloseTime:      closeTime,
+					PartialClose:   false,
 				})
 
 				delete(va.Positions, keyShort)
@@ -232,22 +236,23 @@ func applyDecisions(va *VirtualAccount, decisions []Decision, prices map[string]
 				// 记录部分平仓详情
 				holdTime := formatDuration(closeTime.Sub(pos.OpenTime))
 				tradeRecords = append(tradeRecords, &TradeRecord{
-					Cycle:        cycleNum,
-					Symbol:       d.Symbol,
-					Side:         "long",
-					Action:       "partial_close",
-					EntryPrice:   pos.EntryPrice,
-					ExitPrice:    price,
-					Quantity:     closeQty,
-					Leverage:     pos.Leverage,
-					PnL:          pnl,
-					PnLPercent:   pct * 100,
-					IsWin:        isWin,
-					HoldTime:     holdTime,
-					CloseTime:    closeTime,
-					PartialClose: true,
-					ClosePercent: d.ClosePercentage,
-					RemainingQty: remainingQty,
+					Cycle:          cycleNum,
+					Symbol:         d.Symbol,
+					Side:           "long",
+					Action:         "partial_close",
+					DecisionSource: d.DecisionSource,
+					EntryPrice:     pos.EntryPrice,
+					ExitPrice:      price,
+					Quantity:       closeQty,
+					Leverage:       pos.Leverage,
+					PnL:            pnl,
+					PnLPercent:     pct * 100,
+					IsWin:          isWin,
+					HoldTime:       holdTime,
+					CloseTime:      closeTime,
+					PartialClose:   true,
+					ClosePercent:   d.ClosePercentage,
+					RemainingQty:   remainingQty,
 				})
 
 				pos.Quantity = remainingQty
@@ -276,22 +281,23 @@ func applyDecisions(va *VirtualAccount, decisions []Decision, prices map[string]
 				// 记录部分平仓详情
 				holdTime := formatDuration(closeTime.Sub(pos.OpenTime))
 				tradeRecords = append(tradeRecords, &TradeRecord{
-					Cycle:        cycleNum,
-					Symbol:       d.Symbol,
-					Side:         "short",
-					Action:       "partial_close",
-					EntryPrice:   pos.EntryPrice,
-					ExitPrice:    price,
-					Quantity:     closeQty,
-					Leverage:     pos.Leverage,
-					PnL:          pnl,
-					PnLPercent:   pct * 100,
-					IsWin:        isWin,
-					HoldTime:     holdTime,
-					CloseTime:    closeTime,
-					PartialClose: true,
-					ClosePercent: d.ClosePercentage,
-					RemainingQty: remainingQty,
+					Cycle:          cycleNum,
+					Symbol:         d.Symbol,
+					Side:           "short",
+					Action:         "partial_close",
+					DecisionSource: d.DecisionSource,
+					EntryPrice:     pos.EntryPrice,
+					ExitPrice:      price,
+					Quantity:       closeQty,
+					Leverage:       pos.Leverage,
+					PnL:            pnl,
+					PnLPercent:     pct * 100,
+					IsWin:          isWin,
+					HoldTime:       holdTime,
+					CloseTime:      closeTime,
+					PartialClose:   true,
+					ClosePercent:   d.ClosePercentage,
+					RemainingQty:   remainingQty,
 				})
 
 				pos.Quantity = remainingQty
@@ -315,4 +321,11 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// parseFloat 解析浮点数，失败返回0
+func parseFloat(s string) float64 {
+	var result float64
+	fmt.Sscanf(s, "%f", &result)
+	return result
 }
