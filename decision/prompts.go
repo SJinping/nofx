@@ -536,12 +536,11 @@ func getPerformance(ctx *Context) string {
 	}
 
 	sb.WriteString(fmt.Sprintf(
-		"**总体**: %d笔交易 | 胜率%.1f%% | 夏普比率%.2f | 当前连亏: %d 笔 | 历史最大连亏: %d 笔\n",
+		"**总体**: %d笔交易 | 胜率%.1f%% | 夏普比率%.2f | 当前连亏: %d 笔\n",
 		perf.TotalTrades,
 		perf.WinRate,
 		perf.SharpeRatio,
 		perf.CurrentLosingStreak,
-		perf.MaxLosingStreak,
 	))
 	return sb.String()
 }
