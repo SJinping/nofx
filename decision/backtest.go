@@ -166,7 +166,8 @@ func RunBacktest(config *BacktestConfig) (*BacktestResult, error) {
 
 		// 打印进度
 		if record.CallCount%20 == 0 {
-			fmt.Printf("📊 周期 %d/%d | 权益: %.2f | 收益率: %.2f%% | 交易: %d | 胜率: %.1f%%\n",
+			fmt.Printf("📊 时间 %s 周期 %d/%d | 权益: %.2f | 收益率: %.2f%% | 交易: %d | 胜率: %.1f%%\n",
+				record.CurrentTime,
 				record.CallCount, len(records), equity, (equity/result.StartEquity-1.0)*100, totalTrades,
 				calculateWinRate(totalTrades, winningTrades))
 		}
