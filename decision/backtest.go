@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"nofx/logger"
 	"nofx/market"
 	"os"
 	"path/filepath"
@@ -88,6 +89,22 @@ func RunBacktest(config *BacktestConfig) (*BacktestResult, error) {
 	for _, record := range records {
 		// 5.1 转换为Context（用于决策）
 		ctx := recordToContext(record, config.Strategy)
+
+		// ✅ 方案B：为每个周期注入“回测过程中的绩效反馈”，让 LLM 看到真实的 Sharpe/WinRate
+		// - Sharpe：基于截至上一周期的权益曲线（与线上行为一致：先看历史表现，再做本周期决策）
+		// - WinRate：基于截至上一周期已完成的交易统计
+		sharpeSoFar := calculateSharpeRatio(result.EquityCurve)
+		winRateSoFar := 0.0
+		if totalTrades > 0 {
+			winRateSoFar = (float64(winningTrades) / float64(totalTrades)) * 100
+		}
+		ctx.Performance = &logger.PerformanceAnalysis{
+			TotalTrades:   totalTrades,
+			WinningTrades: winningTrades,
+			LosingTrades:  totalTrades - winningTrades,
+			WinRate:       winRateSoFar,
+			SharpeRatio:   sharpeSoFar,
+		}
 
 		// 5.2 提取当前价格（从录制的 MarketData 中）
 		prices := extractPricesFromMarketData(record.MarketData)
