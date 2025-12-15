@@ -2,11 +2,9 @@ package decision
 
 import (
 	"fmt"
-	"math"
 	"nofx/logger"
 	"nofx/stats"
 	"strings"
-	"time"
 )
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
@@ -225,137 +223,69 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 	return decisions
 }
 
-// ===== 自动止盈（积极落袋）=====
-// 规则：
-// - TP阈值按“波动率(ATR14/Price)倍数”自适应，不同币种阈值不同
-// - TP1: 达标后部分平仓25% + 止损上移到保本
-// - TP2: 达标后部分平仓50% + 止损改为ATR跟踪
-// - TP1/TP2每个持仓只触发一次（依赖 ctx.AutoState 维护跨周期状态）
+// ===== 自动止盈（固定阈值版：可每周期触发）=====
+// 规则（按“浮动盈亏百分比”触发）：
+// - 盈利达到 1%：部分平仓 50%
+// - 盈利达到 2%：部分平仓 70%
+// - 盈利达到 3%：部分平仓 80%
+// - 盈利达到 4%：全部平仓
+//
+// 说明：
+// - 不做“每笔只触发一次/冷却”限制：每个周期都可能重复触发（用户要求）。
+// - 仅基于 pos.UnrealizedPnLPct（该字段应对多/空都为“盈利为正”口径）。
 func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
-	nowMs := time.Now().UnixMilli()
-
-	// 参数（偏积极）
-	const (
-		k1 = 1.0 // TP1 = k1 * vol
-		k2 = 2.0 // TP2 = k2 * vol
-
-		tp1Min = 0.8
-		tp1Max = 4.0
-		tp2Min = 1.6
-		tp2Max = 8.0
-
-		closeTP1 = 25.0
-		closeTP2 = 50.0
-
-		breakEvenBufferPct = 0.10 // 0.10%：保本略微盈利，覆盖手续费/滑点
-		trailingAtrMult    = 1.0  // ATR跟踪距离（越小越紧）
-
-		cooldownMs = int64(9 * 60 * 1000) // 9分钟冷却（3min周期≈3次）
-	)
-
-	state := ctx.AutoState
-	if state == nil {
-		// 没注入跨周期状态时，仍可工作，但无法保证“只触发一次”
-		state = &AutoDecisionState{TP: make(map[string]*AutoTPState)}
-	}
-	if state.TP == nil {
-		state.TP = make(map[string]*AutoTPState)
-	}
-
 	var decisions []Decision
 
 	for _, pos := range ctx.Positions {
-		// 只对盈利持仓触发止盈
-		if pos.UnrealizedPnLPct <= 0 {
-			continue
-		}
-
-		md := ctx.MarketDataMap[pos.Symbol]
-		if md == nil || md.CurrentPrice <= 0 {
-			continue
-		}
-
-		// 波动率（百分比）
-		volPct := md.VolatilityPct * 100
-		if volPct <= 0 {
-			continue
-		}
-
-		tp1Pct := clamp(k1*volPct, tp1Min, tp1Max)
-		tp2Pct := clamp(k2*volPct, tp2Min, tp2Max)
-		if tp2Pct <= tp1Pct {
-			tp2Pct = tp1Pct + 0.5
-		}
-
-		// 读取状态
-		posKey := pos.Symbol + "_" + pos.Side
-		st := state.TP[posKey]
-		if st == nil {
-			st = &AutoTPState{}
-			state.TP[posKey] = st
-		}
-		if st.LastActionTimeMs > 0 && nowMs-st.LastActionTimeMs < cooldownMs {
-			continue
-		}
-
 		pnlPct := pos.UnrealizedPnLPct
-		targetStage := 0
-		closePct := 0.0
+		// 只对盈利持仓触发止盈（盈利为正）
+		if pnlPct <= 0 {
+			continue
+		}
 
-		// TP2优先
-		if st.Stage < 2 && pnlPct >= tp2Pct {
-			targetStage = 2
-			closePct = closeTP2
-		} else if st.Stage < 1 && pnlPct >= tp1Pct {
-			targetStage = 1
-			closePct = closeTP1
+		// 选择触发档位（高档位优先）
+		if pnlPct >= 4.0 {
+			closeAction := ActionCloseLong
+			if strings.ToLower(pos.Side) == "short" {
+				closeAction = ActionCloseShort
+			}
+			decisions = append(decisions, Decision{
+				Symbol:         pos.Symbol,
+				Action:         closeAction,
+				Reasoning:      fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 4%% → 全部平仓", pnlPct),
+				Confidence:     100,
+				DecisionSource: "auto_take_profit",
+			})
+		} else if pnlPct >= 3.0 {
+			decisions = append(decisions, Decision{
+				Symbol:          pos.Symbol,
+				Action:          ActionPartialClose,
+				ClosePercentage: 80.0,
+				Reasoning:       fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 3%% → 部分平仓80%%", pnlPct),
+				Confidence:      100,
+				DecisionSource:  "auto_take_profit",
+			})
+		} else if pnlPct >= 2.0 {
+			decisions = append(decisions, Decision{
+				Symbol:          pos.Symbol,
+				Action:          ActionPartialClose,
+				ClosePercentage: 70.0,
+				Reasoning:       fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 2%% → 部分平仓70%%", pnlPct),
+				Confidence:      100,
+				DecisionSource:  "auto_take_profit",
+			})
+		} else if pnlPct >= 1.0 {
+			decisions = append(decisions, Decision{
+				Symbol:          pos.Symbol,
+				Action:          ActionPartialClose,
+				ClosePercentage: 50.0,
+				Reasoning:       fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 1%% → 部分平仓50%%", pnlPct),
+				Confidence:      100,
+				DecisionSource:  "auto_take_profit",
+			})
 		} else {
 			continue
 		}
-
-		// 计算联动止损
-		breakEvenSL := calcBreakEvenStopLoss(pos.Side, pos.EntryPrice, breakEvenBufferPct)
-		newSL := breakEvenSL
-
-		if targetStage >= 2 {
-			atr := 0.0
-			if md.LongerTermContext != nil && md.LongerTermContext.ATR14 > 0 {
-				atr = md.LongerTermContext.ATR14
-			}
-			newSL = calcTrailingStopLoss(pos.Side, pos.MarkPrice, md.VolatilityPct, atr, trailingAtrMult)
-
-			// 不允许比保本更差
-			if pos.Side == "long" {
-				newSL = math.Max(newSL, breakEvenSL)
-			} else {
-				newSL = math.Min(newSL, breakEvenSL)
-			}
-		}
-
-		// 生成两条决策：部分平仓 + 更新止损
-		reason := fmt.Sprintf(
-			"自动止盈TP%d触发: pnl=%.2f%%, vol=%.2f%%, TP1=%.2f%%, TP2=%.2f%% → 部分平仓%.0f%%并联动止损(newSL=%.4f)",
-			targetStage, pnlPct, volPct, tp1Pct, tp2Pct, closePct, newSL,
-		)
-
-		decisions = append(decisions,
-			Decision{
-				Symbol:          pos.Symbol,
-				Action:          ActionPartialClose,
-				ClosePercentage: closePct,
-				Reasoning:       reason,
-				Confidence:      100,
-				DecisionSource:  "auto_take_profit",
-			},
-			Decision{
-				Symbol:         pos.Symbol,
-				Action:         ActionUpdateStopLoss,
-				NewStopLoss:    newSL,
-				Reasoning:      reason,
-				Confidence:     100,
-				DecisionSource: "auto_take_profit",
-			},
-		)
 	}
 
 	if len(decisions) == 0 {
