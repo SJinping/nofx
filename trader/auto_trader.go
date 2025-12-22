@@ -69,9 +69,13 @@ type AutoTraderConfig struct {
 	MinRiskReward   float64       // 最小风险回报比
 
 	// 纸上交易模式
-	PaperTradingMode         bool    // 是否启用纸上交易模式（只做策略分析，不实际下单）
-	PaperTradingTakerFeeRate float64 // 纸上交易Taker手续费率（0.04%=0.0004，设为0禁用）
-	PaperTradingSlippageRate float64 // 纸上交易滑点比例（0.05%=0.0005，设为0禁用）
+	PaperTradingMode         bool     // 是否启用纸上交易模式（只做策略分析，不实际下单）
+	PaperTradingTakerFeeRate *float64 // 纸上交易Taker手续费率（不填=默认；填0=禁用）
+	PaperTradingSlippageRate *float64 // 纸上交易滑点比例（不填=默认；填0=禁用）
+
+	// 成本假设（用于风控/校验/自动止盈，不影响实际下单）
+	AssumedTakerFeeRate float64
+	AssumedSlippageRate float64
 }
 
 // AutoTrader 自动交易器
@@ -87,6 +91,8 @@ type AutoTrader struct {
 	initialBalance        float64
 	dailyPnL              float64
 	lastResetTime         time.Time
+	dailyStartEquity      float64 // 当日开始净值（用于日亏损计算）
+	peakEquity            float64 // 历史最高净值（用于回撤计算）
 	stopUntil             time.Time
 	isRunning             bool
 	isPaused              bool                    // 是否暂停（仅停止交易循环，不退出程序）
@@ -169,13 +175,13 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		paperConfig := DefaultPaperTradingConfig()
 
 		// 应用用户自定义配置
-		if config.PaperTradingTakerFeeRate >= 0 {
-			paperConfig.TakerFeeRate = config.PaperTradingTakerFeeRate
-			paperConfig.EnableFees = config.PaperTradingTakerFeeRate > 0
+		if config.PaperTradingTakerFeeRate != nil {
+			paperConfig.TakerFeeRate = *config.PaperTradingTakerFeeRate
+			paperConfig.EnableFees = *config.PaperTradingTakerFeeRate > 0
 		}
-		if config.PaperTradingSlippageRate >= 0 {
-			paperConfig.SlippageRate = config.PaperTradingSlippageRate
-			paperConfig.EnableSlippage = config.PaperTradingSlippageRate > 0
+		if config.PaperTradingSlippageRate != nil {
+			paperConfig.SlippageRate = *config.PaperTradingSlippageRate
+			paperConfig.EnableSlippage = *config.PaperTradingSlippageRate > 0
 		}
 
 		feeStatus := "关闭"
@@ -196,6 +202,10 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 	if config.InitialBalance <= 0 {
 		return nil, fmt.Errorf("初始金额必须大于0，请在配置中设置InitialBalance")
 	}
+	// 将配置写入决策层全局约束
+	if config.MinRiskReward > 0 {
+		decision.SetMinRiskReward(config.MinRiskReward)
+	}
 
 	// 初始化决策日志记录器（使用trader ID创建独立目录）
 	logDir := fmt.Sprintf("decision_logs/%s", config.ID)
@@ -215,6 +225,8 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		errorStats:            errorStats,
 		initialBalance:        config.InitialBalance,
 		lastResetTime:         time.Now(),
+		dailyStartEquity:      0,           // 第一次获取到净值后再初始化
+		peakEquity:            0,           // 第一次获取到净值后再初始化
 		stopUntil:             time.Time{}, // 默认无风控暂停
 		isRunning:             false,       // Run 调用后才变为 true
 		isPaused:              true,        // ⚠️ 启动时默认处于"暂停"状态，等待前端开关启动
@@ -290,9 +302,9 @@ func (at *AutoTrader) runCycle() error {
 	// 设置当前错误统计实例供 decision 包使用
 	decision.SetErrorStats(at.errorStats, at.callCount)
 
-	log.Printf("\n" + strings.Repeat("=", 70))
+	log.Print("\n" + strings.Repeat("=", 70))
 	log.Printf("⏰ %s - AI决策周期 #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
-	log.Printf(strings.Repeat("=", 70))
+	log.Print(strings.Repeat("=", 70))
 
 	// 创建决策记录
 	record := &logger.DecisionRecord{
@@ -326,6 +338,19 @@ func (at *AutoTrader) runCycle() error {
 		cycleSuccess = false
 		at.errorStats.RecordError(stats.ErrContextBuild, err.Error(), "", at.callCount)
 		return fmt.Errorf("构建交易上下文失败: %w", err)
+	}
+
+	// 3.5 ✅ 硬风控：基于净值序列计算日亏损/最大回撤，触发则暂停交易
+	// 说明：暂停期间仍会继续循环（用于前端展示/日志），但不会再开新仓。
+	if at.shouldPauseForRisk(ctx) {
+		remaining := at.stopUntil.Sub(time.Now())
+		log.Printf("⏸ 风险控制：触发暂停交易，剩余 %.0f 分钟（max_daily_loss=%.2f%%, max_drawdown=%.2f%%）",
+			remaining.Minutes(), at.config.MaxDailyLoss, at.config.MaxDrawdown)
+
+		record.Success = false
+		record.ErrorMessage = fmt.Sprintf("风险控制暂停中，剩余 %.0f 分钟", remaining.Minutes())
+		at.decisionLogger.LogDecision(record)
+		return nil
 	}
 
 	// 保存账户状态快照
@@ -380,11 +405,11 @@ func (at *AutoTrader) runCycle() error {
 
 		// 打印AI思维链（即使有错误）
 		if engeinDecision != nil && engeinDecision.CoTTrace != "" {
-			log.Printf("\n" + strings.Repeat("-", 70))
+			log.Print("\n" + strings.Repeat("-", 70))
 			log.Println("💭 AI思维链分析（错误情况）:")
 			log.Println(strings.Repeat("-", 70))
 			log.Println(engeinDecision.CoTTrace)
-			log.Printf(strings.Repeat("-", 70) + "\n")
+			log.Print(strings.Repeat("-", 70) + "\n")
 		}
 
 		at.decisionLogger.LogDecision(record)
@@ -393,11 +418,11 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	// 5. 打印AI思维链
-	log.Printf("\n" + strings.Repeat("-", 70))
+	log.Print("\n" + strings.Repeat("-", 70))
 	log.Println("💭 AI思维链分析:")
 	log.Println(strings.Repeat("-", 70))
 	log.Println(engeinDecision.CoTTrace)
-	log.Printf(strings.Repeat("-", 70) + "\n")
+	log.Print(strings.Repeat("-", 70) + "\n")
 
 	// 6. 打印AI决策
 	log.Printf("📋 AI决策列表 (%d 个):\n", len(engeinDecision.Decisions))
@@ -697,12 +722,14 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			MarginUsedPct:    marginUsedPct,
 			PositionCount:    len(positionInfos),
 		},
-		Positions:       positionInfos,
-		CandidateCoins:  candidateCoins,
-		Performance:     performance, // 添加历史表现分析
-		EnableRecording: at.config.EnableRecording,
-		TraderID:        at.config.ID,
-		AutoState:       &at.autoDecisionState,
+		Positions:           positionInfos,
+		CandidateCoins:      candidateCoins,
+		Performance:         performance, // 添加历史表现分析
+		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
+		AssumedSlippageRate: at.config.AssumedSlippageRate,
+		EnableRecording:     at.config.EnableRecording,
+		TraderID:            at.config.ID,
+		AutoState:           &at.autoDecisionState,
 	}
 
 	// 注入可插拔策略，默认使用 StrategyA
@@ -713,6 +740,82 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 
 	return ctx, nil
+}
+
+// shouldPauseForRisk 基于净值序列进行硬风控判断：
+// - max_daily_loss：从“当日开始净值”计算
+// - max_drawdown：从“历史峰值净值”计算
+func (at *AutoTrader) shouldPauseForRisk(ctx *decision.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	// 如果本来就在暂停窗口内，直接返回 true（上层会记录并跳过交易）
+	if !at.stopUntil.IsZero() && time.Now().Before(at.stopUntil) {
+		return true
+	}
+
+	equity := ctx.Account.TotalEquity
+	if equity <= 0 {
+		return false
+	}
+
+	// 初始化当日起始净值与峰值
+	if at.dailyStartEquity <= 0 {
+		at.dailyStartEquity = equity
+	}
+	if at.peakEquity <= 0 {
+		at.peakEquity = equity
+	}
+
+	// 每日重置：以 lastResetTime 为基准（已在 runCycle 中每日 reset dailyPnL）
+	// 这里补全 dailyStartEquity 重置逻辑（与 dailyPnL 重置保持一致）
+	if time.Since(at.lastResetTime) > 24*time.Hour {
+		at.dailyStartEquity = equity
+		// 同时把峰值也用当前值初始化，避免跨日带来过度收缩
+		at.peakEquity = equity
+		return false
+	}
+
+	// 更新峰值
+	if equity > at.peakEquity {
+		at.peakEquity = equity
+	}
+
+	// 日盈亏（用于状态展示）
+	at.dailyPnL = equity - at.dailyStartEquity
+
+	// 计算日亏损百分比（负数表示亏损）
+	dailyPnLPct := 0.0
+	if at.dailyStartEquity > 0 {
+		dailyPnLPct = (equity - at.dailyStartEquity) / at.dailyStartEquity * 100
+	}
+
+	// 计算回撤百分比（负数表示回撤）
+	drawdownPct := 0.0
+	if at.peakEquity > 0 {
+		drawdownPct = (equity - at.peakEquity) / at.peakEquity * 100
+	}
+
+	// 触发条件：亏损超过阈值（阈值按正数配置）
+	trigger := false
+	if at.config.MaxDailyLoss > 0 && dailyPnLPct <= -at.config.MaxDailyLoss {
+		trigger = true
+	}
+	if at.config.MaxDrawdown > 0 && drawdownPct <= -at.config.MaxDrawdown {
+		trigger = true
+	}
+	if !trigger {
+		return false
+	}
+
+	// 触发暂停窗口
+	if at.config.StopTradingTime <= 0 {
+		// 兜底：默认暂停60分钟
+		at.stopUntil = time.Now().Add(60 * time.Minute)
+	} else {
+		at.stopUntil = time.Now().Add(at.config.StopTradingTime)
+	}
+	return true
 }
 
 // executeDecisionWithRecord 执行AI决策并记录详细信息
@@ -869,6 +972,12 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	}
 
 	log.Printf("  ✓ 平仓成功")
+
+	// 自动止盈的全平：清理状态，防止残留
+	if decision.DecisionSource == "auto_take_profit" {
+		posKey := decision.Symbol + "_long"
+		delete(at.autoDecisionState.TP, posKey)
+	}
 	return nil
 }
 
@@ -895,6 +1004,12 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	}
 
 	log.Printf("  ✓ 平仓成功")
+
+	// 自动止盈的全平：清理状态，防止残留
+	if decision.DecisionSource == "auto_take_profit" {
+		posKey := decision.Symbol + "_short"
+		delete(at.autoDecisionState.TP, posKey)
+	}
 	return nil
 }
 
@@ -1140,12 +1255,11 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 			st = &decision.AutoTPState{}
 			at.autoDecisionState.TP[posKey] = st
 		}
-		// 25% -> TP1, 50% -> TP2（更高则视为TP2）
-		if dec.ClosePercentage >= 50 {
-			st.Stage = 2
-		} else if dec.ClosePercentage >= 25 && st.Stage < 1 {
-			st.Stage = 1
+		// 阶段推进：每次 auto_take_profit 的 partial_close 成功执行就推进一档
+		if st.Stage < 0 {
+			st.Stage = 0
 		}
+		st.Stage++
 		st.LastActionTimeMs = time.Now().UnixMilli()
 	}
 

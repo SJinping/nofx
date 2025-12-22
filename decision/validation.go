@@ -5,6 +5,7 @@ import (
 	"nofx/logger"
 	"nofx/stats"
 	"strings"
+	"time"
 )
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
@@ -122,35 +123,63 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		}
 
 		// 验证风险回报比（必须≥1:minRiskReward）
-		// 计算入场价（假设当前市价）
-		var entryPrice float64
-		if d.Action == ActionOpenLong {
-			// 做多：入场价在止损和止盈之间
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // 假设在20%位置入场
-		} else {
-			// 做空：入场价在止损和止盈之间
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // 假设在20%位置入场
+		// ✅ 计算入场价：优先用当前市价（更贴近实盘），取不到才fallback到启发式
+		entryPrice := 0.0
+		if ctx != nil && ctx.MarketDataMap != nil {
+			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 {
+				entryPrice = md.CurrentPrice
+			}
+		}
+		if entryPrice <= 0 {
+			if d.Action == ActionOpenLong {
+				// 做多：入场价在止损和止盈之间
+				entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2 // fallback：20%位置
+			} else {
+				// 做空：入场价在止损和止盈之间
+				entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // fallback：20%位置
+			}
 		}
 
-		var riskPercent, rewardPercent, riskRewardRatio float64
+		var riskPercent, rewardPercent float64
 		if d.Action == ActionOpenLong {
 			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
 			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
 		} else {
 			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
 			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
 		}
 
-		// 硬约束：风险回报比必须≥minRiskReward
+		// 基础有效性
+		if riskPercent <= 0 || rewardPercent <= 0 {
+			return fmt.Errorf("止损/止盈与入场价不匹配，无法计算RR(entry=%.4f sl=%.4f tp=%.4f)", entryPrice, d.StopLoss, d.TakeProfit)
+		}
+
+		// ✅ 净RR（扣除手续费+滑点，按杠杆换算为“保证金ROI口径”）
+		// round-trip成本（按名义价值）：开+平
+		taker := 0.0004
+		slippage := 0.0005
+		if ctx != nil {
+			if ctx.AssumedTakerFeeRate >= 0 {
+				taker = ctx.AssumedTakerFeeRate
+			}
+			if ctx.AssumedSlippageRate >= 0 {
+				slippage = ctx.AssumedSlippageRate
+			}
+		}
+		L := float64(maxInt(d.Leverage, 1))
+		roundTripCostROIPct := 2.0 * (taker + slippage) * L * 100.0
+
+		netRisk := riskPercent*L + roundTripCostROIPct
+		netReward := rewardPercent*L - roundTripCostROIPct
+		if netReward <= 0 {
+			return fmt.Errorf("扣除成本后预期收益<=0（净收益=%.2f%% 成本=%.2f%%），拒绝开仓", netReward, roundTripCostROIPct)
+		}
+		riskRewardRatio := netReward / netRisk
+
+		// 硬约束：净风险回报比必须≥minRiskReward
 		if riskRewardRatio < minRiskReward {
-			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥%.2f:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
-				riskRewardRatio, minRiskReward, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+			return fmt.Errorf("净风险回报比过低(%.2f:1)，必须≥%.2f:1 [净风险:%.2f%% 净收益:%.2f%% 成本:%.2f%%] [止损:%.2f 止盈:%.2f 入场:%.2f 杠杆:%dx]",
+				riskRewardRatio, minRiskReward, netRisk, netReward, roundTripCostROIPct, d.StopLoss, d.TakeProfit, entryPrice, d.Leverage)
 		}
 	}
 
@@ -223,28 +252,67 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 	return decisions
 }
 
-// ===== 自动止盈（固定阈值版：可每周期触发）=====
-// 规则（按“浮动盈亏百分比”触发）：
-// - 盈利达到 1%：部分平仓 50%
-// - 盈利达到 2%：部分平仓 70%
-// - 盈利达到 3%：部分平仓 80%
-// - 盈利达到 4%：全部平仓
+// ===== 自动止盈（带状态&冷却，避免每周期重复触发）=====
+// 规则（按“浮动盈亏百分比”触发，且对同一持仓分阶段只触发一次）：
+// - Stage 0 且 pnl>=1%：部分平仓 50%（Stage->1）
+// - Stage 1 且 pnl>=2%：部分平仓 30%（累计约80%，Stage->2）
+// - pnl>=4%：全部平仓（无论Stage，直接退出）
 //
+// 冷却：同一持仓两次自动止盈动作之间至少间隔 15 分钟。
 // 说明：
-// - 不做“每笔只触发一次/冷却”限制：每个周期都可能重复触发（用户要求）。
-// - 仅基于 pos.UnrealizedPnLPct（该字段应对多/空都为“盈利为正”口径）。
+// - 仅基于 pos.UnrealizedPnLPct（该字段对多/空都为“盈利为正”口径）。
 func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 	var decisions []Decision
 
+	// 安全：没有状态就不做自动止盈
+	if ctx == nil || ctx.AutoState == nil || ctx.AutoState.TP == nil {
+		return nil
+	}
+
+	const cooldownMs int64 = 15 * 60 * 1000 // 15分钟
+
+	// 成本假设：用于把“价格涨跌%”换算成“净ROI%（保证金口径）”
+	taker := 0.0004
+	slippage := 0.0005
+	if ctx.AssumedTakerFeeRate >= 0 {
+		taker = ctx.AssumedTakerFeeRate
+	}
+	if ctx.AssumedSlippageRate >= 0 {
+		slippage = ctx.AssumedSlippageRate
+	}
+
 	for _, pos := range ctx.Positions {
-		pnlPct := pos.UnrealizedPnLPct
+		pricePct := pos.UnrealizedPnLPct // 价格变化%（不含杠杆/成本）
 		// 只对盈利持仓触发止盈（盈利为正）
-		if pnlPct <= 0 {
+		if pricePct <= 0 {
 			continue
 		}
 
-		// 选择触发档位（高档位优先）
-		if pnlPct >= 4.0 {
+		posKey := pos.Symbol + "_" + strings.ToLower(pos.Side)
+		st := ctx.AutoState.TP[posKey]
+		if st == nil {
+			st = &AutoTPState{Stage: 0, LastActionTimeMs: 0, BaselineEntry: pos.EntryPrice, BaselineQty: pos.Quantity}
+			ctx.AutoState.TP[posKey] = st
+		}
+
+		// 冷却检查
+		if st.LastActionTimeMs > 0 {
+			nowMs := time.Now().UnixMilli()
+			if nowMs-st.LastActionTimeMs < cooldownMs {
+				continue
+			}
+		}
+
+		// 计算“净ROI%（保证金口径）”
+		L := float64(maxInt(pos.Leverage, 1))
+		roundTripCostROIPct := 2.0 * (taker + slippage) * L * 100.0 // 开+平两个操作，乘以2
+		netROIPct := pricePct*L - roundTripCostROIPct               // 价格变化*杠杆-成本
+		if netROIPct <= 0 {
+			continue
+		}
+
+		// 最高档：直接全平
+		if netROIPct >= 4.0 {
 			closeAction := ActionCloseLong
 			if strings.ToLower(pos.Side) == "short" {
 				closeAction = ActionCloseShort
@@ -252,38 +320,34 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 			decisions = append(decisions, Decision{
 				Symbol:         pos.Symbol,
 				Action:         closeAction,
-				Reasoning:      fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 4%% → 全部平仓", pnlPct),
+				Reasoning:      fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 4%% → 全部平仓（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:     100,
 				DecisionSource: "auto_take_profit",
 			})
-		} else if pnlPct >= 3.0 {
-			decisions = append(decisions, Decision{
-				Symbol:          pos.Symbol,
-				Action:          ActionPartialClose,
-				ClosePercentage: 80.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 3%% → 部分平仓80%%", pnlPct),
-				Confidence:      100,
-				DecisionSource:  "auto_take_profit",
-			})
-		} else if pnlPct >= 2.0 {
-			decisions = append(decisions, Decision{
-				Symbol:          pos.Symbol,
-				Action:          ActionPartialClose,
-				ClosePercentage: 70.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 2%% → 部分平仓70%%", pnlPct),
-				Confidence:      100,
-				DecisionSource:  "auto_take_profit",
-			})
-		} else if pnlPct >= 1.0 {
+			continue
+		}
+
+		// 分阶段止盈：只触发一次
+		if st.Stage <= 0 && netROIPct >= 1.0 {
 			decisions = append(decisions, Decision{
 				Symbol:          pos.Symbol,
 				Action:          ActionPartialClose,
 				ClosePercentage: 50.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：pnl=%.2f%% ≥ 1%% → 部分平仓50%%", pnlPct),
+				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 1%% 且 Stage=0 → 部分平仓50%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:      100,
 				DecisionSource:  "auto_take_profit",
 			})
-		} else {
+			continue
+		}
+		if st.Stage == 1 && netROIPct >= 2.0 {
+			decisions = append(decisions, Decision{
+				Symbol:          pos.Symbol,
+				Action:          ActionPartialClose,
+				ClosePercentage: 30.0,
+				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 2%% 且 Stage=1 → 部分平仓30%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				Confidence:      100,
+				DecisionSource:  "auto_take_profit",
+			})
 			continue
 		}
 	}

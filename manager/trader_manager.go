@@ -33,6 +33,22 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		return fmt.Errorf("trader ID '%s' 已存在", cfg.ID)
 	}
 
+	// 成本假设默认值（用于风控/校验/自动止盈；不影响实际下单）
+	assumedTaker := 0.0004
+	assumedSlippage := 0.0005
+	// 显式配置优先
+	if cfg.AssumedTakerFeeRate != nil {
+		assumedTaker = *cfg.AssumedTakerFeeRate
+	} else if cfg.PaperTradingMode && cfg.PaperTradingTakerFeeRate != nil {
+		// paper 没配置 assumed 时，默认沿用 paper 的费率
+		assumedTaker = *cfg.PaperTradingTakerFeeRate
+	}
+	if cfg.AssumedSlippageRate != nil {
+		assumedSlippage = *cfg.AssumedSlippageRate
+	} else if cfg.PaperTradingMode && cfg.PaperTradingSlippageRate != nil {
+		assumedSlippage = *cfg.PaperTradingSlippageRate
+	}
+
 	// 构建AutoTraderConfig
 	traderConfig := trader.AutoTraderConfig{
 		ID:                       cfg.ID,
@@ -63,6 +79,8 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		PaperTradingMode:         cfg.PaperTradingMode,
 		PaperTradingTakerFeeRate: cfg.PaperTradingTakerFeeRate,
 		PaperTradingSlippageRate: cfg.PaperTradingSlippageRate,
+		AssumedTakerFeeRate:      assumedTaker,
+		AssumedSlippageRate:      assumedSlippage,
 		MinRiskReward:            cfg.MinRiskReward,
 		EnableRecording:          enableRecording,
 	}

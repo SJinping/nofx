@@ -107,6 +107,10 @@ func (pt *PaperTrader) GetBalance() (map[string]interface{}, error) {
 		totalMarginUsed += pos.MarginUsed
 	}
 
+	// 模拟币安合约账户字段语义：
+	// - totalWalletBalance: 钱包余额（不含未实现盈亏）
+	// - totalUnrealizedProfit: 未实现盈亏
+	// - totalMarginBalance: 净值（钱包+未实现）
 	totalEquity := pt.balance + totalUnrealizedPnL
 	availableBalance := pt.balance - totalMarginUsed
 	marginUsedPct := 0.0
@@ -115,7 +119,7 @@ func (pt *PaperTrader) GetBalance() (map[string]interface{}, error) {
 	}
 
 	return map[string]interface{}{
-		"totalWalletBalance":         totalEquity,
+		"totalWalletBalance":         pt.balance,
 		"totalUnrealizedProfit":      totalUnrealizedPnL,
 		"totalMarginBalance":         totalEquity,
 		"availableBalance":           availableBalance,
@@ -191,8 +195,9 @@ func (pt *PaperTrader) openPosition(symbol, side string, quantity float64, lever
 		return nil, fmt.Errorf("获取市价失败: %w", err)
 	}
 
-	// 应用滑点（开多/开空都是买入操作）
-	executionPrice := pt.applySlippage(marketPrice, true)
+	// 应用滑点：开多=买入，开空=卖出
+	isBuy := side == "long"
+	executionPrice := pt.applySlippage(marketPrice, isBuy)
 
 	// 计算名义价值和手续费
 	notionalValue := quantity * executionPrice
@@ -313,8 +318,9 @@ func (pt *PaperTrader) closePosition(symbol, side string, quantity float64) (map
 		return nil, fmt.Errorf("平仓数量(%.4f)超过持仓数量(%.4f)", quantity, pos.Quantity)
 	}
 
-	// 应用滑点（平仓是卖出操作）
-	executionPrice := pt.applySlippage(marketPrice, false)
+	// 应用滑点：平多=卖出，平空=买入
+	isBuy := side == "short"
+	executionPrice := pt.applySlippage(marketPrice, isBuy)
 
 	// 计算名义价值和手续费
 	notionalValue := quantity * executionPrice

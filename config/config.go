@@ -47,8 +47,13 @@ type TraderConfig struct {
 
 	// 纸上交易配置（仅在PaperTradingMode=true时有效）
 	// 设置为0可以禁用相应的费用，默认使用币安标准费率
-	PaperTradingTakerFeeRate float64 `json:"paper_trading_taker_fee_rate,omitempty"` // Taker手续费率（0.04%=0.0004，设为0禁用）
-	PaperTradingSlippageRate float64 `json:"paper_trading_slippage_rate,omitempty"`  // 滑点比例（0.05%=0.0005，设为0禁用）
+	PaperTradingTakerFeeRate *float64 `json:"paper_trading_taker_fee_rate,omitempty"` // Taker手续费率（0.04%=0.0004；不填=默认；填0=禁用）
+	PaperTradingSlippageRate *float64 `json:"paper_trading_slippage_rate,omitempty"`  // 滑点比例（0.05%=0.0005；不填=默认；填0=禁用）
+
+	// 实盘/回测的成本假设（用于风控阈值、自动止盈、RR校验等；不影响实际下单）
+	// 不填：使用默认（taker=0.0004, slippage=0.0005）；填0：表示不计成本（不推荐）
+	AssumedTakerFeeRate *float64 `json:"assumed_taker_fee_rate,omitempty"`
+	AssumedSlippageRate *float64 `json:"assumed_slippage_rate,omitempty"`
 
 	// 最小风险回报比
 	MinRiskReward float64 `json:"min_risk_reward,omitempty"`
@@ -265,6 +270,20 @@ func (c *Config) Validate() error {
 		}
 		if trader.InitialBalance <= 0 {
 			return fmt.Errorf("trader[%d]: initial_balance必须大于0", i)
+		}
+		// paper trading 费用/滑点：允许不填（nil），若填写则必须≥0
+		if trader.PaperTradingTakerFeeRate != nil && *trader.PaperTradingTakerFeeRate < 0 {
+			return fmt.Errorf("trader[%d]: paper_trading_taker_fee_rate 必须≥0（不填则使用默认）", i)
+		}
+		if trader.PaperTradingSlippageRate != nil && *trader.PaperTradingSlippageRate < 0 {
+			return fmt.Errorf("trader[%d]: paper_trading_slippage_rate 必须≥0（不填则使用默认）", i)
+		}
+		// 成本假设：允许不填（nil），若填写则必须≥0
+		if trader.AssumedTakerFeeRate != nil && *trader.AssumedTakerFeeRate < 0 {
+			return fmt.Errorf("trader[%d]: assumed_taker_fee_rate 必须≥0（不填则使用默认）", i)
+		}
+		if trader.AssumedSlippageRate != nil && *trader.AssumedSlippageRate < 0 {
+			return fmt.Errorf("trader[%d]: assumed_slippage_rate 必须≥0（不填则使用默认）", i)
 		}
 		if trader.ScanIntervalMinutes <= 0 {
 			trader.ScanIntervalMinutes = 3 // 默认3分钟

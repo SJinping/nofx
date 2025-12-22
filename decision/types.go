@@ -63,6 +63,10 @@ type Context struct {
 	PromptStrategy  PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
 	AutoState       *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
 
+	// 成本假设（用于风控/自动止盈/校验，不传给LLM）
+	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004
+	AssumedSlippageRate float64 `json:"-"` // 例如 0.0005
+
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
 	TraderID        string `json:"-"` // TraderID (用于区分目录)
