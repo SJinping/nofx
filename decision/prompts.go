@@ -161,9 +161,32 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- 尽量避免：在刚刚平仓后立刻反向再开；在明显震荡/噪音期强行寻找趋势；为了\"做点什么\"而交易\n")
 	sb.WriteString("- 当你评估一个开仓信号时，请给出一个主观信心度（0–100），并且只有在你认为\"置信度足够高\"（例如 >75）时，才建议开新仓。\n\n")
 
-	sb.WriteString("# 4️⃣ 基于绩效的自我调节\n\n")
+	sb.WriteString("# 4️⃣ 基于夏普率的自我调节\n\n")
 	sb.WriteString("你会收到**最近一段时间的交易笔数**、**胜率**、**夏普比率**作为绩效反馈（周期级别），你需要据此调节：\n")
-	sb.WriteString("根据提供的历史交易记录，自主调节交易节奏与风控措施。优先保持高夏普比率，尽量保持高胜率。")
+	sb.WriteString("**夏普比率 < -0.5** (持续亏损):")
+	sb.WriteString("**停止交易**，连续观望至少6个周期（18分钟）")
+	sb.WriteString("**深度反思**：")
+	sb.WriteString("• 交易频率过高？（每小时>1次就是过度）")
+	sb.WriteString("• 持仓时间过短？（<30分钟就是过早平仓）")
+	sb.WriteString("• 信号强度不足？（信心度<80）")
+	sb.WriteString("• 是否逆势操作？")
+	sb.WriteString("• 止损执行是否严格？")
+
+	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):")
+	sb.WriteString("**严格控制**：只做信心度>85的交易")
+	sb.WriteString("减少交易频率：每小时最多1笔新开仓")
+	sb.WriteString("缩小仓位：使用正常仓位的50-70%")
+	sb.WriteString("耐心持仓：至少持有45分钟以上")
+
+	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):")
+	sb.WriteString("**维持策略**：按既定标准执行")
+	sb.WriteString("保持警惕：不因盈利而放松标准")
+
+	sb.WriteString("**夏普比率 > 0.7** (优异表现):")
+	sb.WriteString("**适度进取**：可在信心度>90时适度扩大仓位")
+	sb.WriteString("保持纪律：不因成功而改变稳健原则")
+
+	// sb.WriteString("根据提供的历史交易记录，自主调节交易节奏与风控措施。优先保持高夏普比率，尽量保持高胜率。")
 
 	sb.WriteString("# 5️⃣ 风险与仓位\n\n")
 	sb.WriteString("当前账户净值、实时盈亏、保证金使用率会在用户消息中给出，你需要基于这些数值评估回撤和风险承受度。\n")
