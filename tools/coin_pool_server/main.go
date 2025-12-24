@@ -1,21 +1,103 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	xproxy "golang.org/x/net/proxy"
 )
 
 // ==========
-// 该服务用于给 nofx 主程序提供两个“可选外部API”：
+// V2Ray 配置读取（与 binance_futures.go 保持一致）
+// ==========
+
+type V2RayConfig struct {
+	Inbounds []struct {
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
+	} `json:"inbounds"`
+}
+
+func getV2RaySocksPort() int {
+	configPath := "/usr/local/etc/v2ray/config.json"
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0
+	}
+	var config V2RayConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return 0
+	}
+	for _, inbound := range config.Inbounds {
+		if inbound.Protocol == "socks" {
+			return inbound.Port
+		}
+	}
+	return 0
+}
+
+func getV2RayProxyPort() int {
+	configPath := "/usr/local/etc/v2ray/config.json"
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0
+	}
+	var config V2RayConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return 0
+	}
+	for _, inbound := range config.Inbounds {
+		if inbound.Protocol == "http" {
+			return inbound.Port
+		}
+	}
+	return 0
+}
+
+// setupProxy 设置代理环境变量（与 binance_futures.go 保持一致）
+func setupProxy() {
+	// 优先使用 ALL_PROXY (SOCKS5)
+	if ap := os.Getenv("ALL_PROXY"); ap != "" {
+		log.Printf("🌐 使用环境变量 SOCKS5 代理: %s", ap)
+		return
+	}
+	// 其次使用 HTTPS_PROXY（HTTP 代理）
+	if proxy := os.Getenv("HTTPS_PROXY"); proxy != "" {
+		log.Printf("🌐 使用环境变量 HTTP 代理: %s", proxy)
+		return
+	}
+
+	// 从V2Ray配置读取 SOCKS5 端口
+	if socksPort := getV2RaySocksPort(); socksPort > 0 {
+		ap := fmt.Sprintf("socks5h://127.0.0.1:%d", socksPort)
+		os.Setenv("ALL_PROXY", ap)
+		log.Printf("🌐 使用V2Ray SOCKS5 代理: %s", ap)
+		return
+	}
+
+	// 回退：从V2Ray读取 HTTP 端口
+	if httpPort := getV2RayProxyPort(); httpPort > 0 {
+		proxyURL := fmt.Sprintf("http://127.0.0.1:%d", httpPort)
+		os.Setenv("HTTP_PROXY", proxyURL)
+		os.Setenv("HTTPS_PROXY", proxyURL)
+		log.Printf("🌐 使用V2Ray HTTP 代理: %s", proxyURL)
+	}
+}
+
+// ==========
+// 该服务用于给 nofx 主程序提供两个"可选外部API"：
 // - /api/coins  : 候选币种池（带 score）
 // - /api/oi/top : OI 增长 Top（1h窗口）
 //
@@ -133,13 +215,118 @@ func (rl *RateLimiter) Close() {
 
 // ========== 币安 API ==========
 
-func fetchFuturesSymbols() ([]string, error) {
-	resp, err := http.Get("https://fapi.binance.com/fapi/v1/exchangeInfo")
+func newHTTPClient(cfg AppConfig) *http.Client {
+	// 自定义 Proxy 函数：支持 ALL_PROXY（http/https/socks5/socks5h）和 HTTP(S)_PROXY
+	proxyFunc := func(req *http.Request) (*url.URL, error) {
+		// 优先检查 ALL_PROXY
+		ap := strings.TrimSpace(os.Getenv("ALL_PROXY"))
+		if ap == "" {
+			ap = strings.TrimSpace(os.Getenv("all_proxy"))
+		}
+		if ap != "" {
+			return url.Parse(ap)
+		}
+		// fallback 到标准的 HTTP(S)_PROXY
+		return http.ProxyFromEnvironment(req)
+	}
+
+	tr := &http.Transport{
+		Proxy: proxyFunc,
+		DialContext: (&net.Dialer{
+			Timeout:   15 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	// 如果 ALL_PROXY 是 socks5/socks5h，需要特殊处理 DialContext
+	if ap := strings.TrimSpace(os.Getenv("ALL_PROXY")); ap != "" {
+		if strings.HasPrefix(ap, "socks5://") || strings.HasPrefix(ap, "socks5h://") {
+			if u, err := url.Parse(ap); err == nil {
+				dialer, err := xproxy.FromURL(u, &net.Dialer{Timeout: 30 * time.Second})
+				if err == nil {
+					tr.Proxy = nil // socks5 不走 http proxy
+					tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+						return dialer.Dial(network, addr)
+					}
+					log.Printf("🌐 coin_pool_server: 使用 SOCKS5 代理: %s", ap)
+				} else {
+					log.Printf("⚠️ coin_pool_server: SOCKS5 代理配置失败: %v", err)
+				}
+			}
+		} else {
+			log.Printf("🌐 coin_pool_server: 使用 HTTP 代理 (ALL_PROXY): %s", ap)
+		}
+	}
+
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	return &http.Client{Transport: tr, Timeout: timeout}
+}
+
+func httpGetWithRetry(client *http.Client, cfg AppConfig, url string) ([]byte, int, error) {
+	backoff := cfg.RetryBaseBackoff
+	if backoff <= 0 {
+		backoff = 800 * time.Millisecond
+	}
+	maxRetry := cfg.MaxRetry
+	if maxRetry < 0 {
+		maxRetry = 0
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetry; attempt++ {
+		resp, err := client.Get(url)
+		if err != nil {
+			lastErr = err
+			if attempt == maxRetry {
+				break
+			}
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// 429/418：退避重试
+		if resp.StatusCode == 429 || resp.StatusCode == 418 {
+			lastErr = fmt.Errorf("rate limited (status %d): %s", resp.StatusCode, string(body))
+			if attempt == maxRetry {
+				return body, resp.StatusCode, lastErr
+			}
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("status=%d body=%s", resp.StatusCode, string(body))
+			if attempt == maxRetry {
+				return body, resp.StatusCode, lastErr
+			}
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+
+		return body, resp.StatusCode, nil
+	}
+
+	return nil, 0, lastErr
+}
+
+func fetchFuturesSymbols(client *http.Client, cfg AppConfig) ([]string, error) {
+	body, _, err := httpGetWithRetry(client, cfg, "https://fapi.binance.com/fapi/v1/exchangeInfo")
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
 
 	var info struct {
 		Symbols []struct {
@@ -164,12 +351,10 @@ func fetchFuturesSymbols() ([]string, error) {
 }
 
 func fetchTickers(client *http.Client) (map[string]*BinanceTicker, error) {
-	resp, err := client.Get("https://fapi.binance.com/fapi/v1/ticker/24hr")
+	body, _, err := httpGetWithRetry(client, AppConfig{MaxRetry: 1, RetryBaseBackoff: 800 * time.Millisecond}, "https://fapi.binance.com/fapi/v1/ticker/24hr")
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
 
 	var tickers []BinanceTicker
 	if err := json.Unmarshal(body, &tickers); err != nil {
@@ -337,7 +522,7 @@ func loadConfig() AppConfig {
 		CoinTopN:         getEnvInt("COIN_TOP_N", 30),
 		OITopKByVolume:   getEnvInt("OI_TOP_K", 120),
 		MinQuoteVolume:   getEnvFloat("MIN_QUOTE_VOLUME", 5_000_000), // 24h成交额过滤（USDT）
-		HTTPTimeout:      getEnvDuration("HTTP_TIMEOUT", 12*time.Second),
+		HTTPTimeout:      getEnvDuration("HTTP_TIMEOUT", 30*time.Second),
 		MaxWorkers:       getEnvInt("MAX_WORKERS", 8),
 		MaxRPS:           getEnvInt("MAX_RPS", 6),
 		OIWindow:         getEnvDuration("OI_WINDOW", 60*time.Minute),
@@ -580,45 +765,16 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	// 先设置代理（从环境变量或V2Ray配置读取）
+	setupProxy()
+
 	cfg := loadConfig()
 	log.Printf("⚙️  coin_pool_server config: port=%s oi_interval=%s coin_interval=%s oi_top_n=%d oi_top_k=%d coin_top_n=%d min_quote_volume=%.0f max_workers=%d max_rps=%d oi_window=%s",
 		cfg.Port, cfg.UpdateIntervalOI, cfg.UpdateIntervalCP, cfg.OITopN, cfg.OITopKByVolume, cfg.CoinTopN, cfg.MinQuoteVolume, cfg.MaxWorkers, cfg.MaxRPS, cfg.OIWindow)
 
-	// allowlist：USDT 永续合约（只拉一次，避免频繁 exchangeInfo）
-	allow := make(map[string]bool)
-	if syms, err := fetchFuturesSymbols(); err == nil {
-		for _, s := range syms {
-			allow[s] = true
-		}
-		log.Printf("✓ allowlist loaded: %d symbols", len(allow))
-	} else {
-		log.Printf("⚠️  allowlist load failed: %v (fallback: allow all symbols in ticker)", err)
-		allow = nil
-	}
-
-	client := &http.Client{Timeout: cfg.HTTPTimeout}
+	client := newHTTPClient(cfg)
 	rl := NewRateLimiter(cfg.MaxRPS)
 	defer rl.Close()
-
-	// 首次更新
-	updateCoinPool(cfg, client, allow)
-	updateOITop(cfg, client, rl, allow)
-
-	// 分别定时更新：coin pool 慢、OI top 快（避免不必要请求）
-	go func() {
-		ticker := time.NewTicker(cfg.UpdateIntervalCP)
-		defer ticker.Stop()
-		for range ticker.C {
-			updateCoinPool(cfg, client, allow)
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(cfg.UpdateIntervalOI)
-		defer ticker.Stop()
-		for range ticker.C {
-			updateOITop(cfg, client, rl, allow)
-		}
-	}()
 
 	http.HandleFunc("/api/oi/top", handleOITop)
 	http.HandleFunc("/api/coins", handleCoinPool)
@@ -627,5 +783,42 @@ func main() {
 	log.Printf("🚀 币池服务启动: http://localhost:%s", cfg.Port)
 	log.Printf("   - OI Top:    http://localhost:%s/api/oi/top", cfg.Port)
 	log.Printf("   - Coin Pool: http://localhost:%s/api/coins", cfg.Port)
+
+	// 后台初始化与定时更新：即使首次拉取失败，也能先把服务端口起起来
+	go func() {
+		// allowlist：USDT 永续合约（只拉一次，避免频繁 exchangeInfo）
+		var allow map[string]bool
+		if syms, err := fetchFuturesSymbols(client, cfg); err == nil {
+			allow = make(map[string]bool, len(syms))
+			for _, s := range syms {
+				allow[s] = true
+			}
+			log.Printf("✓ allowlist loaded: %d symbols", len(allow))
+		} else {
+			log.Printf("⚠️  allowlist load failed: %v (fallback: allow all symbols in ticker)", err)
+			allow = nil
+		}
+
+		// 首次更新（可能较慢）
+		updateCoinPool(cfg, client, allow)
+		updateOITop(cfg, client, rl, allow)
+
+		// 分别定时更新：coin pool 慢、OI top 快（避免不必要请求）
+		go func() {
+			ticker := time.NewTicker(cfg.UpdateIntervalCP)
+			defer ticker.Stop()
+			for range ticker.C {
+				updateCoinPool(cfg, client, allow)
+			}
+		}()
+		go func() {
+			ticker := time.NewTicker(cfg.UpdateIntervalOI)
+			defer ticker.Stop()
+			for range ticker.C {
+				updateOITop(cfg, client, rl, allow)
+			}
+		}()
+	}()
+
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, nil))
 }
