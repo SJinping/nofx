@@ -426,7 +426,7 @@ func GetOITopPositions() ([]OIPosition, error) {
 		return []OIPosition{}, nil // 返回空列表，不是错误
 	}
 
-	maxRetries := 3
+	maxRetries := 1
 	var lastErr error
 
 	// 尝试从API获取
