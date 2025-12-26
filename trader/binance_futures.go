@@ -148,26 +148,39 @@ func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 	}
 }
 
-// GetBalance 获取账户余额
+// GetBalance 获取账户余额（带重试机制）
 func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
-	log.Printf("🔄 正在调用币安API获取账户余额...")
-	account, err := t.client.NewGetAccountService().Do(context.Background())
-	if err != nil {
+	const maxRetries = 3
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			log.Printf("🔄 第%d次重试获取账户余额...", i+1)
+			time.Sleep(2 * time.Second)
+		}
+
+		log.Printf("🔄 正在调用币安API获取账户余额...")
+		account, err := t.client.NewGetAccountService().Do(context.Background())
+		if err == nil {
+			// 成功，返回结果
+			result := make(map[string]interface{})
+			result["totalWalletBalance"], _ = strconv.ParseFloat(account.TotalWalletBalance, 64)
+			result["availableBalance"], _ = strconv.ParseFloat(account.AvailableBalance, 64)
+			result["totalUnrealizedProfit"], _ = strconv.ParseFloat(account.TotalUnrealizedProfit, 64)
+
+			log.Printf("✓ 币安API返回: 总余额=%s, 可用=%s, 未实现盈亏=%s",
+				account.TotalWalletBalance,
+				account.AvailableBalance,
+				account.TotalUnrealizedProfit)
+
+			return result, nil
+		}
+
+		lastErr = err
 		log.Printf("❌ 币安API调用失败: %v", err)
-		return nil, fmt.Errorf("获取账户信息失败: %w", err)
 	}
 
-	result := make(map[string]interface{})
-	result["totalWalletBalance"], _ = strconv.ParseFloat(account.TotalWalletBalance, 64)
-	result["availableBalance"], _ = strconv.ParseFloat(account.AvailableBalance, 64)
-	result["totalUnrealizedProfit"], _ = strconv.ParseFloat(account.TotalUnrealizedProfit, 64)
-
-	log.Printf("✓ 币安API返回: 总余额=%s, 可用=%s, 未实现盈亏=%s",
-		account.TotalWalletBalance,
-		account.AvailableBalance,
-		account.TotalUnrealizedProfit)
-
-	return result, nil
+	return nil, fmt.Errorf("获取账户信息失败（重试%d次）: %w", maxRetries, lastErr)
 }
 
 // GetPositions 获取所有持仓
@@ -520,6 +533,13 @@ func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float6
 
 // SetStopLoss 设置止损单
 func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+	if quantity <= 0 {
+		return fmt.Errorf("设置止损失败: quantity必须>0，当前: %.8f", quantity)
+	}
+	if stopPrice <= 0 {
+		return fmt.Errorf("设置止损失败: stopPrice必须>0，当前: %.8f", stopPrice)
+	}
+
 	var side futures.SideType
 	var posSide futures.PositionSideType
 
@@ -544,8 +564,11 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Type(futures.OrderTypeStopMarket).
 		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
 		Quantity(quantityStr).
-		WorkingType(futures.WorkingTypeContractPrice).
-		ClosePosition(true).
+		// 说明：
+		// - 在部分账户/部分交易对上，STOP_MARKET + closePosition=true 可能触发 -4120
+		// - 使用 reduceOnly=true + quantity 来表达“止损减仓/平仓”，兼容性更好
+		ReduceOnly(true).
+		WorkingType(futures.WorkingTypeMarkPrice).
 		Do(context.Background())
 
 	if err != nil {
@@ -558,6 +581,13 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 
 // SetTakeProfit 设置止盈单
 func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error {
+	if quantity <= 0 {
+		return fmt.Errorf("设置止盈失败: quantity必须>0，当前: %.8f", quantity)
+	}
+	if takeProfitPrice <= 0 {
+		return fmt.Errorf("设置止盈失败: takeProfitPrice必须>0，当前: %.8f", takeProfitPrice)
+	}
+
 	var side futures.SideType
 	var posSide futures.PositionSideType
 
@@ -582,8 +612,8 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		Type(futures.OrderTypeTakeProfitMarket).
 		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
 		Quantity(quantityStr).
-		WorkingType(futures.WorkingTypeContractPrice).
-		ClosePosition(true).
+		ReduceOnly(true).
+		WorkingType(futures.WorkingTypeMarkPrice).
 		Do(context.Background())
 
 	if err != nil {

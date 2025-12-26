@@ -496,6 +496,11 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 
 	var history []EquityPoint
 	for _, record := range records {
+		// ⚠️ 过滤掉失败的记录或账户状态异常的记录（避免网络超时导致曲线大幅波动）
+		if !record.Success || record.AccountState.TotalBalance <= 0 {
+			continue
+		}
+
 		// TotalBalance字段实际存储的是TotalEquity
 		totalEquity := record.AccountState.TotalBalance
 		// TotalUnrealizedProfit字段实际存储的是TotalPnL（相对初始余额）

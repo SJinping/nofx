@@ -146,6 +146,7 @@ var (
 	oiTopCache       []OIPosition
 	coinPoolCache    []CoinInfo
 	oiHistory        map[string][]OISample // 仅记录被采样的 TopK
+	latestOIMap      map[string]float64    // 最新 OI 快照（币数量，非USD）
 	cacheUpdatedAtOI time.Time
 	cacheUpdatedAtCP time.Time
 )
@@ -158,6 +159,7 @@ type AppConfig struct {
 	CoinTopN         int
 	OITopKByVolume   int
 	MinQuoteVolume   float64
+	MinOIValue       float64 // OI价值过滤阈值（USD），默认15M
 	HTTPTimeout      time.Duration
 	MaxWorkers       int
 	MaxRPS           int
@@ -522,6 +524,7 @@ func loadConfig() AppConfig {
 		CoinTopN:         getEnvInt("COIN_TOP_N", 30),
 		OITopKByVolume:   getEnvInt("OI_TOP_K", 120),
 		MinQuoteVolume:   getEnvFloat("MIN_QUOTE_VOLUME", 5_000_000), // 24h成交额过滤（USDT）
+		MinOIValue:       getEnvFloat("MIN_OI_VALUE", 15_000_000),    // OI价值过滤（USD），与 decision/engine.go 一致
 		HTTPTimeout:      getEnvDuration("HTTP_TIMEOUT", 30*time.Second),
 		MaxWorkers:       getEnvInt("MAX_WORKERS", 8),
 		MaxRPS:           getEnvInt("MAX_RPS", 6),
@@ -581,8 +584,17 @@ func updateCoinPool(cfg AppConfig, client *http.Client, allow map[string]bool) {
 		return
 	}
 
+	// 读取最新 OI 快照（用于过滤持仓价值过低的币种）
+	cacheMu.RLock()
+	oiSnapshot := make(map[string]float64, len(latestOIMap))
+	for k, v := range latestOIMap {
+		oiSnapshot[k] = v
+	}
+	cacheMu.RUnlock()
+
 	// 按交易量+波动性打分（可根据需要替换为更复杂模型）
 	var coinList []CoinInfo
+	filteredByOI := 0
 	for sym, ticker := range tickers {
 		if allow != nil && !allow[sym] {
 			continue
@@ -591,6 +603,21 @@ func updateCoinPool(cfg AppConfig, client *http.Client, allow map[string]bool) {
 		if vol <= 0 {
 			continue
 		}
+
+		// OI 价值过滤（与 decision/engine.go 保持一致）
+		// 持仓价值 = OI（币数量） × 当前价格
+		price := parseFloat(ticker.LastPrice)
+		if cfg.MinOIValue > 0 && price > 0 {
+			if oi, ok := oiSnapshot[sym]; ok && oi > 0 {
+				oiValue := oi * price
+				if oiValue < cfg.MinOIValue {
+					filteredByOI++
+					continue // 跳过持仓价值过低的币种
+				}
+			}
+			// 如果没有 OI 数据，暂不过滤（可能还没拉到）
+		}
+
 		priceChange := parseFloat(ticker.PriceChangePercent)
 		if priceChange < 0 {
 			priceChange = -priceChange
@@ -609,7 +636,11 @@ func updateCoinPool(cfg AppConfig, client *http.Client, allow map[string]bool) {
 	cacheUpdatedAtCP = time.Now()
 	cacheMu.Unlock()
 
-	log.Printf("✅ coin pool 更新完成: %d", len(coinList))
+	if filteredByOI > 0 {
+		log.Printf("✅ coin pool 更新完成: %d (过滤OI<%.0fM: %d个)", len(coinList), cfg.MinOIValue/1e6, filteredByOI)
+	} else {
+		log.Printf("✅ coin pool 更新完成: %d", len(coinList))
+	}
 }
 
 func pruneSamples(samples []OISample, keepAfter time.Time) []OISample {
@@ -662,13 +693,17 @@ func updateOITop(cfg AppConfig, client *http.Client, rl *RateLimiter, allow map[
 	if oiHistory == nil {
 		oiHistory = make(map[string][]OISample)
 	}
+	if latestOIMap == nil {
+		latestOIMap = make(map[string]float64)
+	}
 
-	// 先更新历史
+	// 先更新历史 + 最新 OI 快照
 	for sym, oi := range oiMap {
 		h := oiHistory[sym]
 		h = append(h, OISample{T: now, OI: oi})
 		h = pruneSamples(h, keepAfter)
 		oiHistory[sym] = h
+		latestOIMap[sym] = oi // 同步更新最新 OI
 	}
 	cacheMu.Unlock()
 
@@ -769,8 +804,8 @@ func main() {
 	setupProxy()
 
 	cfg := loadConfig()
-	log.Printf("⚙️  coin_pool_server config: port=%s oi_interval=%s coin_interval=%s oi_top_n=%d oi_top_k=%d coin_top_n=%d min_quote_volume=%.0f max_workers=%d max_rps=%d oi_window=%s",
-		cfg.Port, cfg.UpdateIntervalOI, cfg.UpdateIntervalCP, cfg.OITopN, cfg.OITopKByVolume, cfg.CoinTopN, cfg.MinQuoteVolume, cfg.MaxWorkers, cfg.MaxRPS, cfg.OIWindow)
+	log.Printf("⚙️  coin_pool_server config: port=%s oi_interval=%s coin_interval=%s oi_top_n=%d oi_top_k=%d coin_top_n=%d min_quote_volume=%.0f min_oi_value=%.0f max_workers=%d max_rps=%d oi_window=%s",
+		cfg.Port, cfg.UpdateIntervalOI, cfg.UpdateIntervalCP, cfg.OITopN, cfg.OITopKByVolume, cfg.CoinTopN, cfg.MinQuoteVolume, cfg.MinOIValue, cfg.MaxWorkers, cfg.MaxRPS, cfg.OIWindow)
 
 	client := newHTTPClient(cfg)
 	rl := NewRateLimiter(cfg.MaxRPS)

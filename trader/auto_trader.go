@@ -11,6 +11,7 @@ import (
 	"nofx/stats"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -101,6 +102,14 @@ type AutoTrader struct {
 	promptStrategy        decision.PromptStrategy // 当前使用的Prompt策略（默认StrategyA）
 	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	autoDecisionState     decision.AutoDecisionState
+
+	// API缓存（减少币安API调用频率）
+	cacheMutex           sync.RWMutex
+	accountInfoCache     map[string]interface{}
+	accountInfoCacheTime time.Time
+	positionsCache       []map[string]interface{}
+	positionsCacheTime   time.Time
+	cacheTTL             time.Duration // 缓存过期时间（默认30秒）
 }
 
 // NewAutoTrader 创建自动交易器
@@ -236,6 +245,8 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		autoDecisionState: decision.AutoDecisionState{
 			TP: make(map[string]*decision.AutoTPState),
 		},
+		// 初始化API缓存（30秒过期，减少币安API调用）
+		cacheTTL: 30 * time.Second,
 	}, nil
 }
 
@@ -484,11 +495,29 @@ func (at *AutoTrader) runCycle() error {
 
 // buildTradingContext 构建交易上下文
 func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
-	// 1. 获取账户信息
+	// 1. 获取账户信息（失败时尝试使用缓存）
 	balance, err := at.trader.GetBalance()
+	usedCache := false
 	if err != nil {
-		at.errorStats.RecordError(stats.ErrAccountBalance, err.Error(), "", at.callCount)
-		return nil, fmt.Errorf("获取账户余额失败: %w", err)
+		// 尝试使用缓存数据
+		at.cacheMutex.RLock()
+		hasCache := at.accountInfoCache != nil
+		at.cacheMutex.RUnlock()
+
+		if hasCache {
+			log.Printf("⚠️  获取账户余额失败，使用缓存数据继续: %v", err)
+			at.cacheMutex.RLock()
+			balance = map[string]interface{}{
+				"totalWalletBalance":    at.accountInfoCache["wallet_balance"],
+				"totalUnrealizedProfit": at.accountInfoCache["unrealized_profit"],
+				"availableBalance":      at.accountInfoCache["available_balance"],
+			}
+			at.cacheMutex.RUnlock()
+			usedCache = true
+		} else {
+			at.errorStats.RecordError(stats.ErrAccountBalance, err.Error(), "", at.callCount)
+			return nil, fmt.Errorf("获取账户余额失败: %w", err)
+		}
 	}
 
 	// 获取账户字段
@@ -509,11 +538,28 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	// Total Equity = 钱包余额 + 未实现盈亏
 	totalEquity := totalWalletBalance + totalUnrealizedProfit
 
-	// 2. 获取持仓信息
+	// 如果使用了缓存但数据无效，仍然返回错误
+	if usedCache && totalEquity <= 0 {
+		return nil, fmt.Errorf("获取账户余额失败且缓存数据无效")
+	}
+
+	// 2. 获取持仓信息（失败时尝试使用缓存）
 	positions, err := at.trader.GetPositions()
 	if err != nil {
-		at.errorStats.RecordError(stats.ErrAccountPosition, err.Error(), "", at.callCount)
-		return nil, fmt.Errorf("获取持仓失败: %w", err)
+		// 尝试使用缓存数据
+		at.cacheMutex.RLock()
+		hasCache := at.positionsCache != nil
+		at.cacheMutex.RUnlock()
+
+		if hasCache {
+			log.Printf("⚠️  获取持仓信息失败，使用缓存数据继续: %v", err)
+			at.cacheMutex.RLock()
+			positions = at.positionsCache
+			at.cacheMutex.RUnlock()
+		} else {
+			at.errorStats.RecordError(stats.ErrAccountPosition, err.Error(), "", at.callCount)
+			return nil, fmt.Errorf("获取持仓失败: %w", err)
+		}
 	}
 
 	var positionInfos []decision.PositionInfo
@@ -1329,8 +1375,18 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 	return result
 }
 
-// GetAccountInfo 获取账户信息（用于API）
+// GetAccountInfo 获取账户信息（用于API，带缓存）
 func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
+	// 检查缓存是否有效
+	at.cacheMutex.RLock()
+	if at.accountInfoCache != nil && time.Since(at.accountInfoCacheTime) < at.cacheTTL {
+		result := at.accountInfoCache
+		at.cacheMutex.RUnlock()
+		return result, nil
+	}
+	at.cacheMutex.RUnlock()
+
+	// 缓存过期，调用真实API
 	balance, err := at.trader.GetBalance()
 	if err != nil {
 		return nil, fmt.Errorf("获取余额失败: %w", err)
@@ -1354,8 +1410,8 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	// Total Equity = 钱包余额 + 未实现盈亏
 	totalEquity := totalWalletBalance + totalUnrealizedProfit
 
-	// 获取持仓计算总保证金
-	positions, err := at.trader.GetPositions()
+	// 获取持仓计算总保证金（使用带缓存的内部方法）
+	positions, err := at.getPositionsWithCache()
 	if err != nil {
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
 	}
@@ -1390,7 +1446,7 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		marginUsedPct = (totalMarginUsed / totalEquity) * 100
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		// 核心字段
 		"total_equity":      totalEquity,           // 账户净值 = wallet + unrealized
 		"wallet_balance":    totalWalletBalance,    // 钱包余额（不含未实现盈亏）
@@ -1408,12 +1464,46 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		"position_count":  len(positions),  // 持仓数量
 		"margin_used":     totalMarginUsed, // 保证金占用
 		"margin_used_pct": marginUsedPct,   // 保证金使用率
-	}, nil
+	}
+
+	// 更新缓存
+	at.cacheMutex.Lock()
+	at.accountInfoCache = result
+	at.accountInfoCacheTime = time.Now()
+	at.cacheMutex.Unlock()
+
+	return result, nil
 }
 
-// GetPositions 获取持仓列表（用于API）
-func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
+// getPositionsWithCache 获取原始持仓数据（带缓存，内部使用）
+func (at *AutoTrader) getPositionsWithCache() ([]map[string]interface{}, error) {
+	// 检查缓存是否有效
+	at.cacheMutex.RLock()
+	if at.positionsCache != nil && time.Since(at.positionsCacheTime) < at.cacheTTL {
+		result := at.positionsCache
+		at.cacheMutex.RUnlock()
+		return result, nil
+	}
+	at.cacheMutex.RUnlock()
+
+	// 缓存过期，调用真实API
 	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return nil, err
+	}
+
+	// 更新缓存
+	at.cacheMutex.Lock()
+	at.positionsCache = positions
+	at.positionsCacheTime = time.Now()
+	at.cacheMutex.Unlock()
+
+	return positions, nil
+}
+
+// GetPositions 获取持仓列表（用于API，带缓存）
+func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
+	positions, err := at.getPositionsWithCache()
 	if err != nil {
 		return nil, fmt.Errorf("获取持仓失败: %w", err)
 	}
