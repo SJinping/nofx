@@ -564,10 +564,9 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Type(futures.OrderTypeStopMarket).
 		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
 		Quantity(quantityStr).
-		// 说明：
-		// - 在部分账户/部分交易对上，STOP_MARKET + closePosition=true 可能触发 -4120
-		// - 使用 reduceOnly=true + quantity 来表达“止损减仓/平仓”，兼容性更好
-		ReduceOnly(true).
+		// 注意：
+		// - 在 Hedge Mode（双向持仓）下，Binance 可能返回 -1106: "reduceonly sent when not required"
+		// - 这里依赖 positionSide + side + quantity 来保证是减仓单，不强制传 reduceOnly
 		WorkingType(futures.WorkingTypeMarkPrice).
 		Do(context.Background())
 
@@ -612,7 +611,7 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		Type(futures.OrderTypeTakeProfitMarket).
 		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
 		Quantity(quantityStr).
-		ReduceOnly(true).
+		// 注意：同 SetStopLoss，避免在 Hedge Mode 下触发 -1106
 		WorkingType(futures.WorkingTypeMarkPrice).
 		Do(context.Background())
 
