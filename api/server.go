@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -92,6 +93,8 @@ func (s *Server) setupRoutes() {
 		api.GET("/statistics", s.handleStatistics)
 		api.GET("/equity-history", s.handleEquityHistory)
 		api.GET("/performance", s.handlePerformance)
+		// 交易币种盈亏汇总（按 symbol 聚合）
+		api.GET("/traded-symbols", s.handleTradedSymbols)
 
 		// 错误统计
 		api.GET("/error-stats", s.handleErrorStats)
@@ -112,6 +115,358 @@ func (s *Server) setupRoutes() {
 			logs.GET("/detail", s.handleLogDetail)
 		}
 	}
+}
+
+// ===== Traded Symbols Summary =====
+
+type tradedSymbolStatus string
+
+const (
+	tradedSymbolHoldingLong  tradedSymbolStatus = "holding_long"
+	tradedSymbolHoldingShort tradedSymbolStatus = "holding_short"
+	tradedSymbolClosed       tradedSymbolStatus = "closed"
+)
+
+type tradedSymbolCurrentPosition struct {
+	EntryPrice float64 `json:"entry_price"`
+	MarkPrice  float64 `json:"mark_price"`
+	Quantity   float64 `json:"quantity"`
+	Leverage   int     `json:"leverage"`
+}
+
+type tradedSymbolSummaryItem struct {
+	Symbol string             `json:"symbol"`
+	Status tradedSymbolStatus `json:"status"`
+
+	TotalPnL      float64 `json:"total_pnl"`
+	RealizedPnL   float64 `json:"realized_pnl"`
+	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	AvgPnL        float64 `json:"avg_pnl"`
+
+	TotalTrades int     `json:"total_trades"`
+	WinRate     float64 `json:"win_rate"`
+	WinCount    int     `json:"win_count"`
+	LossCount   int     `json:"loss_count"`
+
+	OpenLongCount     int `json:"open_long_count"`
+	OpenShortCount    int `json:"open_short_count"`
+	CloseLongCount    int `json:"close_long_count"`
+	CloseShortCount   int `json:"close_short_count"`
+	PartialCloseCount int `json:"partial_close_count"`
+
+	CurrentPosition *tradedSymbolCurrentPosition `json:"current_position,omitempty"`
+	FirstTradeTime  string                       `json:"first_trade_time"`
+	LastTradeTime   string                       `json:"last_trade_time"`
+}
+
+type tradedSymbolsSummary struct {
+	TotalSymbols       int     `json:"total_symbols"`
+	HoldingCount       int     `json:"holding_count"`
+	ClosedCount        int     `json:"closed_count"`
+	TotalRealizedPnL   float64 `json:"total_realized_pnl"`
+	TotalUnrealizedPnL float64 `json:"total_unrealized_pnl"`
+}
+
+type tradedSymbolsResponse struct {
+	Symbols []tradedSymbolSummaryItem `json:"symbols"`
+	Summary tradedSymbolsSummary      `json:"summary"`
+}
+
+// handleTradedSymbols 返回按币种汇总的盈亏详情（已实现 + 当前未实现）。
+// 数据来源：决策日志（open/close/partial_close）+ 当前持仓快照（positions）。
+func (s *Server) handleTradedSymbols(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 读取尽可能多的记录。这里用较大上限以覆盖“开仓在更早周期、平仓在最近周期”的情况。
+	records, err := trader.GetDecisionLogger().GetLatestRecords(100000)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("读取决策日志失败: %v", err)})
+		return
+	}
+
+	type openPos struct {
+		side      string
+		openPrice float64
+		openTime  time.Time
+		quantity  float64
+		leverage  int
+	}
+
+	// symbol_side -> openPos
+	openPositions := make(map[string]*openPos)
+
+	// symbol -> summary item
+	items := make(map[string]*tradedSymbolSummaryItem)
+
+	ensureItem := func(symbol string) *tradedSymbolSummaryItem {
+		if it, ok := items[symbol]; ok {
+			return it
+		}
+		it := &tradedSymbolSummaryItem{
+			Symbol: symbol,
+			Status: tradedSymbolClosed,
+		}
+		items[symbol] = it
+		return it
+	}
+
+	updateTradeTime := func(it *tradedSymbolSummaryItem, ts time.Time) {
+		if it.FirstTradeTime == "" {
+			it.FirstTradeTime = ts.Format(time.RFC3339)
+		}
+		it.LastTradeTime = ts.Format(time.RFC3339)
+	}
+
+	// 遍历日志（GetLatestRecords 返回已按时间从旧到新）
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		for _, action := range record.Decisions {
+			if !action.Success {
+				continue
+			}
+
+			symbol := action.Symbol
+			if symbol == "" {
+				continue
+			}
+			it := ensureItem(symbol)
+			updateTradeTime(it, action.Timestamp)
+
+			// side 推断：open/close 带方向；partial_close 需要从当前持仓推断
+			side := ""
+			switch action.Action {
+			case "open_long", "close_long":
+				side = "long"
+			case "open_short", "close_short":
+				side = "short"
+			}
+
+			posKey := ""
+			if side != "" {
+				posKey = symbol + "_" + side
+			}
+
+			switch action.Action {
+			case "open_long":
+				it.OpenLongCount++
+				openPositions[posKey] = &openPos{
+					side:      "long",
+					openPrice: action.Price,
+					openTime:  action.Timestamp,
+					quantity:  action.Quantity,
+					leverage:  action.Leverage,
+				}
+			case "open_short":
+				it.OpenShortCount++
+				openPositions[posKey] = &openPos{
+					side:      "short",
+					openPrice: action.Price,
+					openTime:  action.Timestamp,
+					quantity:  action.Quantity,
+					leverage:  action.Leverage,
+				}
+			case "close_long":
+				it.CloseLongCount++
+				if op, ok := openPositions[posKey]; ok && op != nil {
+					// USDT 盈亏：不额外乘杠杆（名义仓位已由 quantity 体现）
+					pnl := (action.Price - op.openPrice) * op.quantity
+					it.RealizedPnL += pnl
+					it.TotalTrades++
+					if pnl > 0 {
+						it.WinCount++
+					} else if pnl < 0 {
+						it.LossCount++
+					}
+					delete(openPositions, posKey)
+				}
+			case "close_short":
+				it.CloseShortCount++
+				if op, ok := openPositions[posKey]; ok && op != nil {
+					pnl := (op.openPrice - action.Price) * op.quantity
+					it.RealizedPnL += pnl
+					it.TotalTrades++
+					if pnl > 0 {
+						it.WinCount++
+					} else if pnl < 0 {
+						it.LossCount++
+					}
+					delete(openPositions, posKey)
+				}
+			case "partial_close":
+				// best-effort：尝试在 long/short 中找到一个打开的仓位
+				it.PartialCloseCount++
+
+				var opKey string
+				var op *openPos
+				if opl, ok := openPositions[symbol+"_long"]; ok && opl != nil {
+					opKey = symbol + "_long"
+					op = opl
+				} else if ops, ok := openPositions[symbol+"_short"]; ok && ops != nil {
+					opKey = symbol + "_short"
+					op = ops
+				}
+				if op == nil {
+					continue
+				}
+
+				closeQty := action.Quantity
+				if closeQty <= 0 || closeQty > op.quantity {
+					// 若数量异常，按“全平”处理（避免算不出盈亏）
+					closeQty = op.quantity
+				}
+
+				pnl := 0.0
+				if op.side == "long" {
+					pnl = (action.Price - op.openPrice) * closeQty
+				} else {
+					pnl = (op.openPrice - action.Price) * closeQty
+				}
+
+				it.RealizedPnL += pnl
+				it.TotalTrades++
+				if pnl > 0 {
+					it.WinCount++
+				} else if pnl < 0 {
+					it.LossCount++
+				}
+
+				op.quantity -= closeQty
+				if op.quantity <= 0 {
+					delete(openPositions, opKey)
+				} else {
+					openPositions[opKey] = op
+				}
+			}
+		}
+	}
+
+	// 当前持仓快照用于未实现盈亏 + 状态
+	positions, _ := trader.GetPositions()
+	posBySymbol := make(map[string]map[string]interface{})
+
+	// 更可靠：调用 /api/positions 用 trader.GetPositions() 返回的是 []map?；本 handler 内直接复用 trader.GetPositions()
+	// 但 trader.GetPositions() 的具体类型在 interface 里定义，避免做强依赖，这里做一次 JSON roundtrip 兼容。
+	type posDTO struct {
+		Symbol        string  `json:"symbol"`
+		Side          string  `json:"side"`
+		EntryPrice    float64 `json:"entry_price"`
+		MarkPrice     float64 `json:"mark_price"`
+		Quantity      float64 `json:"quantity"`
+		Leverage      int     `json:"leverage"`
+		UnrealizedPnL float64 `json:"unrealized_pnl"`
+	}
+
+	// 将 positions 转成通用 map，再转 DTO
+	rawPosBytes, _ := json.Marshal(positions)
+	var posDTOs []posDTO
+	_ = json.Unmarshal(rawPosBytes, &posDTOs)
+	for _, p := range posDTOs {
+		if p.Symbol == "" {
+			continue
+		}
+		posBySymbol[p.Symbol] = map[string]interface{}{
+			"side":           p.Side,
+			"entry_price":    p.EntryPrice,
+			"mark_price":     p.MarkPrice,
+			"quantity":       p.Quantity,
+			"leverage":       p.Leverage,
+			"unrealized_pnl": p.UnrealizedPnL,
+		}
+	}
+
+	// 汇总 items -> slice + status/unrealized/total/winrate/avg
+	var resp tradedSymbolsResponse
+	resp.Symbols = make([]tradedSymbolSummaryItem, 0, len(items))
+
+	totalRealized := 0.0
+	totalUnrealized := 0.0
+	holdingCount := 0
+
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+
+		// 未实现/状态
+		if pos, ok := posBySymbol[it.Symbol]; ok {
+			it.UnrealizedPnL, _ = pos["unrealized_pnl"].(float64)
+			sideStr, _ := pos["side"].(string)
+			if sideStr == "long" {
+				it.Status = tradedSymbolHoldingLong
+				holdingCount++
+			} else if sideStr == "short" {
+				it.Status = tradedSymbolHoldingShort
+				holdingCount++
+			} else {
+				it.Status = tradedSymbolClosed
+			}
+
+			ep, _ := pos["entry_price"].(float64)
+			mp, _ := pos["mark_price"].(float64)
+			qty, _ := pos["quantity"].(float64)
+			lev, _ := pos["leverage"].(int)
+			it.CurrentPosition = &tradedSymbolCurrentPosition{
+				EntryPrice: ep,
+				MarkPrice:  mp,
+				Quantity:   qty,
+				Leverage:   lev,
+			}
+		} else {
+			// 如果开仓但没有在 positions 中（例如重启），依据 openPositions 判断 holding
+			if _, ok := openPositions[it.Symbol+"_long"]; ok {
+				it.Status = tradedSymbolHoldingLong
+				holdingCount++
+			} else if _, ok := openPositions[it.Symbol+"_short"]; ok {
+				it.Status = tradedSymbolHoldingShort
+				holdingCount++
+			} else {
+				it.Status = tradedSymbolClosed
+			}
+		}
+
+		it.TotalPnL = it.RealizedPnL + it.UnrealizedPnL
+		if it.TotalTrades > 0 {
+			it.WinRate = (float64(it.WinCount) / float64(it.TotalTrades)) * 100
+			it.AvgPnL = it.RealizedPnL / float64(it.TotalTrades)
+		}
+
+		totalRealized += it.RealizedPnL
+		totalUnrealized += it.UnrealizedPnL
+
+		resp.Symbols = append(resp.Symbols, *it)
+	}
+
+	// 排序：持仓优先，再按 total_pnl 降序
+	sort.Slice(resp.Symbols, func(i, j int) bool {
+		aHolding := resp.Symbols[i].Status != tradedSymbolClosed
+		bHolding := resp.Symbols[j].Status != tradedSymbolClosed
+		if aHolding != bHolding {
+			return aHolding
+		}
+		return resp.Symbols[i].TotalPnL > resp.Symbols[j].TotalPnL
+	})
+
+	resp.Summary = tradedSymbolsSummary{
+		TotalSymbols:       len(resp.Symbols),
+		HoldingCount:       holdingCount,
+		ClosedCount:        len(resp.Symbols) - holdingCount,
+		TotalRealizedPnL:   totalRealized,
+		TotalUnrealizedPnL: totalUnrealized,
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 // handleLogTraderList 获取 Trader 列表 (即 decision_logs 下的子目录)

@@ -115,8 +115,25 @@ export const api = {
   },
 
   // 获取“交易币种”汇总（前端基于 /performance + /positions 做 best-effort 聚合）
-  // 注意：后端目前没有单独的 traded-symbols 端点，因此这里做轻量聚合以保证页面可用。
+  // 优先使用后端 /api/traded-symbols；若后端版本较旧（404），再降级为 best-effort 聚合。
   async getTradedSymbols(traderId: string): Promise<TradedSymbolsResponse> {
+    // 1) Preferred: backend endpoint
+    try {
+      const url = `${API_BASE}/traded-symbols?trader_id=${traderId}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        return res.json();
+      }
+      // If backend doesn't have this endpoint yet, fall back.
+      if (res.status !== 404) {
+        const text = await res.text();
+        throw new Error(text || `获取交易币种失败 (${res.status})`);
+      }
+    } catch (e: any) {
+      // Network / parsing errors: fall back to best-effort aggregation below.
+      console.warn('getTradedSymbols: fallback to best-effort aggregation:', e?.message || e);
+    }
+
     // 复用现有接口
     const [performance, positions] = await Promise.all([
       api.getPerformance(traderId),

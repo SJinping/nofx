@@ -5,6 +5,7 @@ import { EquityChart } from './components/EquityChart';
 import { CompetitionPage } from './components/CompetitionPage';
 import { LogViewer } from './pages/LogViewer';
 import AILearning from './components/AILearning';
+import { TradedSymbolsList } from './components/TradedSymbolsList';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { t, type Language } from './i18n/translations';
 import type {
@@ -437,6 +438,11 @@ function TraderDetailsPage({
           {/* Equity Chart */}
           <div className="animate-slide-in" style={{ animationDelay: '0.1s' }}>
             <EquityChart traderId={selectedTrader.trader_id} />
+          </div>
+
+          {/* Traded Symbols PnL Details */}
+          <div className="animate-slide-in" style={{ animationDelay: '0.12s' }}>
+            <TradedSymbolsList traderId={selectedTrader.trader_id} />
           </div>
 
           {/* Current Positions */}

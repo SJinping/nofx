@@ -520,7 +520,7 @@ func loadConfig() AppConfig {
 		Port:             strings.TrimSpace(getEnvString("COIN_POOL_PORT", "8081")),
 		UpdateIntervalOI: getEnvDuration("UPDATE_INTERVAL_OI", 5*time.Minute),
 		UpdateIntervalCP: getEnvDuration("UPDATE_INTERVAL_COINS", 15*time.Minute),
-		OITopN:           getEnvInt("OI_TOP_N", 10),
+		OITopN:           getEnvInt("OI_TOP_N", 20),
 		CoinTopN:         getEnvInt("COIN_TOP_N", 30),
 		OITopKByVolume:   getEnvInt("OI_TOP_K", 120),
 		MinQuoteVolume:   getEnvFloat("MIN_QUOTE_VOLUME", 5_000_000), // 24h成交额过滤（USDT）
