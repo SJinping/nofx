@@ -23,6 +23,21 @@ type FuturesTrader struct {
 	client *futures.Client
 }
 
+func isReduceOnlyNotRequiredErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// go-binance 的错误通常长这样：
+	// <APIError> code=-1106, msg=Parameter 'reduceonly' sent when not required.
+	msg := err.Error()
+	if strings.Contains(msg, "code=-1106") {
+		return true
+	}
+	// 兜底：避免不同大小写/格式差异
+	msgLower := strings.ToLower(msg)
+	return strings.Contains(msgLower, "reduceonly") && strings.Contains(msgLower, "not required")
+}
+
 // cancelOpenAlgoOrdersPrecise 精准取消指定 symbol 下、指定 positionSide + 指定 orderTypes 的未成交 algo 条件单。
 // 这样不会误伤同 symbol 的另一边仓位（Hedge Mode）或其它类型条件单。
 func (t *FuturesTrader) cancelOpenAlgoOrdersPrecise(symbol string, posSide futures.PositionSideType, orderTypes map[futures.AlgoOrderType]bool) {
@@ -605,18 +620,30 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		futures.AlgoOrderTypeTrailingStopMarket: true,
 	})
 
-	_, err = t.client.NewCreateAlgoOrderService().
-		AlgoType(futures.OrderAlgoTypeConditional).
-		Symbol(symbol).
-		Side(side).
-		Type(futures.AlgoOrderTypeStopMarket).
-		PositionSide(posSide).
-		TriggerPrice(fmt.Sprintf("%.8f", stopPrice)).
-		Quantity(quantityStr).
-		WorkingType(futures.WorkingTypeMarkPrice).
-		ReduceOnly(true).
-		PriceProtect(true).
-		Do(context.Background())
+	createSL := func(withReduceOnly bool) error {
+		svc := t.client.NewCreateAlgoOrderService().
+			AlgoType(futures.OrderAlgoTypeConditional).
+			Symbol(symbol).
+			Side(side).
+			Type(futures.AlgoOrderTypeStopMarket).
+			PositionSide(posSide).
+			TriggerPrice(fmt.Sprintf("%.8f", stopPrice)).
+			Quantity(quantityStr).
+			WorkingType(futures.WorkingTypeMarkPrice).
+			PriceProtect(true)
+		if withReduceOnly {
+			svc = svc.ReduceOnly(true)
+		}
+		_, e := svc.Do(context.Background())
+		return e
+	}
+
+	// 先尝试带 reduceOnly（更安全），若某些账户/模式不接受则自动重试不带 reduceOnly
+	err = createSL(true)
+	if isReduceOnlyNotRequiredErr(err) {
+		log.Printf("  ⚠️ reduceOnly not required (binance -1106). retry without reduceOnly for %s %s", symbol, positionSide)
+		err = createSL(false)
+	}
 
 	if err != nil {
 		return fmt.Errorf("设置止损失败: %w", err)
@@ -658,18 +685,29 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		futures.AlgoOrderTypeTakeProfitMarket: true,
 	})
 
-	_, err = t.client.NewCreateAlgoOrderService().
-		AlgoType(futures.OrderAlgoTypeConditional).
-		Symbol(symbol).
-		Side(side).
-		Type(futures.AlgoOrderTypeTakeProfitMarket).
-		PositionSide(posSide).
-		TriggerPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
-		Quantity(quantityStr).
-		WorkingType(futures.WorkingTypeMarkPrice).
-		ReduceOnly(true).
-		PriceProtect(true).
-		Do(context.Background())
+	createTP := func(withReduceOnly bool) error {
+		svc := t.client.NewCreateAlgoOrderService().
+			AlgoType(futures.OrderAlgoTypeConditional).
+			Symbol(symbol).
+			Side(side).
+			Type(futures.AlgoOrderTypeTakeProfitMarket).
+			PositionSide(posSide).
+			TriggerPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
+			Quantity(quantityStr).
+			WorkingType(futures.WorkingTypeMarkPrice).
+			PriceProtect(true)
+		if withReduceOnly {
+			svc = svc.ReduceOnly(true)
+		}
+		_, e := svc.Do(context.Background())
+		return e
+	}
+
+	err = createTP(true)
+	if isReduceOnlyNotRequiredErr(err) {
+		log.Printf("  ⚠️ reduceOnly not required (binance -1106). retry without reduceOnly for %s %s", symbol, positionSide)
+		err = createTP(false)
+	}
 
 	if err != nil {
 		return fmt.Errorf("设置止盈失败: %w", err)
