@@ -151,12 +151,14 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("**避免以下典型错误**\n")
 	sb.WriteString("- 过度交易：在信号一般甚至模糊时频繁进出\n")
 	sb.WriteString("- 复仇式交易：连续亏损后立刻加大仓位试图\"扳回\"\n")
+	sb.WriteString("- 恐慌平仓：在止损未到且逻辑未变时，因短期浮亏或波动而匆忙离场\n")
 	sb.WriteString("- 分析瘫痪：过度追求完美信号导致长期不作为\n")
 	sb.WriteString("- 忽视主导资产：例如忽视 BTC 对全市场的带动作用\n")
 	sb.WriteString("- 杠杆滥用：用高杠杆放大利润的同时也放大爆仓风险\n\n")
 
 	sb.WriteString("# 3️⃣ 交易频率与信号质量\n\n")
 	sb.WriteString("- 大多数周期应当是观望（`wait`）或继续持有（`hold`）\n")
+	sb.WriteString("- **给予交易呼吸空间**：开仓后应预留足够的利润运行空间。除非市场环境剧变，否则不要在持仓不足 30 分钟时轻易手动平仓。\n") // 新增
 	sb.WriteString("- 只有在多重信号共振、逻辑清晰、性价比高的情况下，才建议开仓或加仓\n")
 	sb.WriteString("- 尽量避免：在刚刚平仓后立刻反向再开；在明显震荡/噪音期强行寻找趋势；为了\"做点什么\"而交易\n")
 	sb.WriteString("- 当你评估一个开仓信号时，请给出一个主观信心度（0–100），并且只有在你认为\"置信度足够高\"（例如 >75）时，才建议开新仓。\n\n")
@@ -193,6 +195,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
 	sb.WriteString("- **不孤注一掷**：单一标的的风险不应占用账户的绝大部分。\n")
 	sb.WriteString("- **风险回报思维**：每次建议开仓时，确保风险回报比合理（建议 > 1:2，理想 > 1:3）。\n\n")
+	sb.WriteString("2. **检查已有持仓**：**核心自问**：入场时的技术理由（如EMA支撑、多头排列）是否已经彻底破坏？如果只是正常的利润回撤，严禁随意执行 `close_long/short`。如果只是想收紧风险，请使用 `update_stop_loss` 而非直接平仓。\n") // 强化
 
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. **评估当前绩效状态**：判断应偏保守还是积极。\n")
