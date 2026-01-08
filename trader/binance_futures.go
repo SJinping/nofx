@@ -23,6 +23,44 @@ type FuturesTrader struct {
 	client *futures.Client
 }
 
+// cancelOpenAlgoOrdersPrecise 精准取消指定 symbol 下、指定 positionSide + 指定 orderTypes 的未成交 algo 条件单。
+// 这样不会误伤同 symbol 的另一边仓位（Hedge Mode）或其它类型条件单。
+func (t *FuturesTrader) cancelOpenAlgoOrdersPrecise(symbol string, posSide futures.PositionSideType, orderTypes map[futures.AlgoOrderType]bool) {
+	if symbol == "" || len(orderTypes) == 0 {
+		return
+	}
+
+	orders, err := t.client.NewListOpenAlgoOrdersService().
+		AlgoType(futures.OrderAlgoTypeConditional).
+		Symbol(symbol).
+		Do(context.Background())
+	if err != nil {
+		// best-effort：取消失败不阻断主流程（否则会导致无法更新 SL/TP）
+		log.Printf("⚠️ 获取 open algo orders 失败（跳过精准取消）: %v", err)
+		return
+	}
+
+	for _, o := range orders {
+		// 只处理该方向 + 目标类型
+		if o.PositionSide != posSide {
+			continue
+		}
+		if !orderTypes[o.OrderType] {
+			continue
+		}
+
+		// 优先用 algoId 取消
+		if o.AlgoId == 0 {
+			continue
+		}
+		if _, err := t.client.NewCancelAlgoOrderService().AlgoID(o.AlgoId).Do(context.Background()); err != nil {
+			// best-effort：单个取消失败继续处理其它
+			log.Printf("⚠️ 取消 algo 条件单失败: symbol=%s posSide=%s orderType=%s algoId=%d err=%v",
+				symbol, string(posSide), string(o.OrderType), o.AlgoId, err)
+		}
+	}
+}
+
 // V2RayConfig V2Ray配置结构
 type V2RayConfig struct {
 	Inbounds []struct {
@@ -557,17 +595,27 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		return err
 	}
 
-	_, err = t.client.NewCreateOrderService().
+	// Binance 条件单（STOP_MARKET/TAKE_PROFIT_MARKET/追踪止损等）已迁移至 Algo Order 端点：
+	// 旧端点 /fapi/v1/order 会返回 -4120: "Please use the Algo Order API endpoints instead."
+	//
+	// 为避免重复挂单：精准取消同 symbol + 同方向 的止损类条件单（不误伤 TP/另一边仓位）。
+	t.cancelOpenAlgoOrdersPrecise(symbol, posSide, map[futures.AlgoOrderType]bool{
+		futures.AlgoOrderTypeStop:               true,
+		futures.AlgoOrderTypeStopMarket:         true,
+		futures.AlgoOrderTypeTrailingStopMarket: true,
+	})
+
+	_, err = t.client.NewCreateAlgoOrderService().
+		AlgoType(futures.OrderAlgoTypeConditional).
 		Symbol(symbol).
 		Side(side).
+		Type(futures.AlgoOrderTypeStopMarket).
 		PositionSide(posSide).
-		Type(futures.OrderTypeStopMarket).
-		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
+		TriggerPrice(fmt.Sprintf("%.8f", stopPrice)).
 		Quantity(quantityStr).
-		// 注意：
-		// - 在 Hedge Mode（双向持仓）下，Binance 可能返回 -1106: "reduceonly sent when not required"
-		// - 这里依赖 positionSide + side + quantity 来保证是减仓单，不强制传 reduceOnly
 		WorkingType(futures.WorkingTypeMarkPrice).
+		ReduceOnly(true).
+		PriceProtect(true).
 		Do(context.Background())
 
 	if err != nil {
@@ -604,15 +652,23 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		return err
 	}
 
-	_, err = t.client.NewCreateOrderService().
+	// 为避免重复挂单：精准取消同 symbol + 同方向 的止盈类条件单（不误伤 SL/另一边仓位）。
+	t.cancelOpenAlgoOrdersPrecise(symbol, posSide, map[futures.AlgoOrderType]bool{
+		futures.AlgoOrderTypeTakeProfit:       true,
+		futures.AlgoOrderTypeTakeProfitMarket: true,
+	})
+
+	_, err = t.client.NewCreateAlgoOrderService().
+		AlgoType(futures.OrderAlgoTypeConditional).
 		Symbol(symbol).
 		Side(side).
+		Type(futures.AlgoOrderTypeTakeProfitMarket).
 		PositionSide(posSide).
-		Type(futures.OrderTypeTakeProfitMarket).
-		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
+		TriggerPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
 		Quantity(quantityStr).
-		// 注意：同 SetStopLoss，避免在 Hedge Mode 下触发 -1106
 		WorkingType(futures.WorkingTypeMarkPrice).
+		ReduceOnly(true).
+		PriceProtect(true).
 		Do(context.Background())
 
 	if err != nil {
