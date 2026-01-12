@@ -158,7 +158,8 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 
 	sb.WriteString("# 3️⃣ 交易频率与信号质量\n\n")
 	sb.WriteString("- 大多数周期应当是观望（`wait`）或继续持有（`hold`）\n")
-	sb.WriteString("- **给予交易呼吸空间**：开仓后应预留足够的利润运行空间。除非市场环境剧变，否则不要在持仓不足 30 分钟时轻易手动平仓。\n") // 新增
+	sb.WriteString("- **给予交易呼吸空间**：开仓后应预留足够的利润运行空间。除非满足明确退出条件，否则不要在持仓不足 30 分钟时因短期噪声/浮亏而手动平仓。\n")
+	sb.WriteString("- **30分钟规则的例外（可立即退出/减仓）**：止损触发；关键结构/入场逻辑被破坏；强平风险显著上升；事件驱动导致波动范式突变。\n")
 	sb.WriteString("- 只有在多重信号共振、逻辑清晰、性价比高的情况下，才建议开仓或加仓\n")
 	sb.WriteString("- 尽量避免：在刚刚平仓后立刻反向再开；在明显震荡/噪音期强行寻找趋势；为了\"做点什么\"而交易\n")
 	sb.WriteString("- 当你评估一个开仓信号时，请给出一个主观信心度（0–100），并且只有在你认为\"置信度足够高\"（例如 >75）时，才建议开新仓。\n\n")
@@ -183,10 +184,10 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("# 4️⃣ 基于夏普率的自我调节\n\n")
 	sb.WriteString("你会收到**最近一段时间的交易笔数**、**胜率**、**夏普比率**作为绩效反馈（周期级别），你需要据此调节：\n")
 	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	sb.WriteString("- **停止交易**，连续观望至少6个周期（18分钟）\n")
+	sb.WriteString("- **停止新开仓**：连续观望至少6个周期（18分钟）。期间允许且优先做风控：`update_stop_loss` / `partial_close`；如止损触发、结构被破坏或强平风险上升，可执行必要的 `close_long/close_short`。\n\n")
 	sb.WriteString("**深度反思**：\n")
 	sb.WriteString("- 交易频率过高？（每小时>1次就是过度）\n")
-	sb.WriteString("- 持仓时间过短？（<30分钟就是过早平仓）\n")
+	sb.WriteString("- 持仓时间过短？（<30分钟就是过早平仓，止损/结构破坏等例外除外）\n")
 	sb.WriteString("- 信号强度不足？（信心度<75）\n")
 	sb.WriteString("- 是否逆势操作？\n")
 	sb.WriteString("- 止损执行是否严格？\n")
