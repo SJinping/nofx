@@ -8,6 +8,8 @@ import type {
   CompetitionData,
   TradedSymbolsResponse,
   TradedSymbolStatus,
+  ExchangeOrdersResponse,
+  ExchangeTradedSymbolsResponse,
 } from '../types';
 
 const API_BASE = '/api';
@@ -231,6 +233,42 @@ export const api = {
         total_unrealized_pnl: totalUnrealized,
       },
     };
+  },
+
+  // ===== Exchange (Orders-based) =====
+
+  // 按 symbol 聚合的订单统计（需要前端传 symbols 列表）
+  async getExchangeTradedSymbols(
+    traderId: string,
+    symbols: string[],
+    startTime?: string,
+    endTime?: string
+  ): Promise<ExchangeTradedSymbolsResponse> {
+    const params = new URLSearchParams();
+    params.set('trader_id', traderId);
+    params.set('symbols', symbols.join(','));
+    if (startTime) params.set('start_time', startTime);
+    if (endTime) params.set('end_time', endTime);
+    const res = await fetch(`${API_BASE}/exchange/traded-symbols?${params.toString()}`);
+    if (!res.ok) throw new Error('获取交易所订单汇总失败');
+    return res.json();
+  },
+
+  // 单币种订单明细（用于展开查看）
+  async getExchangeOrders(
+    traderId: string,
+    symbol: string,
+    startTime?: string,
+    endTime?: string
+  ): Promise<ExchangeOrdersResponse> {
+    const params = new URLSearchParams();
+    params.set('trader_id', traderId);
+    params.set('symbol', symbol);
+    if (startTime) params.set('start_time', startTime);
+    if (endTime) params.set('end_time', endTime);
+    const res = await fetch(`${API_BASE}/exchange/orders?${params.toString()}`);
+    if (!res.ok) throw new Error('获取交易所订单明细失败');
+    return res.json();
   },
 
   // 平掉所有模型的所有持仓

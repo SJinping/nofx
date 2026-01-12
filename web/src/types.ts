@@ -139,6 +139,69 @@ export interface TradedSymbolsResponse {
   summary: TradedSymbolsSummary;
 }
 
+// ===== Exchange (Orders-based) =====
+
+export interface ExchangeOrderRecord {
+  symbol: string;
+  order_id: number;
+  client_order_id?: string;
+  side: string; // BUY/SELL
+  position_side: string; // LONG/SHORT/BOTH
+  type: string; // MARKET/LIMIT/...
+  status: string; // NEW/FILLED/...
+  reduce_only: boolean;
+
+  price: number;
+  stop_price: number;
+  avg_price: number;
+  orig_qty: number;
+  executed_qty: number;
+  cum_quote: number;
+  time_in_force: string;
+  working_type: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExchangeOrderStats {
+  symbol: string;
+  total_orders: number;
+  filled_orders: number;
+  total_executed_qty: number;
+  total_notional: number;
+  estimated_fee: number;
+  realized_pnl: number;
+  trades: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number;
+  avg_pnl: number;
+  avg_hold_seconds: number;
+  first_trade_time: string;
+  last_trade_time: string;
+  open_qty_remaining: number;
+}
+
+export interface ExchangeOrdersResponse {
+  symbol: string;
+  start_time: string;
+  end_time: string;
+  orders: ExchangeOrderRecord[];
+  stats: ExchangeOrderStats;
+}
+
+export interface ExchangeTradedSymbolsSummary {
+  total_symbols: number;
+  total_realized_pnl: number;
+  total_estimated_fee: number;
+  total_trades: number;
+}
+
+export interface ExchangeTradedSymbolsResponse {
+  symbols: ExchangeOrderStats[];
+  summary: ExchangeTradedSymbolsSummary;
+}
+
 // 新增：竞赛相关类型
 export interface TraderInfo {
   trader_id: string;

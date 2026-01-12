@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"nofx/manager"
+	traderpkg "nofx/trader"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,6 +98,15 @@ func (s *Server) setupRoutes() {
 		// 交易币种盈亏汇总（按 symbol 聚合）
 		api.GET("/traded-symbols", s.handleTradedSymbols)
 
+		// 交易所数据（订单/聚合统计）
+		ex := api.Group("/exchange")
+		{
+			// 按 symbol 聚合的订单统计（用于详情页“交易币种”）
+			ex.GET("/traded-symbols", s.handleExchangeTradedSymbols)
+			// 单币种订单明细（用于展开查看）
+			ex.GET("/orders", s.handleExchangeOrders)
+		}
+
 		// 错误统计
 		api.GET("/error-stats", s.handleErrorStats)
 		api.GET("/error-stats/recent", s.handleRecentErrors)
@@ -170,6 +181,250 @@ type tradedSymbolsSummary struct {
 type tradedSymbolsResponse struct {
 	Symbols []tradedSymbolSummaryItem `json:"symbols"`
 	Summary tradedSymbolsSummary      `json:"summary"`
+}
+
+// ===== Exchange (Orders-based) =====
+
+type exchangeOrderStats struct {
+	Symbol string `json:"symbol"`
+
+	// Orders counters
+	TotalOrders  int `json:"total_orders"`
+	FilledOrders int `json:"filled_orders"`
+
+	// Qty / Notional
+	TotalExecutedQty float64 `json:"total_executed_qty"`
+	TotalNotional    float64 `json:"total_notional"`
+
+	// Estimated fees (based on assumed taker fee; order endpoint doesn't return commission)
+	EstimatedFee float64 `json:"estimated_fee"`
+
+	// Pairing-based realized PnL (order-based estimate)
+	RealizedPnL float64 `json:"realized_pnl"`
+	Trades      int     `json:"trades"`
+	WinCount    int     `json:"win_count"`
+	LossCount   int     `json:"loss_count"`
+	WinRate     float64 `json:"win_rate"`
+	AvgPnL      float64 `json:"avg_pnl"`
+
+	// Holding time estimate (seconds)
+	AvgHoldSeconds float64 `json:"avg_hold_seconds"`
+
+	// Time range covered by executed orders
+	FirstTradeTime string `json:"first_trade_time"`
+	LastTradeTime  string `json:"last_trade_time"`
+
+	// Remaining open qty after pairing (best-effort)
+	OpenQtyRemaining float64 `json:"open_qty_remaining"`
+}
+
+type exchangeOrdersResponse struct {
+	Symbol    string                  `json:"symbol"`
+	StartTime string                  `json:"start_time"`
+	EndTime   string                  `json:"end_time"`
+	Orders    []traderpkg.OrderRecord `json:"orders"`
+	Stats     exchangeOrderStats      `json:"stats"`
+}
+
+type exchangeTradedSymbolsSummary struct {
+	TotalSymbols      int     `json:"total_symbols"`
+	TotalRealizedPnL  float64 `json:"total_realized_pnl"`
+	TotalEstimatedFee float64 `json:"total_estimated_fee"`
+	TotalTrades       int     `json:"total_trades"`
+}
+
+type exchangeTradedSymbolsResponse struct {
+	Symbols []exchangeOrderStats         `json:"symbols"`
+	Summary exchangeTradedSymbolsSummary `json:"summary"`
+}
+
+func parseTimeParamToMs(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	// unix milli?
+	allDigits := true
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		v, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return v, nil
+	}
+	// RFC3339
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return 0, err
+	}
+	return t.UnixMilli(), nil
+}
+
+// calcOrderStatsFromOrders 用“订单”数据做 best-effort 复盘统计（不含真实 commission / funding）
+func calcOrderStatsFromOrders(symbol string, orders []traderpkg.OrderRecord, assumedTakerFeeRate float64) exchangeOrderStats {
+	stats := exchangeOrderStats{Symbol: symbol}
+	if assumedTakerFeeRate < 0 {
+		assumedTakerFeeRate = 0
+	}
+
+	// 过滤：只统计有成交的订单
+	execOrders := make([]traderpkg.OrderRecord, 0, len(orders))
+	for _, o := range orders {
+		stats.TotalOrders++
+		if o.ExecutedQty > 0 {
+			stats.FilledOrders++
+			execOrders = append(execOrders, o)
+			price := o.AvgPrice
+			if price <= 0 {
+				price = o.Price
+			}
+			notional := price * o.ExecutedQty
+			stats.TotalExecutedQty += o.ExecutedQty
+			stats.TotalNotional += notional
+			stats.EstimatedFee += notional * assumedTakerFeeRate
+		}
+	}
+	if len(execOrders) == 0 {
+		return stats
+	}
+
+	// sort by created time
+	sort.Slice(execOrders, func(i, j int) bool {
+		return execOrders[i].CreatedAt.Before(execOrders[j].CreatedAt)
+	})
+	first := execOrders[0].CreatedAt
+	last := execOrders[0].UpdatedAt
+	for _, o := range execOrders {
+		if o.CreatedAt.Before(first) {
+			first = o.CreatedAt
+		}
+		if o.UpdatedAt.After(last) {
+			last = o.UpdatedAt
+		}
+	}
+	stats.FirstTradeTime = first.Format(time.RFC3339)
+	stats.LastTradeTime = last.Format(time.RFC3339)
+
+	// FIFO lots per (positionSide)
+	type lot struct {
+		price float64
+		qty   float64
+		t     time.Time
+	}
+	openLots := map[string][]lot{
+		"LONG":  {},
+		"SHORT": {},
+	}
+	// helpers for direction
+	isOpen := func(posSide, side string) bool {
+		// LONG: BUY opens; SHORT: SELL opens
+		if posSide == "LONG" && side == "BUY" {
+			return true
+		}
+		if posSide == "SHORT" && side == "SELL" {
+			return true
+		}
+		return false
+	}
+	isClose := func(posSide, side string) bool {
+		// LONG: SELL closes; SHORT: BUY closes
+		if posSide == "LONG" && side == "SELL" {
+			return true
+		}
+		if posSide == "SHORT" && side == "BUY" {
+			return true
+		}
+		return false
+	}
+	pnlPerUnit := func(posSide string, openPrice, closePrice float64) float64 {
+		if posSide == "LONG" {
+			return closePrice - openPrice
+		}
+		// SHORT
+		return openPrice - closePrice
+	}
+
+	var holdSum time.Duration
+	var holdN int
+
+	for _, o := range execOrders {
+		posSide := strings.ToUpper(o.PositionSide)
+		side := strings.ToUpper(o.Side)
+		if posSide != "LONG" && posSide != "SHORT" {
+			continue
+		}
+		price := o.AvgPrice
+		if price <= 0 {
+			price = o.Price
+		}
+		if price <= 0 || o.ExecutedQty <= 0 {
+			continue
+		}
+
+		if isOpen(posSide, side) {
+			openLots[posSide] = append(openLots[posSide], lot{price: price, qty: o.ExecutedQty, t: o.CreatedAt})
+			continue
+		}
+		if !isClose(posSide, side) {
+			continue
+		}
+
+		remaining := o.ExecutedQty
+		closePnL := 0.0
+		matchedAny := false
+		for remaining > 0 && len(openLots[posSide]) > 0 {
+			lt := openLots[posSide][0]
+			use := lt.qty
+			if use > remaining {
+				use = remaining
+			}
+			closePnL += pnlPerUnit(posSide, lt.price, price) * use
+			matchedAny = true
+			holdSum += o.CreatedAt.Sub(lt.t)
+			holdN++
+
+			lt.qty -= use
+			remaining -= use
+			if lt.qty <= 0 {
+				openLots[posSide] = openLots[posSide][1:]
+			} else {
+				openLots[posSide][0] = lt
+			}
+		}
+
+		if matchedAny {
+			stats.Trades++
+			stats.RealizedPnL += closePnL
+			if closePnL > 0 {
+				stats.WinCount++
+			} else if closePnL < 0 {
+				stats.LossCount++
+			}
+		}
+	}
+
+	// remaining open qty
+	for _, ps := range []string{"LONG", "SHORT"} {
+		for _, lt := range openLots[ps] {
+			stats.OpenQtyRemaining += lt.qty
+		}
+	}
+
+	if stats.Trades > 0 {
+		stats.WinRate = (float64(stats.WinCount) / float64(stats.Trades)) * 100
+		stats.AvgPnL = stats.RealizedPnL / float64(stats.Trades)
+	}
+	if holdN > 0 {
+		stats.AvgHoldSeconds = holdSum.Seconds() / float64(holdN)
+	}
+
+	return stats
 }
 
 // handleTradedSymbols 返回按币种汇总的盈亏详情（已实现 + 当前未实现）。
@@ -466,6 +721,182 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		TotalUnrealizedPnL: totalUnrealized,
 	}
 
+	c.JSON(http.StatusOK, resp)
+}
+
+// handleExchangeTradedSymbols 基于交易所“订单历史”做按 symbol 聚合统计（best-effort）
+// 注意：订单接口不返回真实手续费/资金费；此处 EstimatedFee 使用 assumed taker fee 估算。
+// Query:
+// - trader_id: required
+// - symbols: required, comma-separated, e.g. BTCUSDT,ETHUSDT
+// - start_time/end_time: optional (RFC3339 or unix milli). default: trader start_time -> now
+// - limit: optional (default 1000; Binance futures max 1000 per request)
+func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	at, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	symbolsParam := strings.TrimSpace(c.Query("symbols"))
+	if symbolsParam == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing symbols (comma-separated)"})
+		return
+	}
+	rawSymbols := strings.Split(symbolsParam, ",")
+	symbolSet := make(map[string]struct{}, len(rawSymbols))
+	symbols := make([]string, 0, len(rawSymbols))
+	for _, s0 := range rawSymbols {
+		sym := strings.ToUpper(strings.TrimSpace(s0))
+		if sym == "" {
+			continue
+		}
+		if _, ok := symbolSet[sym]; ok {
+			continue
+		}
+		symbolSet[sym] = struct{}{}
+		symbols = append(symbols, sym)
+	}
+	if len(symbols) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbols is empty after parsing"})
+		return
+	}
+
+	limit := 1000
+	if lq := strings.TrimSpace(c.Query("limit")); lq != "" {
+		if v, e := strconv.Atoi(lq); e == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	startMs, err := parseTimeParamToMs(c.Query("start_time"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid start_time: %v", err)})
+		return
+	}
+	endMs, err := parseTimeParamToMs(c.Query("end_time"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid end_time: %v", err)})
+		return
+	}
+	if endMs == 0 {
+		endMs = time.Now().UnixMilli()
+	}
+	if startMs == 0 {
+		// default: trader start_time
+		if st, ok := at.GetStatus()["start_time"].(string); ok && st != "" {
+			if ms, e := parseTimeParamToMs(st); e == nil && ms > 0 {
+				startMs = ms
+			}
+		}
+	}
+
+	feeRate := at.GetAssumedTakerFeeRate()
+
+	resp := exchangeTradedSymbolsResponse{
+		Symbols: make([]exchangeOrderStats, 0, len(symbols)),
+	}
+
+	for _, sym := range symbols {
+		orders, e := at.GetOrders(sym, startMs, endMs, limit)
+		if e != nil {
+			// 单个 symbol 失败不阻断整体（best-effort）
+			log.Printf("⚠️ exchange traded-symbols: ListOrders failed: trader=%s symbol=%s err=%v", traderID, sym, e)
+			continue
+		}
+		st := calcOrderStatsFromOrders(sym, orders, feeRate)
+		resp.Symbols = append(resp.Symbols, st)
+		resp.Summary.TotalRealizedPnL += st.RealizedPnL
+		resp.Summary.TotalEstimatedFee += st.EstimatedFee
+		resp.Summary.TotalTrades += st.Trades
+	}
+
+	resp.Summary.TotalSymbols = len(resp.Symbols)
+
+	// 排序：按 realized pnl 降序
+	sort.Slice(resp.Symbols, func(i, j int) bool {
+		return resp.Symbols[i].RealizedPnL > resp.Symbols[j].RealizedPnL
+	})
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// handleExchangeOrders 返回单币种订单明细 + 统计
+// Query:
+// - trader_id, symbol required
+// - start_time/end_time optional (RFC3339 or unix milli). default: trader start_time -> now
+// - limit optional (default 1000)
+func (s *Server) handleExchangeOrders(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	at, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	symbol := strings.ToUpper(strings.TrimSpace(c.Query("symbol")))
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing symbol"})
+		return
+	}
+
+	limit := 1000
+	if lq := strings.TrimSpace(c.Query("limit")); lq != "" {
+		if v, e := strconv.Atoi(lq); e == nil && v > 0 {
+			limit = v
+		}
+	}
+
+	startMs, err := parseTimeParamToMs(c.Query("start_time"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid start_time: %v", err)})
+		return
+	}
+	endMs, err := parseTimeParamToMs(c.Query("end_time"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid end_time: %v", err)})
+		return
+	}
+	if endMs == 0 {
+		endMs = time.Now().UnixMilli()
+	}
+	if startMs == 0 {
+		if st, ok := at.GetStatus()["start_time"].(string); ok && st != "" {
+			if ms, e := parseTimeParamToMs(st); e == nil && ms > 0 {
+				startMs = ms
+			}
+		}
+	}
+
+	orders, err := at.GetOrders(symbol, startMs, endMs, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("ListOrders failed: %v", err)})
+		return
+	}
+
+	// 排序：按 created_at 倒序（最新在前）
+	sort.Slice(orders, func(i, j int) bool {
+		return orders[i].CreatedAt.After(orders[j].CreatedAt)
+	})
+
+	stats := calcOrderStatsFromOrders(symbol, orders, at.GetAssumedTakerFeeRate())
+
+	resp := exchangeOrdersResponse{
+		Symbol:    symbol,
+		StartTime: time.UnixMilli(startMs).Format(time.RFC3339),
+		EndTime:   time.UnixMilli(endMs).Format(time.RFC3339),
+		Orders:    orders,
+		Stats:     stats,
+	}
 	c.JSON(http.StatusOK, resp)
 }
 

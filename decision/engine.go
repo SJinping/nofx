@@ -7,8 +7,53 @@ import (
 	"nofx/mcp"
 	"nofx/pool"
 	"nofx/stats"
+	"sync"
 	"time"
 )
+
+// ===== OI采样缓存（用于构造“每3分钟一次”的OI变化序列）=====
+// 注意：
+// - Binance 官方 OI history 最小粒度通常为 5m/15m，而本项目扫描周期为 3 分钟
+// - 这里采用“每周期采样 Latest OI”形成序列，适合做 prompt 的“OI变化/是否撤退”辅助判断
+// - key 维度包含 traderID，避免多实例互相污染
+var oiSeriesMu sync.Mutex
+var oiSeriesByTrader = map[string]map[string][]float64{} // traderID -> symbol -> values
+
+func appendOISample(traderID, symbol string, latestOI float64, maxLen int) []float64 {
+	if maxLen <= 1 {
+		maxLen = 20
+	}
+	oiSeriesMu.Lock()
+	defer oiSeriesMu.Unlock()
+
+	if traderID == "" {
+		traderID = "default"
+	}
+	if _, ok := oiSeriesByTrader[traderID]; !ok {
+		oiSeriesByTrader[traderID] = make(map[string][]float64)
+	}
+	seq := oiSeriesByTrader[traderID][symbol]
+	seq = append(seq, latestOI)
+	if len(seq) > maxLen {
+		seq = seq[len(seq)-maxLen:]
+	}
+	oiSeriesByTrader[traderID][symbol] = seq
+	// 返回副本，避免外部误改
+	out := make([]float64, len(seq))
+	copy(out, seq)
+	return out
+}
+
+func calcDeltas(values []float64) []float64 {
+	if len(values) < 2 {
+		return nil
+	}
+	d := make([]float64, 0, len(values)-1)
+	for i := 1; i < len(values); i++ {
+		d = append(d, values[i]-values[i-1])
+	}
+	return d
+}
 
 // GetFullDecision 获取AI的完整交易决策（批量分析所有币种和持仓）
 func GetFullDecision(ctx *Context) (*FullDecision, error) {
@@ -157,7 +202,33 @@ func fetchMarketDataForContext(ctx *Context) error {
 		symbolSet[coin.Symbol] = true
 	}
 
-	// 并发获取市场数据
+	// ===== Top5重数据：只对Top5候选 + 所有持仓输出更长序列/3m OHLCV/1h结构/OI变化，避免prompt膨胀 =====
+	// 注意：仅在 StrategyB/StrategyV 启用（策略A保持轻量，避免无意扩大prompt）
+	heavyTopN := 0
+	if ctx.PromptStrategy != nil {
+		name := ctx.PromptStrategy.Name()
+		if name == "B" || name == "V" {
+			heavyTopN = 5
+		}
+	}
+
+	heavySymbols := make(map[string]bool)
+	if heavyTopN > 0 {
+		// 1) 所有持仓币种都加入重数据（数量通常很少，但对风控很重要）
+		for _, pos := range ctx.Positions {
+			heavySymbols[pos.Symbol] = true
+		}
+
+		// 2) 候选TopN（按候选列表顺序；候选列表本身由池子排序输出）
+		for i, coin := range ctx.CandidateCoins {
+			if i >= heavyTopN {
+				break
+			}
+			heavySymbols[coin.Symbol] = true
+		}
+	}
+
+	// 获取市场数据
 	// 持仓币种集合（用于判断是否跳过OI检查）
 	positionSymbols := make(map[string]bool)
 	for _, pos := range ctx.Positions {
@@ -165,7 +236,22 @@ func fetchMarketDataForContext(ctx *Context) error {
 	}
 
 	for symbol := range symbolSet {
-		data, err := market.Get(symbol)
+		var (
+			data *market.Data
+			err  error
+		)
+
+		// TopN候选 + 持仓：重数据（20根3m序列 + OHLCV + 1h结构）
+		if heavySymbols[symbol] {
+			data, err = market.GetWithOptions(symbol, market.FetchOptions{
+				IntradayOutputPoints:  20,
+				IncludeIntradayOHLCV:  true,
+				IncludeMidTermContext: true,
+			})
+		} else {
+			// 其他币：保持轻量（默认10根3m序列，避免prompt膨胀）
+			data, err = market.Get(symbol)
+		}
 		if err != nil {
 			// 单个币种失败不影响整体，记录错误
 			log.Printf("⚠️  获取 %s 市场数据失败: %v", symbol, err)
@@ -184,6 +270,15 @@ func fetchMarketDataForContext(ctx *Context) error {
 				log.Printf("⚠️  %s 持仓价值过低(%.2fM USD < 15M)，跳过此币种 [持仓量:%.0f × 价格:%.4f]",
 					symbol, oiValueInMillions, data.OpenInterest.Latest, data.CurrentPrice)
 				continue
+			}
+		}
+
+		// 注入OI采样序列（仅重数据币种）
+		if heavySymbols[symbol] && data != nil && data.OpenInterest != nil && data.OpenInterest.Latest > 0 {
+			seq := appendOISample(ctx.TraderID, symbol, data.OpenInterest.Latest, 20)
+			if data.IntradaySeries != nil {
+				data.IntradaySeries.OIValues = seq
+				data.IntradaySeries.OIDeltaValues = calcDeltas(seq)
 			}
 		}
 

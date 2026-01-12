@@ -58,6 +58,54 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 				return fmt.Errorf("update_stop_loss 必须提供 new_stop_loss 且大于 0")
 			}
 		}
+
+		// ✅ 额外硬约束：避免止损贴得太近导致3分钟噪声“瞬间触发”
+		// - 需要知道当前价与持仓方向（从 ctx.Positions 推断）
+		// - 只做“最小距离”校验，不限制你把止损放得更远（更宽松）的情况
+		if ctx != nil && ctx.MarketDataMap != nil {
+			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 {
+				currentPrice := md.CurrentPrice
+
+				// 推断方向
+				side := ""
+				for _, p := range ctx.Positions {
+					if p.Symbol == d.Symbol {
+						side = strings.ToLower(strings.TrimSpace(p.Side))
+						break
+					}
+				}
+
+				// 计算最小距离：优先用 3m ATR14（价格单位），fallback 到 normalized_volatility
+				minPct := 0.0025 // 0.25% 的底线缓冲
+				minDist := currentPrice * minPct
+				if md.IntradayATR14 > 0 {
+					// 给出 0.5 * ATR14 的空间（经验值，避免太贴）
+					atrDist := 0.5 * md.IntradayATR14
+					if atrDist > minDist {
+						minDist = atrDist
+					}
+				} else if md.VolatilityPct > 0 {
+					// volatilityPct = ATR14(4h)/price；取一部分作为最小距离
+					volDist := 0.5 * (currentPrice * md.VolatilityPct)
+					if volDist > minDist {
+						minDist = volDist
+					}
+				}
+
+				if side == "long" {
+					if d.NewStopLoss > currentPrice-minDist {
+						return fmt.Errorf("update_stop_loss 过近：多仓 new_stop_loss=%.4f 距离当前价=%.4f 仅%.4f，必须≥%.4f（防止3分钟噪声扫损）",
+							d.NewStopLoss, currentPrice, currentPrice-d.NewStopLoss, minDist)
+					}
+				} else if side == "short" {
+					if d.NewStopLoss < currentPrice+minDist {
+						return fmt.Errorf("update_stop_loss 过近：空仓 new_stop_loss=%.4f 距离当前价=%.4f 仅%.4f，必须≥%.4f（防止3分钟噪声扫损）",
+							d.NewStopLoss, currentPrice, d.NewStopLoss-currentPrice, minDist)
+					}
+				}
+			}
+		}
+
 		return nil // 校验通过
 	}
 

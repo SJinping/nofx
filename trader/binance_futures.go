@@ -576,6 +576,69 @@ func (t *FuturesTrader) GetMarketPrice(symbol string) (float64, error) {
 	return price, nil
 }
 
+// ListOrders 获取订单历史（Binance Futures: ListOrdersService /fapi/v1/allOrders）
+func (t *FuturesTrader) ListOrders(symbol string, startTimeMs, endTimeMs int64, limit int) ([]OrderRecord, error) {
+	symbol = strings.TrimSpace(symbol)
+	if symbol == "" {
+		return nil, fmt.Errorf("ListOrders: symbol 不能为空")
+	}
+
+	svc := t.client.NewListOrdersService().Symbol(symbol)
+	if startTimeMs > 0 {
+		svc = svc.StartTime(startTimeMs)
+	}
+	if endTimeMs > 0 {
+		svc = svc.EndTime(endTimeMs)
+	}
+	if limit > 0 {
+		svc = svc.Limit(limit)
+	}
+
+	orders, err := svc.Do(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	parseF := func(s string) float64 {
+		if s == "" {
+			return 0
+		}
+		v, e := strconv.ParseFloat(s, 64)
+		if e != nil {
+			return 0
+		}
+		return v
+	}
+
+	out := make([]OrderRecord, 0, len(orders))
+	for _, o := range orders {
+		if o == nil {
+			continue
+		}
+		out = append(out, OrderRecord{
+			Symbol:       o.Symbol,
+			OrderID:      o.OrderID,
+			ClientOrder:  o.ClientOrderID,
+			Side:         string(o.Side),
+			PositionSide: string(o.PositionSide),
+			Type:         string(o.Type),
+			Status:       string(o.Status),
+			ReduceOnly:   o.ReduceOnly,
+			Price:        parseF(o.Price),
+			StopPrice:    parseF(o.StopPrice),
+			AvgPrice:     parseF(o.AvgPrice),
+			OrigQty:      parseF(o.OrigQuantity),
+			ExecutedQty:  parseF(o.ExecutedQuantity),
+			CumQuote:     parseF(o.CumQuote),
+			TimeInForce:  string(o.TimeInForce),
+			WorkingType:  string(o.WorkingType),
+			CreatedAt:    time.UnixMilli(o.Time),
+			UpdatedAt:    time.UnixMilli(o.UpdateTime),
+		})
+	}
+	return out, nil
+}
+
 // CalculatePositionSize 计算仓位大小
 func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float64, leverage int) float64 {
 	riskAmount := balance * (riskPercent / 100.0)

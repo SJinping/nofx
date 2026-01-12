@@ -109,6 +109,8 @@ type AutoTrader struct {
 	accountInfoCacheTime time.Time
 	positionsCache       []map[string]interface{}
 	positionsCacheTime   time.Time
+	ordersCache          map[string][]OrderRecord
+	ordersCacheTime      map[string]time.Time
 	cacheTTL             time.Duration // 缓存过期时间（默认30秒）
 }
 
@@ -246,7 +248,11 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 			TP: make(map[string]*decision.AutoTPState),
 		},
 		// 初始化API缓存（30秒过期，减少币安API调用）
-		cacheTTL: 30 * time.Second,
+		accountInfoCache: make(map[string]interface{}),
+		positionsCache:   []map[string]interface{}{},
+		ordersCache:      make(map[string][]OrderRecord),
+		ordersCacheTime:  make(map[string]time.Time),
+		cacheTTL:         30 * time.Second,
 	}, nil
 }
 
@@ -1330,6 +1336,45 @@ func (at *AutoTrader) GetAIModel() string {
 // GetDecisionLogger 获取决策日志记录器
 func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
 	return at.decisionLogger
+}
+
+// GetAssumedTakerFeeRate 返回“估算手续费率”（用于订单级别复盘展示的估算，不影响真实下单）
+func (at *AutoTrader) GetAssumedTakerFeeRate() float64 {
+	return at.config.AssumedTakerFeeRate
+}
+
+// GetOrders 获取某币种订单历史（带缓存；用于 API 展示）
+func (at *AutoTrader) GetOrders(symbol string, startTimeMs, endTimeMs int64, limit int) ([]OrderRecord, error) {
+	// key 维度：symbol + time range + limit
+	key := fmt.Sprintf("%s|%d|%d|%d", strings.ToUpper(strings.TrimSpace(symbol)), startTimeMs, endTimeMs, limit)
+
+	at.cacheMutex.RLock()
+	if ts, ok := at.ordersCacheTime[key]; ok && time.Since(ts) < at.cacheTTL {
+		if cached, ok2 := at.ordersCache[key]; ok2 {
+			at.cacheMutex.RUnlock()
+			return cached, nil
+		}
+	}
+	at.cacheMutex.RUnlock()
+
+	orders, err := at.trader.ListOrders(symbol, startTimeMs, endTimeMs, limit)
+	if err != nil {
+		// best-effort：如果有旧缓存就返回旧缓存（避免前端频繁报错闪烁）
+		at.cacheMutex.RLock()
+		cached, ok := at.ordersCache[key]
+		at.cacheMutex.RUnlock()
+		if ok {
+			return cached, nil
+		}
+		return nil, err
+	}
+
+	at.cacheMutex.Lock()
+	at.ordersCache[key] = orders
+	at.ordersCacheTime[key] = time.Now()
+	at.cacheMutex.Unlock()
+
+	return orders, nil
 }
 
 // GetErrorStats 获取错误统计

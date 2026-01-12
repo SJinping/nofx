@@ -480,6 +480,11 @@ func (pt *PaperTrader) FormatQuantity(symbol string, quantity float64) (string, 
 	return pt.realTrader.FormatQuantity(symbol, quantity)
 }
 
+// ListOrders 纸上交易不维护交易所订单历史（可根据需要扩展为返回本地模拟订单）
+func (pt *PaperTrader) ListOrders(symbol string, startTimeMs, endTimeMs int64, limit int) ([]OrderRecord, error) {
+	return nil, fmt.Errorf("paper trader: ListOrders not supported")
+}
+
 // GetConfig 获取纸上交易配置
 func (pt *PaperTrader) GetConfig() *PaperTradingConfig {
 	pt.mutex.RLock()

@@ -38,7 +38,7 @@ var defaultConfig = Config{
 	BaseURL:   "https://api.deepseek.com/v1",
 	Model:     "deepseek-reasoner",
 	Timeout:   120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
-	MaxTokens: 4000,
+	MaxTokens: 5000,
 }
 
 // SetDeepSeekAPIKey 设置DeepSeek API密钥

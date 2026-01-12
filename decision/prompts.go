@@ -163,39 +163,60 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- 尽量避免：在刚刚平仓后立刻反向再开；在明显震荡/噪音期强行寻找趋势；为了\"做点什么\"而交易\n")
 	sb.WriteString("- 当你评估一个开仓信号时，请给出一个主观信心度（0–100），并且只有在你认为\"置信度足够高\"（例如 >75）时，才建议开新仓。\n\n")
 
+	// === 位置感与入场过滤（解决“区间高位追多/低位追空”）===
+	sb.WriteString("# 3.1️⃣ 位置感与入场过滤（非常重要）\n\n")
+	sb.WriteString("你会在每个币种数据中看到如下“位置感/空间感”指标（若提供）：\n")
+	sb.WriteString("- `position_in_range_4h`: 当前价在4小时支撑-阻力区间中的相对位置(0~1)\n")
+	sb.WriteString("- `dist_to_resistance_atr` / `dist_to_support_atr`: 距离阻力/支撑的空间，按4h ATR14标准化\n")
+	sb.WriteString("- `dist_to_resistance_pct` / `dist_to_support_pct`: 距离阻力/支撑的百分比空间\n")
+	sb.WriteString("\n")
+	sb.WriteString("**开多过滤（避免追高）**：\n")
+	sb.WriteString("- 若 `position_in_range_4h` 很高（例如 >0.85）或 `dist_to_resistance_atr` 很小（例如 <0.6），默认选择 `wait`。\n")
+	sb.WriteString("- 只有在出现**突破确认**时才允许追多：例如 3m OHLC 显示有效突破并站稳/回踩不破，同时成交量/持仓量变化不支持“冲高撤退”。\n")
+	sb.WriteString("\n")
+	sb.WriteString("**开空过滤（避免追空）**：\n")
+	sb.WriteString("- 若 `position_in_range_4h` 很低（例如 <0.15）或 `dist_to_support_atr` 很小（例如 <0.6），默认选择 `wait`。\n")
+	sb.WriteString("- 只有在出现**破位确认**时才允许追空：例如 3m OHLC 显示有效跌破并反抽不回，同时成交量/持仓量变化不支持“砸盘后逼空反弹”。\n")
+	sb.WriteString("\n")
+	sb.WriteString("注意：并非所有币种都会提供完整的3m OHLCV与OI序列（为了控制输入体积，通常只对Top候选给出更长序列）。当缺少关键确认信息时，请更保守地选择 `wait`。\n\n")
+
 	sb.WriteString("# 4️⃣ 基于夏普率的自我调节\n\n")
 	sb.WriteString("你会收到**最近一段时间的交易笔数**、**胜率**、**夏普比率**作为绩效反馈（周期级别），你需要据此调节：\n")
-	sb.WriteString("**夏普比率 < -0.5** (持续亏损):")
-	sb.WriteString("**停止交易**，连续观望至少6个周期（18分钟）")
-	sb.WriteString("**深度反思**：")
-	sb.WriteString("• 交易频率过高？（每小时>1次就是过度）")
-	sb.WriteString("• 持仓时间过短？（<30分钟就是过早平仓）")
-	sb.WriteString("• 信号强度不足？（信心度<80）")
-	sb.WriteString("• 是否逆势操作？")
-	sb.WriteString("• 止损执行是否严格？")
+	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
+	sb.WriteString("- **停止交易**，连续观望至少6个周期（18分钟）\n")
+	sb.WriteString("**深度反思**：\n")
+	sb.WriteString("- 交易频率过高？（每小时>1次就是过度）\n")
+	sb.WriteString("- 持仓时间过短？（<30分钟就是过早平仓）\n")
+	sb.WriteString("- 信号强度不足？（信心度<75）\n")
+	sb.WriteString("- 是否逆势操作？\n")
+	sb.WriteString("- 止损执行是否严格？\n")
 
-	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):")
-	sb.WriteString("**严格控制**：只做信心度>85的交易")
-	sb.WriteString("减少交易频率：每小时最多1笔新开仓")
-	sb.WriteString("缩小仓位：使用正常仓位的50-70%")
-	sb.WriteString("耐心持仓：至少持有45分钟以上")
+	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
+	sb.WriteString("- **严格控制**：只做信心度>80的交易\n")
+	sb.WriteString("- 减少交易频率：每小时最多1笔新开仓\n")
+	sb.WriteString("- 缩小仓位：使用正常仓位的50-70%\n")
+	sb.WriteString("- 耐心持仓：至少持有45分钟以上\n")
 
-	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):")
-	sb.WriteString("**维持策略**：按既定标准执行")
-	sb.WriteString("保持警惕：不因盈利而放松标准")
+	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
+	sb.WriteString("**维持策略**：按既定标准执行\n")
+	sb.WriteString("保持警惕：不因盈利而放松标准\n")
 
-	sb.WriteString("**夏普比率 > 0.7** (优异表现):")
-	sb.WriteString("**适度进取**：可在信心度>90时适度扩大仓位")
-	sb.WriteString("保持纪律：不因成功而改变稳健原则")
+	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
+	sb.WriteString("**适度进取**：可在信心度>85时适度扩大仓位\n")
+	sb.WriteString("保持纪律：不因成功而改变稳健原则\n")
 
-	// sb.WriteString("根据提供的历史交易记录，自主调节交易节奏与风控措施。优先保持高夏普比率，尽量保持高胜率。")
+	// sb.WriteString("根据提供的历史交易记录，自主调节交易节奏与风控措施。优先保持高夏普比率，尽量保持高胜率。\n")
 
 	sb.WriteString("# 5️⃣ 风险与仓位\n\n")
 	sb.WriteString("当前账户净值、实时盈亏、保证金使用率会在用户消息中给出，你需要基于这些数值评估回撤和风险承受度。\n")
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
 	sb.WriteString("- **不孤注一掷**：单一标的的风险不应占用账户的绝大部分。\n")
 	sb.WriteString("- **风险回报思维**：每次建议开仓时，确保风险回报比合理（建议 > 1:2，理想 > 1:3）。\n\n")
-	sb.WriteString("2. **检查已有持仓**：**核心自问**：入场时的技术理由（如EMA支撑、多头排列）是否已经彻底破坏？如果只是正常的利润回撤，严禁随意执行 `close_long/short`。如果只是想收紧风险，请使用 `update_stop_loss` 而非直接平仓。\n") // 强化
+	sb.WriteString("- **检查已有持仓**：**核心自问**：入场时的技术理由（如EMA支撑、多头排列）是否已经彻底破坏？如果只是正常的利润回撤，严禁随意执行 `close_long/short`。如果只是想收紧风险，请使用 `update_stop_loss` 而非直接平仓。\n") // 强化
+	sb.WriteString("\n")
+	sb.WriteString("**移动止损（update_stop_loss）纪律**：\n")
+	sb.WriteString("- 移动止损不是为了“马上出场”，而是为了在行情给到空间时保护利润。\n")
+	sb.WriteString("- 不要把止损贴到当前价附近导致被3分钟噪声扫掉。新止损应至少保留明显的波动空间（优先参考 `intraday_atr14 (3m)` / `normalized_volatility`）。\n\n")
 
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. **评估当前绩效状态**：判断应偏保守还是积极。\n")
@@ -415,6 +436,18 @@ func buildUserPrompt(ctx *Context) string {
 // extraUserPromptForStrategyB 策略B的额外用户提示词信息
 func extraUserPromptForStrategyB(marketData *market.Data) string {
 	var sb strings.Builder
+	// 日内波动刻画：3m ATR14（价格单位），用于止损距离/噪声过滤
+	if marketData.IntradayATR14 > 0 {
+		sb.WriteString(fmt.Sprintf(
+			"intraday_atr14 (3m) = %.4f\n\n",
+			marketData.IntradayATR14,
+		))
+	}
+
+	// 用于硬规则（禁止明显逆势）和宏观判断的涨跌幅信息
+	// 注意：此字段在 market.Get 中计算（基于3m/4h K线），可用于快速识别“顺势/逆势”
+	sb.WriteString(fmt.Sprintf("price_change: 1h: %+.2f%%, 4h: %+.2f%%\n\n", marketData.PriceChange1h, marketData.PriceChange4h))
+
 	if marketData.VolatilityPct > 0 {
 		sb.WriteString(fmt.Sprintf(
 			"normalized_volatility (ATR14/price) = %.4f\n\n",
@@ -443,6 +476,32 @@ func extraUserPromptForStrategyB(marketData *market.Data) string {
 				"4h_support_resistance = [%.3f, %.3f]\n\n",
 				lt.Support, lt.Resistance,
 			))
+
+			// ===== 位置感/空间感（用于避免在区间上沿追多、下沿追空）=====
+			if marketData.CurrentPrice > 0 && lt.Resistance > lt.Support {
+				price := marketData.CurrentPrice
+				posInRange := (price - lt.Support) / (lt.Resistance - lt.Support)
+				if posInRange < 0 {
+					posInRange = 0
+				}
+				if posInRange > 1 {
+					posInRange = 1
+				}
+
+				distToResPct := (lt.Resistance - price) / price * 100
+				distToSupPct := (price - lt.Support) / price * 100
+
+				sb.WriteString(fmt.Sprintf("position_in_range_4h = %.3f\n\n", posInRange))
+				sb.WriteString(fmt.Sprintf("dist_to_resistance_pct = %.3f%%\n\n", distToResPct))
+				sb.WriteString(fmt.Sprintf("dist_to_support_pct = %.3f%%\n\n", distToSupPct))
+
+				if lt.ATR14 > 0 {
+					distToResATR := (lt.Resistance - price) / lt.ATR14
+					distToSupATR := (price - lt.Support) / lt.ATR14
+					sb.WriteString(fmt.Sprintf("dist_to_resistance_atr (ATR14=%.3f) = %.3f\n\n", lt.ATR14, distToResATR))
+					sb.WriteString(fmt.Sprintf("dist_to_support_atr (ATR14=%.3f) = %.3f\n\n", lt.ATR14, distToSupATR))
+				}
+			}
 		}
 	}
 
