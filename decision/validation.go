@@ -3,10 +3,57 @@ package decision
 import (
 	"fmt"
 	"nofx/logger"
+	"nofx/market"
 	"nofx/stats"
 	"strings"
 	"time"
 )
+
+// stopLossMinDistance 计算“止损最小距离”（价格单位）。
+// 目的：避免止损贴得太近导致 3m 噪声/滑点触发；并对山寨币（更高波动）使用更宽的最小距离。
+//
+// 规则（可按需再调参）：
+// - BTC/ETH：minDist = max(0.25% * price, 0.5 * intradayATR14, 0.5 * price * volatilityPct)
+// - Alt：    minDist = max(0.60% * price, 1.0 * intradayATR14, 0.7 * price * volatilityPct)
+//
+// 其中 volatilityPct = normalized_volatility (ATR14/price)（若可用）
+func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data) float64 {
+	if currentPrice <= 0 {
+		return 0
+	}
+
+	s := strings.ToUpper(strings.TrimSpace(symbol))
+	isMajor := (s == "BTCUSDT" || s == "ETHUSDT")
+
+	// 百分比底线：山寨币更宽，避免被噪声扫
+	minPct := 0.0060 // 0.60%
+	atrMult := 1.0
+	volMult := 0.7
+	if isMajor {
+		minPct = 0.0025 // 0.25%
+		atrMult = 0.5
+		volMult = 0.5
+	}
+
+	minDist := currentPrice * minPct
+	if md != nil {
+		if md.IntradayATR14 > 0 {
+			atrDist := atrMult * md.IntradayATR14
+			if atrDist > minDist {
+				minDist = atrDist
+			}
+		}
+		if md.VolatilityPct > 0 {
+			// volatilityPct = ATR14(4h)/price；用其估算“最低应留出的波动空间”
+			volDist := volMult * (currentPrice * md.VolatilityPct)
+			if volDist > minDist {
+				minDist = volDist
+			}
+		}
+	}
+
+	return minDist
+}
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
 func validateDecisions(decisions []Decision, ctx *Context) error {
@@ -76,21 +123,8 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 				}
 
 				// 计算最小距离：优先用 3m ATR14（价格单位），fallback 到 normalized_volatility
-				minPct := 0.0025 // 0.25% 的底线缓冲
-				minDist := currentPrice * minPct
-				if md.IntradayATR14 > 0 {
-					// 给出 0.5 * ATR14 的空间（经验值，避免太贴）
-					atrDist := 0.5 * md.IntradayATR14
-					if atrDist > minDist {
-						minDist = atrDist
-					}
-				} else if md.VolatilityPct > 0 {
-					// volatilityPct = ATR14(4h)/price；取一部分作为最小距离
-					volDist := 0.5 * (currentPrice * md.VolatilityPct)
-					if volDist > minDist {
-						minDist = volDist
-					}
-				}
+				// ✅ 分层：BTC/ETH vs Alt（Alt 给更宽的最小距离）
+				minDist := stopLossMinDistance(d.Symbol, currentPrice, md)
 
 				if side == "long" {
 					if d.NewStopLoss > currentPrice-minDist {
@@ -185,6 +219,25 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 			} else {
 				// 做空：入场价在止损和止盈之间
 				entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2 // fallback：20%位置
+			}
+		}
+
+		// ✅ 额外硬约束：开仓止损也不能贴得太近（尤其是山寨币）
+		// 说明：这能显著减少“刚开仓就被3m噪声扫损/滑点触发”的情况。
+		if ctx != nil && ctx.MarketDataMap != nil {
+			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 && entryPrice > 0 {
+				minDist := stopLossMinDistance(d.Symbol, entryPrice, md)
+				if d.Action == ActionOpenLong {
+					if (entryPrice - d.StopLoss) < minDist {
+						return fmt.Errorf("开多止损过近：symbol=%s entry=%.4f sl=%.4f 距离=%.4f，必须≥%.4f（BTC/ETH更宽松，山寨币更严格）",
+							d.Symbol, entryPrice, d.StopLoss, entryPrice-d.StopLoss, minDist)
+					}
+				} else {
+					if (d.StopLoss - entryPrice) < minDist {
+						return fmt.Errorf("开空止损过近：symbol=%s entry=%.4f sl=%.4f 距离=%.4f，必须≥%.4f（BTC/ETH更宽松，山寨币更严格）",
+							d.Symbol, entryPrice, d.StopLoss, d.StopLoss-entryPrice, minDist)
+					}
+				}
 			}
 		}
 
