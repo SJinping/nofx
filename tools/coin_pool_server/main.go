@@ -522,7 +522,7 @@ func loadConfig() AppConfig {
 		UpdateIntervalCP: getEnvDuration("UPDATE_INTERVAL_COINS", 15*time.Minute),
 		OITopN:           getEnvInt("OI_TOP_N", 10),
 		CoinTopN:         getEnvInt("COIN_TOP_N", 10),
-		OITopKByVolume:   getEnvInt("OI_TOP_K", 100),
+		OITopKByVolume:   getEnvInt("OI_TOP_K", 200),
 		MinQuoteVolume:   getEnvFloat("MIN_QUOTE_VOLUME", 5_000_000), // 24h成交额过滤（USDT）
 		MinOIValue:       getEnvFloat("MIN_OI_VALUE", 15_000_000),    // OI价值过滤（USD），与 decision/engine.go 一致
 		HTTPTimeout:      getEnvDuration("HTTP_TIMEOUT", 30*time.Second),
