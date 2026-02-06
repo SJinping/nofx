@@ -45,6 +45,7 @@ test/
 v2ray/
 v2ray_cli/
 data/
+trade_memory/
 reports/
 test.sh
 test_binance
