@@ -161,9 +161,13 @@ func setupProxyForBinance() {
 }
 
 // NewFuturesTrader 创建合约交易器
-func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
+func NewFuturesTrader(apiKey, secretKey string, testnet bool) *FuturesTrader {
 	// 设置代理
 	setupProxyForBinance()
+
+	// ✅ 切换主网/测试网（影响 futures.NewClient 的 BaseURL）
+	// 注意：这是 go-binance futures 包的全局开关，当前实现假设单进程只运行一种环境。
+	futures.UseTestnet = testnet
 
 	client := futures.NewClient(apiKey, secretKey)
 

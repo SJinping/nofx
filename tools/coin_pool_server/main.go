@@ -19,6 +19,19 @@ import (
 	xproxy "golang.org/x/net/proxy"
 )
 
+// Binance Futures REST base URL (FAPI) for this tool.
+// Override via env: BINANCE_FAPI_BASE_URL (e.g. https://testnet.binancefuture.com).
+func fapiBaseURL() string {
+	v := strings.TrimSpace(os.Getenv("BINANCE_FAPI_BASE_URL"))
+	if v == "" {
+		return "https://fapi.binance.com"
+	}
+	for strings.HasSuffix(v, "/") {
+		v = strings.TrimSuffix(v, "/")
+	}
+	return v
+}
+
 // ==========
 // V2Ray 配置读取（与 binance_futures.go 保持一致）
 // ==========
@@ -325,7 +338,7 @@ func httpGetWithRetry(client *http.Client, cfg AppConfig, url string) ([]byte, i
 }
 
 func fetchFuturesSymbols(client *http.Client, cfg AppConfig) ([]string, error) {
-	body, _, err := httpGetWithRetry(client, cfg, "https://fapi.binance.com/fapi/v1/exchangeInfo")
+	body, _, err := httpGetWithRetry(client, cfg, fapiBaseURL()+"/fapi/v1/exchangeInfo")
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +366,7 @@ func fetchFuturesSymbols(client *http.Client, cfg AppConfig) ([]string, error) {
 }
 
 func fetchTickers(client *http.Client) (map[string]*BinanceTicker, error) {
-	body, _, err := httpGetWithRetry(client, AppConfig{MaxRetry: 1, RetryBaseBackoff: 800 * time.Millisecond}, "https://fapi.binance.com/fapi/v1/ticker/24hr")
+	body, _, err := httpGetWithRetry(client, AppConfig{MaxRetry: 1, RetryBaseBackoff: 800 * time.Millisecond}, fapiBaseURL()+"/fapi/v1/ticker/24hr")
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +384,7 @@ func fetchTickers(client *http.Client) (map[string]*BinanceTicker, error) {
 }
 
 func fetchOpenInterest(client *http.Client, rl *RateLimiter, cfg AppConfig, symbol string) (float64, error) {
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
+	url := fmt.Sprintf("%s/fapi/v1/openInterest?symbol=%s", fapiBaseURL(), symbol)
 	backoff := cfg.RetryBaseBackoff
 	if backoff <= 0 {
 		backoff = 800 * time.Millisecond

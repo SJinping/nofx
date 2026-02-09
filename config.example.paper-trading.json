@@ -33,6 +33,7 @@
       "deepseek_key": "your_deepseek_key_here"
     }
   ],
+  "binance_testnet": false,
   "use_default_coins": true,
   "default_coins": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
   "api_server_port": 8080,

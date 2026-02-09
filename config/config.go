@@ -75,6 +75,9 @@ type Config struct {
 	DefaultCoins       []string       `json:"default_coins"`     // 默认主流币种池
 	CoinPoolAPIURL     string         `json:"coin_pool_api_url"`
 	OITopAPIURL        string         `json:"oi_top_api_url"`
+	// Binance Futures 环境：false=主网(https://fapi.binance.com)，true=测试网(https://testnet.binancefuture.com)
+	// 说明：当前实现按“全局开关”切换，适用于一次运行只选一种环境的场景。
+	BinanceTestnet bool `json:"binance_testnet,omitempty"`
 	APIServerPort      int            `json:"api_server_port"`
 	MaxDailyLoss       float64        `json:"max_daily_loss"`
 	MaxDrawdown        float64        `json:"max_drawdown"`
@@ -148,14 +151,31 @@ func (c *Config) loadFromEnvironment() {
 		}
 
 		// 币安 API Keys
-		if trader.BinanceAPIKey == "" {
-			if envKey := os.Getenv("BINANCE_API_KEY"); envKey != "" {
-				trader.BinanceAPIKey = envKey
-			}
-		}
-		if trader.BinanceSecretKey == "" {
-			if envKey := os.Getenv("BINANCE_SECRET_KEY"); envKey != "" {
-				trader.BinanceSecretKey = envKey
+		// - 主网：BINANCE_API_KEY / BINANCE_SECRET_KEY
+		// - 测试网：BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_SECRET_KEY
+		if strings.TrimSpace(trader.Exchange) == "binance" {
+			if c.BinanceTestnet {
+				if trader.BinanceAPIKey == "" {
+					if envKey := os.Getenv("BINANCE_TESTNET_API_KEY"); envKey != "" {
+						trader.BinanceAPIKey = envKey
+					}
+				}
+				if trader.BinanceSecretKey == "" {
+					if envKey := os.Getenv("BINANCE_TESTNET_SECRET_KEY"); envKey != "" {
+						trader.BinanceSecretKey = envKey
+					}
+				}
+			} else {
+				if trader.BinanceAPIKey == "" {
+					if envKey := os.Getenv("BINANCE_API_KEY"); envKey != "" {
+						trader.BinanceAPIKey = envKey
+					}
+				}
+				if trader.BinanceSecretKey == "" {
+					if envKey := os.Getenv("BINANCE_SECRET_KEY"); envKey != "" {
+						trader.BinanceSecretKey = envKey
+					}
+				}
 			}
 		}
 

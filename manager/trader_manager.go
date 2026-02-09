@@ -25,7 +25,7 @@ func NewTraderManager() *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -55,6 +55,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		Name:                     cfg.Name,
 		AIModel:                  cfg.AIModel,
 		Exchange:                 cfg.Exchange,
+		BinanceTestnet:           binanceTestnet,
 		BinanceAPIKey:            cfg.BinanceAPIKey,
 		BinanceSecretKey:         cfg.BinanceSecretKey,
 		HyperliquidPrivateKey:    cfg.HyperliquidPrivateKey,

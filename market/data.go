@@ -19,6 +19,33 @@ import (
 	proxy "golang.org/x/net/proxy"
 )
 
+// Binance Futures REST base URL (FAPI). Default is mainnet.
+// When using testnet, set to "https://testnet.binancefuture.com".
+var fapiBaseURL = "https://fapi.binance.com"
+
+// SetFAPIBaseURL switches market data source between mainnet/testnet.
+// Note: this is a process-wide setting. Use one environment per process.
+func SetFAPIBaseURL(baseURL string) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return
+	}
+	// normalize: remove trailing slashes
+	for strings.HasSuffix(baseURL, "/") {
+		baseURL = strings.TrimSuffix(baseURL, "/")
+	}
+	fapiBaseURL = baseURL
+}
+
+func fapiHostForDialTest() string {
+	u, err := url.Parse(fapiBaseURL)
+	if err == nil && u.Host != "" {
+		return u.Host
+	}
+	// fallback: default mainnet host
+	return "fapi.binance.com"
+}
+
 // 统一HTTP客户端（支持 SOCKS5 / HTTP(S) 代理）
 var httpClient = newHTTPClient()
 
@@ -33,8 +60,8 @@ func newHTTPClient() *http.Client {
 				auth = &proxy.Auth{User: u.User.Username(), Password: pw}
 			}
 			if dialer, err := proxy.SOCKS5("tcp", addr, auth, proxy.Direct); err == nil {
-				// 测试 SOCKS5 连接是否可用（快速连接测试到币安API）
-				testConn, testErr := dialer.Dial("tcp", "fapi.binance.com:443")
+					// 测试 SOCKS5 连接是否可用（快速连接测试到币安API）
+					testConn, testErr := dialer.Dial("tcp", fapiHostForDialTest()+":443")
 				if testErr == nil {
 					testConn.Close()
 					// SOCKS5 可用，使用它
@@ -311,7 +338,8 @@ func GetWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 
 // getKlines 从Binance获取K线数据
 func getKlines(symbol, interval string, limit int) ([]Kline, error) {
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
+	url := fmt.Sprintf("%s/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
+		fapiBaseURL,
 		symbol, interval, limit)
 
 	resp, err := httpClient.Get(url)
@@ -849,7 +877,7 @@ func findSupportResistance(klines []Kline, lookback int) (support, resistance fl
 
 // getOpenInterestData 获取OI数据
 func getOpenInterestData(symbol string) (*OIData, error) {
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", symbol)
+	url := fmt.Sprintf("%s/fapi/v1/openInterest?symbol=%s", fapiBaseURL, symbol)
 
 	resp, err := httpClient.Get(url)
 	if err != nil {
@@ -882,7 +910,7 @@ func getOpenInterestData(symbol string) (*OIData, error) {
 
 // getFundingRate 获取资金费率
 func getFundingRate(symbol string) (float64, error) {
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/premiumIndex?symbol=%s", symbol)
+	url := fmt.Sprintf("%s/fapi/v1/premiumIndex?symbol=%s", fapiBaseURL, symbol)
 
 	resp, err := httpClient.Get(url)
 	if err != nil {
