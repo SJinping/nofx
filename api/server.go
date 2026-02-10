@@ -118,6 +118,10 @@ func (s *Server) setupRoutes() {
 		// 系统控制
 		api.POST("/system/pause", s.handleSystemPause)
 
+		// 运行时配置（热更新）
+		api.GET("/config", s.handleGetConfig)
+		api.PUT("/config", s.handleUpdateConfig)
+
 		// 日志浏览接口 (Merged from LogViewer)
 		logs := api.Group("/logs")
 		{
@@ -1480,6 +1484,52 @@ func (s *Server) handleSystemPause(c *gin.Context) {
 	})
 }
 
+// handleGetConfig 获取运行时配置
+func (s *Server) handleGetConfig(c *gin.Context) {
+	traderID := c.Query("trader_id")
+	configs, err := s.traderManager.GetRuntimeConfig(traderID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 如果只有一个 trader 或指定了 trader_id，直接返回配置（不嵌套 map）
+	if len(configs) == 1 {
+		for id, cfg := range configs {
+			c.JSON(http.StatusOK, gin.H{
+				"trader_id": id,
+				"config":    cfg,
+			})
+			return
+		}
+	}
+
+	// 多个 trader：返回 map
+	c.JSON(http.StatusOK, configs)
+}
+
+// handleUpdateConfig 更新运行时配置
+func (s *Server) handleUpdateConfig(c *gin.Context) {
+	var patch traderpkg.RuntimeConfigPatch
+	if err := c.ShouldBindJSON(&patch); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("无效的请求体: %v", err)})
+		return
+	}
+
+	traderID := c.Query("trader_id")
+	if err := s.traderManager.UpdateRuntimeConfig(traderID, patch); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 返回更新后的配置
+	configs, _ := s.traderManager.GetRuntimeConfig(traderID)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "配置已更新，将在下一个交易周期生效",
+		"config":  configs,
+	})
+}
+
 // Start 启动服务器
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
@@ -1499,6 +1549,8 @@ func (s *Server) Start() error {
 	log.Printf("  • GET  /api/error-stats/recent?trader_id=xxx - 指定trader最近的错误列表")
 	log.Printf("  • POST /api/close-all-positions - 平掉所有模型的所有持仓")
 	log.Printf("  • POST /api/close-positions?trader_id=xxx - 平掉指定trader的所有持仓")
+	log.Printf("  • GET  /api/config?trader_id=xxx - 获取运行时配置")
+	log.Printf("  • PUT  /api/config?trader_id=xxx - 更新运行时配置（热更新）")
 	log.Printf("  • GET  /health               - 健康检查")
 	log.Println()
 

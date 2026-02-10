@@ -68,6 +68,18 @@ type LeverageConfig struct {
 	AltcoinLeverage int `json:"altcoin_leverage"` // 山寨币的杠杆倍数（主账户建议5-20，子账户≤5）
 }
 
+// StopLossDistanceConfig 止损最小距离配置
+// 最终 minDist = max(minPct% * price, atrMult * ATR14, volMult * price * volatilityPct)
+// 所有 pct 字段单位为百分比，如 0.15 表示 0.15%
+type StopLossDistanceConfig struct {
+	MajorMinPct  float64 `json:"major_min_pct,omitempty"`  // BTC/ETH 百分比底线（默认0.15%）
+	MajorATRMult float64 `json:"major_atr_mult,omitempty"` // BTC/ETH ATR14倍数（默认0.3）
+	MajorVolMult float64 `json:"major_vol_mult,omitempty"` // BTC/ETH 波动率倍数（默认0.3）
+	AltMinPct    float64 `json:"alt_min_pct,omitempty"`    // 山寨币百分比底线（默认0.35%）
+	AltATRMult   float64 `json:"alt_atr_mult,omitempty"`   // 山寨币 ATR14倍数（默认0.6）
+	AltVolMult   float64 `json:"alt_vol_mult,omitempty"`   // 山寨币波动率倍数（默认0.5）
+}
+
 // Config 总配置
 type Config struct {
 	Traders            []TraderConfig `json:"traders"`
@@ -82,8 +94,9 @@ type Config struct {
 	MaxDailyLoss       float64        `json:"max_daily_loss"`
 	MaxDrawdown        float64        `json:"max_drawdown"`
 	StopTradingMinutes int            `json:"stop_trading_minutes"`
-	Leverage           LeverageConfig `json:"leverage"`        // 杠杆配置
-	MinRiskReward      float64        `json:"min_risk_reward"` // 最小风险回报比
+	Leverage             LeverageConfig         `json:"leverage"`               // 杠杆配置
+	MinRiskReward        float64                `json:"min_risk_reward"`        // 最小风险回报比
+	StopLossDistance     StopLossDistanceConfig `json:"stop_loss_distance"`     // 止损最小距离配置
 
 	// 新增：是否开启数据录制（用于回测）
 	EnableRecording bool `json:"enable_recording"` // 是否开启录制

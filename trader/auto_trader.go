@@ -79,6 +79,9 @@ type AutoTraderConfig struct {
 	// 成本假设（用于风控/校验/自动止盈，不影响实际下单）
 	AssumedTakerFeeRate float64
 	AssumedSlippageRate float64
+
+	// 止损最小距离配置（零值时使用默认）
+	StopLossDistance decision.StopLossDistanceConfig
 }
 
 // AutoTrader 自动交易器
@@ -105,6 +108,10 @@ type AutoTrader struct {
 	promptStrategy        decision.PromptStrategy // 当前使用的Prompt策略（默认StrategyA）
 	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	autoDecisionState     decision.AutoDecisionState
+
+	// 运行时可热更新配置（线程安全）
+	runtimeCfg     *RuntimeConfig
+	scanIntervalCh chan time.Duration // 通知 Run() 循环重置 ticker
 
 	// API缓存（减少币安API调用频率）
 	cacheMutex           sync.RWMutex
@@ -263,6 +270,9 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		autoDecisionState: decision.AutoDecisionState{
 			TP: make(map[string]*decision.AutoTPState),
 		},
+		// 运行时可热更新配置
+		runtimeCfg:     NewRuntimeConfig(config),
+		scanIntervalCh: make(chan time.Duration, 1),
 		// 初始化API缓存（30秒过期，减少币安API调用）
 		accountInfoCache: make(map[string]interface{}),
 		positionsCache:   []map[string]interface{}{},
@@ -277,10 +287,11 @@ func (at *AutoTrader) Run() error {
 	at.isRunning = true
 	log.Println("🚀 AI驱动自动交易系统启动")
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
-	log.Printf("⚙️  扫描间隔: %v", at.config.ScanInterval)
+	log.Printf("⚙️  扫描间隔: %d分钟", at.runtimeCfg.Get().ScanIntervalMin)
 	log.Println("🤖 AI将全权决定杠杆、仓位大小、止损止盈等参数")
 
-	ticker := time.NewTicker(at.config.ScanInterval)
+	snap := at.runtimeCfg.Get()
+	ticker := time.NewTicker(time.Duration(snap.ScanIntervalMin) * time.Minute)
 	defer ticker.Stop()
 
 	// 首次立即执行（仅在未暂停时）
@@ -299,6 +310,9 @@ func (at *AutoTrader) Run() error {
 			if err := at.runCycle(); err != nil {
 				log.Printf("❌ 执行失败: %v", err)
 			}
+		case newInterval := <-at.scanIntervalCh:
+			ticker.Reset(newInterval)
+			log.Printf("⚙️  扫描间隔已热更新为 %v", newInterval)
 		}
 	}
 
@@ -319,6 +333,23 @@ func (at *AutoTrader) SetPaused(paused bool) {
 		status = "暂停"
 	}
 	log.Printf("⏯ [%s] 交易状态已切换为: %s", at.name, status)
+}
+
+// GetRuntimeConfig 返回当前运行时配置快照（供 API 层调用）
+func (at *AutoTrader) GetRuntimeConfig() RuntimeConfigSnapshot {
+	return at.runtimeCfg.Get()
+}
+
+// UpdateRuntimeConfig 部分更新运行时配置（供 API 层调用）
+func (at *AutoTrader) UpdateRuntimeConfig(patch RuntimeConfigPatch) {
+	changed, newInterval := at.runtimeCfg.Update(patch)
+	if changed {
+		// 非阻塞发送，避免 Run() 循环未就绪时死锁
+		select {
+		case at.scanIntervalCh <- newInterval:
+		default:
+		}
+	}
 }
 
 // runCycle 运行一个交易周期（使用AI全权决策）
@@ -377,8 +408,9 @@ func (at *AutoTrader) runCycle() error {
 	// 说明：暂停期间仍会继续循环（用于前端展示/日志），但不会再开新仓。
 	if at.shouldPauseForRisk(ctx) {
 		remaining := at.stopUntil.Sub(time.Now())
+		riskSnap := at.runtimeCfg.Get()
 		log.Printf("⏸ 风险控制：触发暂停交易，剩余 %.0f 分钟（max_daily_loss=%.2f%%, max_drawdown=%.2f%%）",
-			remaining.Minutes(), at.config.MaxDailyLoss, at.config.MaxDrawdown)
+			remaining.Minutes(), riskSnap.MaxDailyLoss, riskSnap.MaxDrawdown)
 
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("风险控制暂停中，剩余 %.0f 分钟", remaining.Minutes())
@@ -807,13 +839,14 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		performance = nil
 	}
 
-	// 6. 构建上下文
+	// 6. 构建上下文（从运行时配置读取可热更新的参数）
+	rcSnap := at.runtimeCfg.Get()
 	ctx := &decision.Context{
 		CurrentTime:     time.Now().Format("2006-01-02 15:04:05"),
 		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
 		CallCount:       at.callCount,
-		BTCETHLeverage:  at.config.BTCETHLeverage,  // 使用配置的杠杆倍数
-		AltcoinLeverage: at.config.AltcoinLeverage, // 使用配置的杠杆倍数
+		BTCETHLeverage:  rcSnap.BTCETHLeverage,  // 从运行时配置读取
+		AltcoinLeverage: rcSnap.AltcoinLeverage, // 从运行时配置读取
 		Account: decision.AccountInfo{
 			TotalEquity:      totalEquity,
 			AvailableBalance: availableBalance,
@@ -828,6 +861,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Performance:         performance, // 添加历史表现分析
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
+		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,
@@ -897,12 +931,18 @@ func (at *AutoTrader) shouldPauseForRisk(ctx *decision.Context) bool {
 		drawdownPct = (equity - at.peakEquity) / at.peakEquity * 100
 	}
 
+	// 从运行时配置读取风控参数
+	rcSnap := at.runtimeCfg.Get()
+	maxDailyLoss := rcSnap.MaxDailyLoss
+	maxDrawdown := rcSnap.MaxDrawdown
+	stopTradingTime := time.Duration(rcSnap.StopTradingMin) * time.Minute
+
 	// 触发条件：亏损超过阈值（阈值按正数配置）
 	trigger := false
-	if at.config.MaxDailyLoss > 0 && dailyPnLPct <= -at.config.MaxDailyLoss {
+	if maxDailyLoss > 0 && dailyPnLPct <= -maxDailyLoss {
 		trigger = true
 	}
-	if at.config.MaxDrawdown > 0 && drawdownPct <= -at.config.MaxDrawdown {
+	if maxDrawdown > 0 && drawdownPct <= -maxDrawdown {
 		trigger = true
 	}
 	if !trigger {
@@ -910,11 +950,11 @@ func (at *AutoTrader) shouldPauseForRisk(ctx *decision.Context) bool {
 	}
 
 	// 触发暂停窗口
-	if at.config.StopTradingTime <= 0 {
+	if stopTradingTime <= 0 {
 		// 兜底：默认暂停60分钟
 		at.stopUntil = time.Now().Add(60 * time.Minute)
 	} else {
-		at.stopUntil = time.Now().Add(at.config.StopTradingTime)
+		at.stopUntil = time.Now().Add(stopTradingTime)
 	}
 	return true
 }

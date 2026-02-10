@@ -12,27 +12,33 @@ import (
 // stopLossMinDistance 计算“止损最小距离”（价格单位）。
 // 目的：避免止损贴得太近导致 3m 噪声/滑点触发；并对山寨币（更高波动）使用更宽的最小距离。
 //
-// 规则（可按需再调参）：
-// - BTC/ETH：minDist = max(0.25% * price, 0.5 * intradayATR14, 0.5 * price * volatilityPct)
-// - Alt：    minDist = max(0.60% * price, 1.0 * intradayATR14, 0.7 * price * volatilityPct)
+// 规则：
+// - BTC/ETH：minDist = max(majorMinPct * price, majorATRMult * ATR14, majorVolMult * price * volatilityPct)
+// - Alt：    minDist = max(altMinPct * price, altATRMult * ATR14, altVolMult * price * volatilityPct)
 //
-// 其中 volatilityPct = normalized_volatility (ATR14/price)（若可用）
-func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data) float64 {
+// 参数通过 StopLossDistanceConfig 配置，零值时使用默认值。
+func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data, slCfg *StopLossDistanceConfig) float64 {
 	if currentPrice <= 0 {
 		return 0
+	}
+
+	// 零值配置 → 使用默认值
+	cfg := DefaultStopLossDistanceConfig()
+	if slCfg != nil && slCfg.AltMinPct > 0 {
+		cfg = *slCfg
 	}
 
 	s := strings.ToUpper(strings.TrimSpace(symbol))
 	isMajor := (s == "BTCUSDT" || s == "ETHUSDT")
 
-	// 百分比底线：山寨币更宽，避免被噪声扫
-	minPct := 0.0060 // 0.60%
-	atrMult := 1.0
-	volMult := 0.7
+	// 根据币种选择参数
+	minPct := cfg.AltMinPct
+	atrMult := cfg.AltATRMult
+	volMult := cfg.AltVolMult
 	if isMajor {
-		minPct = 0.0025 // 0.25%
-		atrMult = 0.5
-		volMult = 0.5
+		minPct = cfg.MajorMinPct
+		atrMult = cfg.MajorATRMult
+		volMult = cfg.MajorVolMult
 	}
 
 	minDist := currentPrice * minPct
@@ -124,7 +130,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 
 				// 计算最小距离：优先用 3m ATR14（价格单位），fallback 到 normalized_volatility
 				// ✅ 分层：BTC/ETH vs Alt（Alt 给更宽的最小距离）
-				minDist := stopLossMinDistance(d.Symbol, currentPrice, md)
+				minDist := stopLossMinDistance(d.Symbol, currentPrice, md, &ctx.StopLossDistance)
 
 				if side == "long" {
 					if d.NewStopLoss > currentPrice-minDist {
@@ -226,7 +232,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		// 说明：这能显著减少“刚开仓就被3m噪声扫损/滑点触发”的情况。
 		if ctx != nil && ctx.MarketDataMap != nil {
 			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 && entryPrice > 0 {
-				minDist := stopLossMinDistance(d.Symbol, entryPrice, md)
+				minDist := stopLossMinDistance(d.Symbol, entryPrice, md, &ctx.StopLossDistance)
 				if d.Action == ActionOpenLong {
 					if (entryPrice - d.StopLoss) < minDist {
 						return fmt.Errorf("开多止损过近：symbol=%s entry=%.4f sl=%.4f 距离=%.4f，必须≥%.4f（BTC/ETH更宽松，山寨币更严格）",
