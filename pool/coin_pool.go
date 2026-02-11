@@ -262,6 +262,10 @@ func GetAvailableCoins() ([]string, error) {
 		if coin.IsAvailable {
 			// 确保symbol格式正确（转为大写USDT交易对）
 			symbol := normalizeSymbol(coin.Pair)
+			if !isValidSymbol(symbol) {
+				log.Printf("⚠️  跳过非法币种符号: %q (原始: %q)", symbol, coin.Pair)
+				continue
+			}
 			symbols = append(symbols, symbol)
 		}
 	}
@@ -310,6 +314,10 @@ func GetTopRatedCoins(limit int) ([]string, error) {
 	var symbols []string
 	for i := 0; i < maxCount; i++ {
 		symbol := normalizeSymbol(availableCoins[i].Pair)
+		if !isValidSymbol(symbol) {
+			log.Printf("⚠️  跳过非法币种符号: %q (原始: %q)", symbol, availableCoins[i].Pair)
+			continue
+		}
 		symbols = append(symbols, symbol)
 	}
 
@@ -318,8 +326,15 @@ func GetTopRatedCoins(limit int) ([]string, error) {
 
 // normalizeSymbol 标准化币种符号
 func normalizeSymbol(symbol string) string {
-	// 移除空格
-	symbol = trimSpaces(symbol)
+	// 只保留 ASCII 字母和数字（过滤中文、特殊字符等非法字节）
+	filtered := ""
+	for i := 0; i < len(symbol); i++ {
+		c := symbol[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			filtered += string(c)
+		}
+	}
+	symbol = filtered
 
 	// 转为大写
 	symbol = toUpper(symbol)
@@ -330,6 +345,24 @@ func normalizeSymbol(symbol string) string {
 	}
 
 	return symbol
+}
+
+// isValidSymbol 检查币种符号是否合法（至少有一个基础币种名 + USDT 后缀）
+func isValidSymbol(symbol string) bool {
+	if len(symbol) <= 4 { // 至少 "XUSDT" = 5 字符
+		return false
+	}
+	if !endsWith(symbol, "USDT") {
+		return false
+	}
+	// 检查每个字符都是 A-Z 或 0-9
+	for i := 0; i < len(symbol); i++ {
+		c := symbol[i]
+		if !((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 // 辅助函数
@@ -573,6 +606,10 @@ func GetOITopSymbols() ([]string, error) {
 	var symbols []string
 	for _, pos := range positions {
 		symbol := normalizeSymbol(pos.Symbol)
+		if !isValidSymbol(symbol) {
+			log.Printf("⚠️  跳过非法OI Top币种符号: %q (原始: %q)", symbol, pos.Symbol)
+			continue
+		}
 		symbols = append(symbols, symbol)
 	}
 
