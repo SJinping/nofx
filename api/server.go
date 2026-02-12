@@ -1331,8 +1331,36 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		return
 	}
 
-	// 分析最近20个周期的交易表现
-	performance, err := trader.GetDecisionLogger().AnalyzePerformance(20)
+	// 分析最近N个周期的交易表现（默认100，可通过 limit/trade_limit 调整）
+	limit := 100
+	tradeLimit := 100
+
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	if v := c.Query("trade_limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tradeLimit = n
+		}
+	}
+
+	// basic clamp to avoid huge IO
+	if limit < 1 {
+		limit = 1
+	}
+	if tradeLimit < 0 {
+		tradeLimit = 0
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	if tradeLimit > 500 {
+		tradeLimit = 500
+	}
+
+	performance, err := trader.GetDecisionLogger().AnalyzePerformance(limit, tradeLimit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("分析历史表现失败: %v", err),

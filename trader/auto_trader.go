@@ -832,7 +832,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 
 	// 5. 分析历史表现（最近20个周期）
-	performance, err := at.decisionLogger.AnalyzePerformance(20)
+	performance, err := at.decisionLogger.AnalyzePerformance(100, 100)
 	if err != nil {
 		log.Printf("⚠️  分析历史表现失败: %v", err)
 		// 不影响主流程，继续执行（但设置performance为nil以避免传递错误数据）

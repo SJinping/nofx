@@ -322,7 +322,8 @@ type SymbolPerformance struct {
 }
 
 // AnalyzePerformance 分析最近N个周期的交易表现
-func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAnalysis, error) {
+// tradeLimit: 返回 recent_trades 的最大条数（<=0 表示不限制）
+func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, tradeLimit int) (*PerformanceAnalysis, error) {
 	records, err := l.GetLatestRecords(lookbackCycles)
 	if err != nil {
 		return nil, fmt.Errorf("读取历史记录失败: %w", err)
@@ -497,17 +498,15 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 		}
 	}
 
-	// 只保留最近的交易（倒序：最新的在前）
-	if len(analysis.RecentTrades) > 10 {
+	// recent_trades：倒序（最新在前），并按 tradeLimit 截断
+	if len(analysis.RecentTrades) > 0 {
 		// 反转数组，让最新的在前
 		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
 			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
 		}
-		analysis.RecentTrades = analysis.RecentTrades[:10]
-	} else if len(analysis.RecentTrades) > 0 {
-		// 反转数组
-		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
-			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
+
+		if tradeLimit > 0 && len(analysis.RecentTrades) > tradeLimit {
+			analysis.RecentTrades = analysis.RecentTrades[:tradeLimit]
 		}
 	}
 
