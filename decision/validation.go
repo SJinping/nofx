@@ -376,7 +376,13 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		return nil
 	}
 
-	const cooldownMs int64 = 15 * 60 * 1000 // 15分钟
+	// 从配置读取止盈参数，零值使用默认
+	tpCfg := ctx.AutoTakeProfit
+	if tpCfg.Stage0Threshold <= 0 {
+		tpCfg = DefaultAutoTakeProfitConfig()
+	}
+
+	cooldownMs := int64(tpCfg.CooldownMinutes) * 60 * 1000
 
 	// 成本假设：用于把“价格涨跌%”换算成“净ROI%（保证金口径）”
 	taker := 0.0004
@@ -419,7 +425,7 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		}
 
 		// 最高档：直接全平
-		if netROIPct >= 4.0 {
+		if netROIPct >= tpCfg.FullCloseThreshold {
 			closeAction := ActionCloseLong
 			if strings.ToLower(pos.Side) == "short" {
 				closeAction = ActionCloseShort
@@ -427,7 +433,7 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 			decisions = append(decisions, Decision{
 				Symbol:         pos.Symbol,
 				Action:         closeAction,
-				Reasoning:      fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 4%% → 全部平仓（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				Reasoning:      fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ %.1f%% → 全部平仓（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, tpCfg.FullCloseThreshold, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:     100,
 				DecisionSource: "auto_take_profit",
 			})
@@ -435,23 +441,23 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		}
 
 		// 分阶段止盈：只触发一次
-		if st.Stage <= 0 && netROIPct >= 1.0 {
+		if st.Stage <= 0 && netROIPct >= tpCfg.Stage0Threshold {
 			decisions = append(decisions, Decision{
 				Symbol:          pos.Symbol,
 				Action:          ActionPartialClose,
-				ClosePercentage: 50.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 1%% 且 Stage=0 → 部分平仓50%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				ClosePercentage: tpCfg.Stage0ClosePct,
+				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ %.1f%% 且 Stage=0 → 部分平仓%.0f%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, tpCfg.Stage0Threshold, tpCfg.Stage0ClosePct, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:      100,
 				DecisionSource:  "auto_take_profit",
 			})
 			continue
 		}
-		if st.Stage == 1 && netROIPct >= 2.0 {
+		if st.Stage == 1 && netROIPct >= tpCfg.Stage1Threshold {
 			decisions = append(decisions, Decision{
 				Symbol:          pos.Symbol,
 				Action:          ActionPartialClose,
-				ClosePercentage: 30.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 2%% 且 Stage=1 → 部分平仓30%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				ClosePercentage: tpCfg.Stage1ClosePct,
+				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ %.1f%% 且 Stage=1 → 部分平仓%.0f%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, tpCfg.Stage1Threshold, tpCfg.Stage1ClosePct, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:      100,
 				DecisionSource:  "auto_take_profit",
 			})

@@ -81,6 +81,7 @@ func main() {
 			cfg.EnableRecording,   // 传递录制开关
 			cfg.BinanceTestnet,    // Binance 主网/测试网
 			cfg.StopLossDistance,   // 止损最小距离配置
+			cfg.AutoTakeProfit,    // 自动止盈配置
 		)
 		if err != nil {
 			log.Fatalf("❌ 初始化trader失败: %v", err)

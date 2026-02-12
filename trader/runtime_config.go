@@ -14,6 +14,7 @@ type RuntimeConfig struct {
 	btcETHLeverage   int
 	altcoinLeverage  int
 	stopLossDistance  decision.StopLossDistanceConfig
+	autoTakeProfit   decision.AutoTakeProfitConfig
 	maxDailyLoss     float64       // 最大日亏损百分比
 	maxDrawdown      float64       // 最大回撤百分比
 	stopTradingTime  time.Duration // 风控暂停时长
@@ -22,24 +23,26 @@ type RuntimeConfig struct {
 
 // RuntimeConfigSnapshot 运行时配置的只读快照（无锁，安全传递）
 type RuntimeConfigSnapshot struct {
-	BTCETHLeverage  int                            `json:"btc_eth_leverage"`
-	AltcoinLeverage int                            `json:"altcoin_leverage"`
-	StopLossDistance decision.StopLossDistanceConfig `json:"stop_loss_distance"`
-	MaxDailyLoss    float64                        `json:"max_daily_loss"`
-	MaxDrawdown     float64                        `json:"max_drawdown"`
-	StopTradingMin  int                            `json:"stop_trading_minutes"`
-	ScanIntervalMin int                            `json:"scan_interval_minutes"`
+	BTCETHLeverage  int                              `json:"btc_eth_leverage"`
+	AltcoinLeverage int                              `json:"altcoin_leverage"`
+	StopLossDistance decision.StopLossDistanceConfig  `json:"stop_loss_distance"`
+	AutoTakeProfit  decision.AutoTakeProfitConfig     `json:"auto_take_profit"`
+	MaxDailyLoss    float64                          `json:"max_daily_loss"`
+	MaxDrawdown     float64                          `json:"max_drawdown"`
+	StopTradingMin  int                              `json:"stop_trading_minutes"`
+	ScanIntervalMin int                              `json:"scan_interval_minutes"`
 }
 
 // RuntimeConfigPatch 用于部分更新运行时配置（零值表示不修改）
 type RuntimeConfigPatch struct {
-	BTCETHLeverage  *int                                `json:"btc_eth_leverage,omitempty"`
-	AltcoinLeverage *int                                `json:"altcoin_leverage,omitempty"`
-	StopLossDistance *decision.StopLossDistanceConfig    `json:"stop_loss_distance,omitempty"`
-	MaxDailyLoss    *float64                            `json:"max_daily_loss,omitempty"`
-	MaxDrawdown     *float64                            `json:"max_drawdown,omitempty"`
-	StopTradingMin  *int                                `json:"stop_trading_minutes,omitempty"`
-	ScanIntervalMin *int                                `json:"scan_interval_minutes,omitempty"`
+	BTCETHLeverage   *int                                `json:"btc_eth_leverage,omitempty"`
+	AltcoinLeverage  *int                                `json:"altcoin_leverage,omitempty"`
+	StopLossDistance *decision.StopLossDistanceConfig     `json:"stop_loss_distance,omitempty"`
+	AutoTakeProfit   *decision.AutoTakeProfitConfig       `json:"auto_take_profit,omitempty"`
+	MaxDailyLoss     *float64                            `json:"max_daily_loss,omitempty"`
+	MaxDrawdown      *float64                            `json:"max_drawdown,omitempty"`
+	StopTradingMin   *int                                `json:"stop_trading_minutes,omitempty"`
+	ScanIntervalMin  *int                                `json:"scan_interval_minutes,omitempty"`
 }
 
 // NewRuntimeConfig 从 AutoTraderConfig 初始化运行时配置
@@ -48,6 +51,7 @@ func NewRuntimeConfig(cfg AutoTraderConfig) *RuntimeConfig {
 		btcETHLeverage:  cfg.BTCETHLeverage,
 		altcoinLeverage: cfg.AltcoinLeverage,
 		stopLossDistance: cfg.StopLossDistance,
+		autoTakeProfit:  cfg.AutoTakeProfit,
 		maxDailyLoss:    cfg.MaxDailyLoss,
 		maxDrawdown:     cfg.MaxDrawdown,
 		stopTradingTime: cfg.StopTradingTime,
@@ -63,6 +67,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 		BTCETHLeverage:  rc.btcETHLeverage,
 		AltcoinLeverage: rc.altcoinLeverage,
 		StopLossDistance: rc.stopLossDistance,
+		AutoTakeProfit:  rc.autoTakeProfit,
 		MaxDailyLoss:    rc.maxDailyLoss,
 		MaxDrawdown:     rc.maxDrawdown,
 		StopTradingMin:  int(rc.stopTradingTime.Minutes()),
@@ -87,6 +92,10 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	if patch.StopLossDistance != nil {
 		log.Printf("🔧 运行时配置更新: StopLossDistance 已修改")
 		rc.stopLossDistance = *patch.StopLossDistance
+	}
+	if patch.AutoTakeProfit != nil {
+		log.Printf("🔧 运行时配置更新: AutoTakeProfit 已修改")
+		rc.autoTakeProfit = *patch.AutoTakeProfit
 	}
 	if patch.MaxDailyLoss != nil && *patch.MaxDailyLoss >= 0 {
 		log.Printf("🔧 运行时配置更新: MaxDailyLoss %.2f → %.2f", rc.maxDailyLoss, *patch.MaxDailyLoss)

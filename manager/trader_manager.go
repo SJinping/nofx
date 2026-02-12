@@ -30,7 +30,7 @@ func NewTraderManager(configFilePath string) *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -89,6 +89,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		AssumedSlippageRate:      assumedSlippage,
 		MinRiskReward:            cfg.MinRiskReward,
 		StopLossDistance:         convertStopLossDistanceConfig(stopLossDistCfg),
+		AutoTakeProfit:           convertAutoTakeProfitConfig(autoTPCfg),
 		EnableRecording:          enableRecording,
 	}
 
@@ -302,6 +303,34 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		raw["stop_loss_distance"] = sldMap
 	}
 
+	// auto_take_profit 是嵌套对象，直接用原值（无需单位转换）
+	if patch.AutoTakeProfit != nil {
+		atp := patch.AutoTakeProfit
+		atpMap, _ := raw["auto_take_profit"].(map[string]interface{})
+		if atpMap == nil {
+			atpMap = make(map[string]interface{})
+		}
+		if atp.Stage0Threshold > 0 {
+			atpMap["stage0_threshold"] = atp.Stage0Threshold
+		}
+		if atp.Stage0ClosePct > 0 {
+			atpMap["stage0_close_pct"] = atp.Stage0ClosePct
+		}
+		if atp.Stage1Threshold > 0 {
+			atpMap["stage1_threshold"] = atp.Stage1Threshold
+		}
+		if atp.Stage1ClosePct > 0 {
+			atpMap["stage1_close_pct"] = atp.Stage1ClosePct
+		}
+		if atp.FullCloseThreshold > 0 {
+			atpMap["full_close_threshold"] = atp.FullCloseThreshold
+		}
+		if atp.CooldownMinutes > 0 {
+			atpMap["cooldown_minutes"] = atp.CooldownMinutes
+		}
+		raw["auto_take_profit"] = atpMap
+	}
+
 	// scan_interval_minutes 是 per-trader 字段，更新 traders 数组中对应的条目
 	if patch.ScanIntervalMin != nil {
 		if traders, ok := raw["traders"].([]interface{}); ok {
@@ -510,6 +539,33 @@ func convertStopLossDistanceConfig(cfg config.StopLossDistanceConfig) decision.S
 	}
 	if cfg.AltVolMult > 0 {
 		defaults.AltVolMult = cfg.AltVolMult
+	}
+
+	return defaults
+}
+
+// convertAutoTakeProfitConfig 将配置层的自动止盈参数转换为decision层结构体
+// 零值字段使用默认值
+func convertAutoTakeProfitConfig(cfg config.AutoTakeProfitConfig) decision.AutoTakeProfitConfig {
+	defaults := decision.DefaultAutoTakeProfitConfig()
+
+	if cfg.Stage0Threshold > 0 {
+		defaults.Stage0Threshold = cfg.Stage0Threshold
+	}
+	if cfg.Stage0ClosePct > 0 {
+		defaults.Stage0ClosePct = cfg.Stage0ClosePct
+	}
+	if cfg.Stage1Threshold > 0 {
+		defaults.Stage1Threshold = cfg.Stage1Threshold
+	}
+	if cfg.Stage1ClosePct > 0 {
+		defaults.Stage1ClosePct = cfg.Stage1ClosePct
+	}
+	if cfg.FullCloseThreshold > 0 {
+		defaults.FullCloseThreshold = cfg.FullCloseThreshold
+	}
+	if cfg.CooldownMinutes > 0 {
+		defaults.CooldownMinutes = cfg.CooldownMinutes
 	}
 
 	return defaults

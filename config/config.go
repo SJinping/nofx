@@ -80,6 +80,16 @@ type StopLossDistanceConfig struct {
 	AltVolMult   float64 `json:"alt_vol_mult,omitempty"`   // 山寨币波动率倍数（默认0.5）
 }
 
+// AutoTakeProfitConfig 自动止盈配置
+type AutoTakeProfitConfig struct {
+	Stage0Threshold    float64 `json:"stage0_threshold,omitempty"`     // Stage0 触发净ROI%（默认1.0）
+	Stage0ClosePct     float64 `json:"stage0_close_pct,omitempty"`     // Stage0 平仓比例%（默认50）
+	Stage1Threshold    float64 `json:"stage1_threshold,omitempty"`     // Stage1 触发净ROI%（默认2.0）
+	Stage1ClosePct     float64 `json:"stage1_close_pct,omitempty"`     // Stage1 平仓比例%（默认30）
+	FullCloseThreshold float64 `json:"full_close_threshold,omitempty"` // 全部平仓净ROI%（默认4.0）
+	CooldownMinutes    int     `json:"cooldown_minutes,omitempty"`     // 冷却时间（分钟，默认15）
+}
+
 // Config 总配置
 type Config struct {
 	Traders            []TraderConfig `json:"traders"`
@@ -97,6 +107,7 @@ type Config struct {
 	Leverage             LeverageConfig         `json:"leverage"`               // 杠杆配置
 	MinRiskReward        float64                `json:"min_risk_reward"`        // 最小风险回报比
 	StopLossDistance     StopLossDistanceConfig `json:"stop_loss_distance"`     // 止损最小距离配置
+	AutoTakeProfit       AutoTakeProfitConfig   `json:"auto_take_profit"`       // 自动止盈配置
 
 	// 新增：是否开启数据录制（用于回测）
 	EnableRecording bool `json:"enable_recording"` // 是否开启录制

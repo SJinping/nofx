@@ -82,6 +82,9 @@ type AutoTraderConfig struct {
 
 	// 止损最小距离配置（零值时使用默认）
 	StopLossDistance decision.StopLossDistanceConfig
+
+	// 自动止盈配置（零值时使用默认）
+	AutoTakeProfit decision.AutoTakeProfitConfig
 }
 
 // AutoTrader 自动交易器
@@ -862,6 +865,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
 		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
+		AutoTakeProfit:      rcSnap.AutoTakeProfit,  // 从运行时配置读取
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,

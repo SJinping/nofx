@@ -70,6 +70,29 @@ func DefaultStopLossDistanceConfig() StopLossDistanceConfig {
 	}
 }
 
+// AutoTakeProfitConfig 自动止盈配置
+// 净ROI = 价格变动% × 杠杆 - round-trip成本%
+type AutoTakeProfitConfig struct {
+	Stage0Threshold    float64 `json:"stage0_threshold"`     // Stage0 触发净ROI%（默认1.0）
+	Stage0ClosePct     float64 `json:"stage0_close_pct"`     // Stage0 平仓比例%（默认50）
+	Stage1Threshold    float64 `json:"stage1_threshold"`     // Stage1 触发净ROI%（默认2.0）
+	Stage1ClosePct     float64 `json:"stage1_close_pct"`     // Stage1 平仓比例%（默认30）
+	FullCloseThreshold float64 `json:"full_close_threshold"` // 全部平仓净ROI%（默认4.0）
+	CooldownMinutes    int     `json:"cooldown_minutes"`     // 同一持仓两次止盈间隔（默认15分钟）
+}
+
+// DefaultAutoTakeProfitConfig 返回默认的自动止盈配置
+func DefaultAutoTakeProfitConfig() AutoTakeProfitConfig {
+	return AutoTakeProfitConfig{
+		Stage0Threshold:    1.0,
+		Stage0ClosePct:     50.0,
+		Stage1Threshold:    2.0,
+		Stage1ClosePct:     30.0,
+		FullCloseThreshold: 4.0,
+		CooldownMinutes:    30,
+	}
+}
+
 // Context 交易上下文（传递给AI的完整信息）
 type Context struct {
 	CurrentTime     string                  `json:"current_time"`
@@ -92,6 +115,9 @@ type Context struct {
 
 	// 止损最小距离配置（从config层传入，零值时使用默认）
 	StopLossDistance StopLossDistanceConfig `json:"-"`
+
+	// 自动止盈配置（从config层传入，零值时使用默认）
+	AutoTakeProfit AutoTakeProfitConfig `json:"-"`
 
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
