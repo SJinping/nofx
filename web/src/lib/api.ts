@@ -10,6 +10,7 @@ import type {
   TradedSymbolStatus,
   ExchangeOrdersResponse,
   ExchangeTradedSymbolsResponse,
+  KlineData,
 } from '../types';
 
 const API_BASE = '/api';
@@ -268,6 +269,21 @@ export const api = {
     if (endTime) params.set('end_time', endTime);
     const res = await fetch(`${API_BASE}/exchange/orders?${params.toString()}`);
     if (!res.ok) throw new Error('获取交易所订单明细失败');
+    return res.json();
+  },
+
+  // K线数据
+  async getKlines(
+    symbol: string,
+    interval: string = '15m',
+    limit: number = 200
+  ): Promise<KlineData[]> {
+    const params = new URLSearchParams();
+    params.set('symbol', symbol);
+    params.set('interval', interval);
+    params.set('limit', String(limit));
+    const res = await fetch(`${API_BASE}/klines?${params.toString()}`);
+    if (!res.ok) throw new Error('获取K线数据失败');
     return res.json();
   },
 

@@ -12,27 +12,33 @@ import (
 // stopLossMinDistance 计算“止损最小距离”（价格单位）。
 // 目的：避免止损贴得太近导致 3m 噪声/滑点触发；并对山寨币（更高波动）使用更宽的最小距离。
 //
-// 规则（可按需再调参）：
-// - BTC/ETH：minDist = max(0.25% * price, 0.5 * intradayATR14, 0.5 * price * volatilityPct)
-// - Alt：    minDist = max(0.60% * price, 1.0 * intradayATR14, 0.7 * price * volatilityPct)
+// 规则：
+// - BTC/ETH：minDist = max(majorMinPct * price, majorATRMult * ATR14, majorVolMult * price * volatilityPct)
+// - Alt：    minDist = max(altMinPct * price, altATRMult * ATR14, altVolMult * price * volatilityPct)
 //
-// 其中 volatilityPct = normalized_volatility (ATR14/price)（若可用）
-func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data) float64 {
+// 参数通过 StopLossDistanceConfig 配置，零值时使用默认值。
+func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data, slCfg *StopLossDistanceConfig) float64 {
 	if currentPrice <= 0 {
 		return 0
+	}
+
+	// 零值配置 → 使用默认值
+	cfg := DefaultStopLossDistanceConfig()
+	if slCfg != nil && slCfg.AltMinPct > 0 {
+		cfg = *slCfg
 	}
 
 	s := strings.ToUpper(strings.TrimSpace(symbol))
 	isMajor := (s == "BTCUSDT" || s == "ETHUSDT")
 
-	// 百分比底线：山寨币更宽，避免被噪声扫
-	minPct := 0.0060 // 0.60%
-	atrMult := 1.0
-	volMult := 0.7
+	// 根据币种选择参数
+	minPct := cfg.AltMinPct
+	atrMult := cfg.AltATRMult
+	volMult := cfg.AltVolMult
 	if isMajor {
-		minPct = 0.0025 // 0.25%
-		atrMult = 0.5
-		volMult = 0.5
+		minPct = cfg.MajorMinPct
+		atrMult = cfg.MajorATRMult
+		volMult = cfg.MajorVolMult
 	}
 
 	minDist := currentPrice * minPct
@@ -124,7 +130,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 
 				// 计算最小距离：优先用 3m ATR14（价格单位），fallback 到 normalized_volatility
 				// ✅ 分层：BTC/ETH vs Alt（Alt 给更宽的最小距离）
-				minDist := stopLossMinDistance(d.Symbol, currentPrice, md)
+				minDist := stopLossMinDistance(d.Symbol, currentPrice, md, &ctx.StopLossDistance)
 
 				if side == "long" {
 					if d.NewStopLoss > currentPrice-minDist {
@@ -226,7 +232,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		// 说明：这能显著减少“刚开仓就被3m噪声扫损/滑点触发”的情况。
 		if ctx != nil && ctx.MarketDataMap != nil {
 			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 && entryPrice > 0 {
-				minDist := stopLossMinDistance(d.Symbol, entryPrice, md)
+				minDist := stopLossMinDistance(d.Symbol, entryPrice, md, &ctx.StopLossDistance)
 				if d.Action == ActionOpenLong {
 					if (entryPrice - d.StopLoss) < minDist {
 						return fmt.Errorf("开多止损过近：symbol=%s entry=%.4f sl=%.4f 距离=%.4f，必须≥%.4f（BTC/ETH更宽松，山寨币更严格）",
@@ -370,7 +376,13 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		return nil
 	}
 
-	const cooldownMs int64 = 15 * 60 * 1000 // 15分钟
+	// 从配置读取止盈参数，零值使用默认
+	tpCfg := ctx.AutoTakeProfit
+	if tpCfg.Stage0Threshold <= 0 {
+		tpCfg = DefaultAutoTakeProfitConfig()
+	}
+
+	cooldownMs := int64(tpCfg.CooldownMinutes) * 60 * 1000
 
 	// 成本假设：用于把“价格涨跌%”换算成“净ROI%（保证金口径）”
 	taker := 0.0004
@@ -413,7 +425,7 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		}
 
 		// 最高档：直接全平
-		if netROIPct >= 4.0 {
+		if netROIPct >= tpCfg.FullCloseThreshold {
 			closeAction := ActionCloseLong
 			if strings.ToLower(pos.Side) == "short" {
 				closeAction = ActionCloseShort
@@ -421,7 +433,7 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 			decisions = append(decisions, Decision{
 				Symbol:         pos.Symbol,
 				Action:         closeAction,
-				Reasoning:      fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 4%% → 全部平仓（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				Reasoning:      fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ %.1f%% → 全部平仓（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, tpCfg.FullCloseThreshold, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:     100,
 				DecisionSource: "auto_take_profit",
 			})
@@ -429,23 +441,23 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		}
 
 		// 分阶段止盈：只触发一次
-		if st.Stage <= 0 && netROIPct >= 1.0 {
+		if st.Stage <= 0 && netROIPct >= tpCfg.Stage0Threshold {
 			decisions = append(decisions, Decision{
 				Symbol:          pos.Symbol,
 				Action:          ActionPartialClose,
-				ClosePercentage: 50.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 1%% 且 Stage=0 → 部分平仓50%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				ClosePercentage: tpCfg.Stage0ClosePct,
+				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ %.1f%% 且 Stage=0 → 部分平仓%.0f%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, tpCfg.Stage0Threshold, tpCfg.Stage0ClosePct, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:      100,
 				DecisionSource:  "auto_take_profit",
 			})
 			continue
 		}
-		if st.Stage == 1 && netROIPct >= 2.0 {
+		if st.Stage == 1 && netROIPct >= tpCfg.Stage1Threshold {
 			decisions = append(decisions, Decision{
 				Symbol:          pos.Symbol,
 				Action:          ActionPartialClose,
-				ClosePercentage: 30.0,
-				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ 2%% 且 Stage=1 → 部分平仓30%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, pricePct, pos.Leverage, roundTripCostROIPct),
+				ClosePercentage: tpCfg.Stage1ClosePct,
+				Reasoning:       fmt.Sprintf("自动止盈触发：净ROI=%.2f%% ≥ %.1f%% 且 Stage=1 → 部分平仓%.0f%%（价格变动=%.2f%%, 杠杆=%dx, 成本=%.2f%%）", netROIPct, tpCfg.Stage1Threshold, tpCfg.Stage1ClosePct, pricePct, pos.Leverage, roundTripCostROIPct),
 				Confidence:      100,
 				DecisionSource:  "auto_take_profit",
 			})

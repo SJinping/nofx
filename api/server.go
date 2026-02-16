@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"nofx/manager"
+	"nofx/market"
 	traderpkg "nofx/trader"
 	"os"
 	"path/filepath"
@@ -98,6 +99,9 @@ func (s *Server) setupRoutes() {
 		// 交易币种盈亏汇总（按 symbol 聚合）
 		api.GET("/traded-symbols", s.handleTradedSymbols)
 
+		// K线数据（代理Binance fapi）
+		api.GET("/klines", s.handleKlines)
+
 		// 交易所数据（订单/聚合统计）
 		ex := api.Group("/exchange")
 		{
@@ -117,6 +121,10 @@ func (s *Server) setupRoutes() {
 
 		// 系统控制
 		api.POST("/system/pause", s.handleSystemPause)
+
+		// 运行时配置（热更新）
+		api.GET("/config", s.handleGetConfig)
+		api.PUT("/config", s.handleUpdateConfig)
 
 		// 日志浏览接口 (Merged from LogViewer)
 		logs := api.Group("/logs")
@@ -679,16 +687,13 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 				Leverage:   lev,
 			}
 		} else {
-			// 如果开仓但没有在 positions 中（例如重启），依据 openPositions 判断 holding
-			if _, ok := openPositions[it.Symbol+"_long"]; ok {
-				it.Status = tradedSymbolHoldingLong
-				holdingCount++
-			} else if _, ok := openPositions[it.Symbol+"_short"]; ok {
-				it.Status = tradedSymbolHoldingShort
-				holdingCount++
-			} else {
-				it.Status = tradedSymbolClosed
-			}
+			// 实际持仓（交易所查询）中没有该币种 → 视为已平仓。
+			// 不再依赖决策日志的 openPositions 推断，因为止损/止盈单在交易所侧触发
+			// 或手动平仓时，决策日志不会记录对应的平仓事件，会导致误判为持仓中。
+			it.Status = tradedSymbolClosed
+			// 清理残留的 openPositions 记录，确保盈亏统计不受影响
+			delete(openPositions, it.Symbol+"_long")
+			delete(openPositions, it.Symbol+"_short")
 		}
 
 		it.TotalPnL = it.RealizedPnL + it.UnrealizedPnL
@@ -1327,8 +1332,36 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		return
 	}
 
-	// 分析最近20个周期的交易表现
-	performance, err := trader.GetDecisionLogger().AnalyzePerformance(20)
+	// 分析最近N个周期的交易表现（默认100，可通过 limit/trade_limit 调整）
+	limit := 100
+	tradeLimit := 100
+
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	if v := c.Query("trade_limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tradeLimit = n
+		}
+	}
+
+	// basic clamp to avoid huge IO
+	if limit < 1 {
+		limit = 1
+	}
+	if tradeLimit < 0 {
+		tradeLimit = 0
+	}
+	if limit > 5000 {
+		limit = 5000
+	}
+	if tradeLimit > 500 {
+		tradeLimit = 500
+	}
+
+	performance, err := trader.GetDecisionLogger().AnalyzePerformance(limit, tradeLimit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("分析历史表现失败: %v", err),
@@ -1480,6 +1513,99 @@ func (s *Server) handleSystemPause(c *gin.Context) {
 	})
 }
 
+// handleGetConfig 获取运行时配置
+func (s *Server) handleGetConfig(c *gin.Context) {
+	traderID := c.Query("trader_id")
+	configs, err := s.traderManager.GetRuntimeConfig(traderID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 如果只有一个 trader 或指定了 trader_id，直接返回配置（不嵌套 map）
+	if len(configs) == 1 {
+		for id, cfg := range configs {
+			c.JSON(http.StatusOK, gin.H{
+				"trader_id": id,
+				"config":    cfg,
+			})
+			return
+		}
+	}
+
+	// 多个 trader：返回 map
+	c.JSON(http.StatusOK, configs)
+}
+
+// handleUpdateConfig 更新运行时配置
+func (s *Server) handleUpdateConfig(c *gin.Context) {
+	var patch traderpkg.RuntimeConfigPatch
+	if err := c.ShouldBindJSON(&patch); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("无效的请求体: %v", err)})
+		return
+	}
+
+	traderID := c.Query("trader_id")
+	if err := s.traderManager.UpdateRuntimeConfig(traderID, patch); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 返回更新后的配置
+	configs, _ := s.traderManager.GetRuntimeConfig(traderID)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "配置已更新，将在下一个交易周期生效",
+		"config":  configs,
+	})
+}
+
+// handleKlines 返回K线数据（代理Binance fapi）
+func (s *Server) handleKlines(c *gin.Context) {
+	symbol := c.Query("symbol")
+	if symbol == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol参数必填"})
+		return
+	}
+
+	interval := c.DefaultQuery("interval", "15m")
+	limitStr := c.DefaultQuery("limit", "200")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 || limit > 1500 {
+		limit = 200
+	}
+
+	klines, err := market.GetKlines(symbol, interval, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("获取K线数据失败: %v", err)})
+		return
+	}
+
+	type klineJSON struct {
+		OpenTime  int64   `json:"open_time"`
+		Open      float64 `json:"open"`
+		High      float64 `json:"high"`
+		Low       float64 `json:"low"`
+		Close     float64 `json:"close"`
+		Volume    float64 `json:"volume"`
+		CloseTime int64   `json:"close_time"`
+	}
+
+	result := make([]klineJSON, len(klines))
+	for i, k := range klines {
+		result[i] = klineJSON{
+			OpenTime:  k.OpenTime,
+			Open:      k.Open,
+			High:      k.High,
+			Low:       k.Low,
+			Close:     k.Close,
+			Volume:    k.Volume,
+			CloseTime: k.CloseTime,
+		}
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 // Start 启动服务器
 func (s *Server) Start() error {
 	addr := fmt.Sprintf(":%d", s.port)
@@ -1495,10 +1621,13 @@ func (s *Server) Start() error {
 	log.Printf("  • GET  /api/statistics?trader_id=xxx - 指定trader的统计信息")
 	log.Printf("  • GET  /api/equity-history?trader_id=xxx - 指定trader的收益率历史数据")
 	log.Printf("  • GET  /api/performance?trader_id=xxx - 指定trader的AI学习表现分析")
+	log.Printf("  • GET  /api/klines?symbol=BTCUSDT&interval=15m&limit=200 - K线数据")
 	log.Printf("  • GET  /api/error-stats?trader_id=xxx - 指定trader的错误统计")
 	log.Printf("  • GET  /api/error-stats/recent?trader_id=xxx - 指定trader最近的错误列表")
 	log.Printf("  • POST /api/close-all-positions - 平掉所有模型的所有持仓")
 	log.Printf("  • POST /api/close-positions?trader_id=xxx - 平掉指定trader的所有持仓")
+	log.Printf("  • GET  /api/config?trader_id=xxx - 获取运行时配置")
+	log.Printf("  • PUT  /api/config?trader_id=xxx - 更新运行时配置（热更新）")
 	log.Printf("  • GET  /health               - 健康检查")
 	log.Println()
 

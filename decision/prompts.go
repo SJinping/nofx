@@ -214,8 +214,8 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("## 止损距离与仓位联动，按币种分层（重要）\n\n")
 	sb.WriteString("山寨币波动显著大于BTC/ETH，止损如果贴得过近，会被3分钟噪声/滑点频繁扫掉。\n")
 	sb.WriteString("必须按币种分层设置止损“距离”，并与仓位联动：\n")
-	sb.WriteString("- **BTC/ETH（主流）**：止损距离建议 ≥ max(0.25%价格, 0.5×`intraday_atr14 (3m)`)。\n")
-	sb.WriteString("- **山寨币（除BTC/ETH）**：止损距离建议 ≥ max(0.60%价格, 1.0×`intraday_atr14 (3m)`)。\n")
+	sb.WriteString("- **BTC/ETH（主流）**：止损距离建议 ≥ max(0.15%价格, 0.3×`intraday_atr14 (3m)`)。\n")
+	sb.WriteString("- **山寨币（除BTC/ETH）**：止损距离建议 ≥ max(0.35%价格, 0.6×`intraday_atr14 (3m)`)。\n")
 	sb.WriteString("当为山寨币给出更宽止损时，必须同步降低 `position_size_usd`，以保持单笔风险可控（不要因为止损变宽而把风险放大）。\n\n")
 	sb.WriteString("- **检查已有持仓**：**核心自问**：入场时的技术理由（如EMA支撑、多头排列）是否已经彻底破坏？如果只是正常的利润回撤，严禁随意执行 `close_long/short`。如果只是想收紧风险，请使用 `update_stop_loss` 而非直接平仓。\n") // 强化
 	sb.WriteString("\n")

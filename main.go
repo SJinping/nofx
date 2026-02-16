@@ -6,6 +6,7 @@ import (
 	"nofx/api"
 	"nofx/config"
 	"nofx/manager"
+	"nofx/market"
 	"nofx/pool"
 	"nofx/stats"
 	"os"
@@ -35,6 +36,14 @@ func main() {
 	log.Printf("✓ 配置加载成功，共%d个trader参赛", len(cfg.Traders))
 	fmt.Println()
 
+	// Binance market data source: mainnet vs testnet
+	if cfg.BinanceTestnet {
+		market.SetFAPIBaseURL("https://testnet.binancefuture.com")
+		log.Printf("🧪 Binance Futures 测试网模式已启用（market data base: %s）", "https://testnet.binancefuture.com")
+	} else {
+		market.SetFAPIBaseURL("https://fapi.binance.com")
+	}
+
 	// 设置默认主流币种列表
 	pool.SetDefaultCoins(cfg.DefaultCoins)
 
@@ -54,8 +63,8 @@ func main() {
 		log.Printf("✓ 已配置OI Top API")
 	}
 
-	// 创建TraderManager
-	traderManager := manager.NewTraderManager()
+	// 创建TraderManager（传入配置文件路径，用于运行时配置持久化）
+	traderManager := manager.NewTraderManager(configFile)
 
 	// 添加所有trader
 	for i, traderCfg := range cfg.Traders {
@@ -68,8 +77,11 @@ func main() {
 			cfg.MaxDailyLoss,
 			cfg.MaxDrawdown,
 			cfg.StopTradingMinutes,
-			cfg.Leverage,        // 传递杠杆配置
-			cfg.EnableRecording, // 传递录制开关
+			cfg.Leverage,          // 传递杠杆配置
+			cfg.EnableRecording,   // 传递录制开关
+			cfg.BinanceTestnet,    // Binance 主网/测试网
+			cfg.StopLossDistance,   // 止损最小距离配置
+			cfg.AutoTakeProfit,    // 自动止盈配置
 		)
 		if err != nil {
 			log.Fatalf("❌ 初始化trader失败: %v", err)

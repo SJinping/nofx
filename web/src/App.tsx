@@ -6,6 +6,7 @@ import { CompetitionPage } from './components/CompetitionPage';
 import { LogViewer } from './pages/LogViewer';
 import AILearning from './components/AILearning';
 import { TradedSymbolsList } from './components/TradedSymbolsList';
+import { PriceChartModal } from './components/PriceChartModal';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { t, type Language } from './i18n/translations';
 import type {
@@ -318,6 +319,8 @@ function TraderDetailsPage({
 }) {
   // 添加平仓状态
   const [isClosing, setIsClosing] = useState(false);
+  // 价格曲线弹窗状态
+  const [chartSymbol, setChartSymbol] = useState<string | null>(null);
 
   // 平仓处理函数
   const handleCloseAllPositions = async () => {
@@ -442,7 +445,10 @@ function TraderDetailsPage({
 
           {/* Traded Symbols PnL Details */}
           <div className="animate-slide-in" style={{ animationDelay: '0.12s' }}>
-            <TradedSymbolsList traderId={selectedTrader.trader_id} />
+            <TradedSymbolsList
+              traderId={selectedTrader.trader_id}
+              onSymbolClick={(sym) => setChartSymbol(sym)}
+            />
           </div>
 
           {/* Current Positions */}
@@ -595,6 +601,14 @@ function TraderDetailsPage({
       <div className="mb-6 animate-slide-in" style={{ animationDelay: '0.3s' }}>
         <AILearning traderId={selectedTrader.trader_id} />
       </div>
+
+      {/* Price Chart Modal */}
+      <PriceChartModal
+        symbol={chartSymbol}
+        traderId={selectedTrader.trader_id}
+        isOpen={!!chartSymbol}
+        onClose={() => setChartSymbol(null)}
+      />
     </div>
   );
 }

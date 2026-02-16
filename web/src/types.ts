@@ -227,3 +227,14 @@ export interface CompetitionData {
   traders: CompetitionTraderData[];
   count: number;
 }
+
+// K线数据
+export interface KlineData {
+  open_time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  close_time: number;
+}
