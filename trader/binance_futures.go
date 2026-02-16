@@ -330,9 +330,16 @@ func (t *FuturesTrader) SetMarginType(symbol string, marginType futures.MarginTy
 		Do(context.Background())
 
 	if err != nil {
+		errMsg := err.Error()
 		// 如果已经是该模式，不算错误
-		if contains(err.Error(), "No need to change") {
+		if contains(errMsg, "No need to change") {
 			log.Printf("  ✓ %s 保证金模式已是 %s", symbol, marginType)
+			return nil
+		}
+		// -4067: 存在挂单时无法切换保证金模式，可能是其他交易对的挂单或异步未完成
+		// 此时大概率已经是目标模式，记录警告但不中断交易流程
+		if contains(errMsg, "-4067") || contains(errMsg, "Position side cannot be changed") {
+			log.Printf("  ⚠ %s 存在挂单无法切换保证金模式，当前模式可能已是 %s，继续执行", symbol, marginType)
 			return nil
 		}
 		return fmt.Errorf("设置保证金模式失败: %w", err)
@@ -354,13 +361,13 @@ func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) 
 		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
 	}
 
-	// 设置杠杆
-	if err := t.SetLeverage(symbol, leverage); err != nil {
+	// 设置逐仓模式（在取消挂单后立即执行，避免挂单干扰）
+	if err := t.SetMarginType(symbol, futures.MarginTypeIsolated); err != nil {
 		return nil, err
 	}
 
-	// 设置逐仓模式
-	if err := t.SetMarginType(symbol, futures.MarginTypeIsolated); err != nil {
+	// 设置杠杆
+	if err := t.SetLeverage(symbol, leverage); err != nil {
 		return nil, err
 	}
 
@@ -400,13 +407,13 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
 	}
 
-	// 设置杠杆
-	if err := t.SetLeverage(symbol, leverage); err != nil {
+	// 设置逐仓模式（在取消挂单后立即执行，避免挂单干扰）
+	if err := t.SetMarginType(symbol, futures.MarginTypeIsolated); err != nil {
 		return nil, err
 	}
 
-	// 设置逐仓模式
-	if err := t.SetMarginType(symbol, futures.MarginTypeIsolated); err != nil {
+	// 设置杠杆
+	if err := t.SetLeverage(symbol, leverage); err != nil {
 		return nil, err
 	}
 
