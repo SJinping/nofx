@@ -556,12 +556,38 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 
 // CancelAllOrders 取消该币种的所有挂单
 func (t *FuturesTrader) CancelAllOrders(symbol string) error {
+	// 1. 取消普通订单
 	err := t.client.NewCancelAllOpenOrdersService().
 		Symbol(symbol).
 		Do(context.Background())
 
 	if err != nil {
 		return fmt.Errorf("取消挂单失败: %w", err)
+	}
+
+	// 2. 同时取消该 symbol 的所有 Algo 条件单（止损/止盈）
+	// 避免止损触发平仓后，孤儿止盈单残留导致后续 SetMarginType 报 -4067
+	algoOrders, algoErr := t.client.NewListOpenAlgoOrdersService().
+		AlgoType(futures.OrderAlgoTypeConditional).
+		Symbol(symbol).
+		Do(context.Background())
+	if algoErr != nil {
+		log.Printf("  ⚠ 获取 %s algo 条件单失败（跳过）: %v", symbol, algoErr)
+	} else if len(algoOrders) > 0 {
+		cancelled := 0
+		for _, o := range algoOrders {
+			if o.AlgoId == 0 {
+				continue
+			}
+			if _, err := t.client.NewCancelAlgoOrderService().AlgoID(o.AlgoId).Do(context.Background()); err != nil {
+				log.Printf("  ⚠ 取消 algo 条件单失败: algoId=%d err=%v", o.AlgoId, err)
+			} else {
+				cancelled++
+			}
+		}
+		if cancelled > 0 {
+			log.Printf("  ✓ 已取消 %s 的 %d 个 algo 条件单", symbol, cancelled)
+		}
 	}
 
 	log.Printf("  ✓ 已取消 %s 的所有挂单", symbol)
