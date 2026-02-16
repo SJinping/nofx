@@ -246,13 +246,13 @@ func GetWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 	need3m := maxInt(80, outPts+60)
 
 	// 获取3分钟K线数据
-	klines3m, err := getKlines(symbol, "3m", need3m)
+	klines3m, err := GetKlines(symbol, "3m", need3m)
 	if err != nil {
 		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
 	}
 
 	// 获取4小时K线数据
-	klines4h, err := getKlines(symbol, "4h", 60) // 多获取用于计算指标
+	klines4h, err := GetKlines(symbol, "4h", 60) // 多获取用于计算指标
 	if err != nil {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
 	}
@@ -312,7 +312,7 @@ func GetWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 	// 可选：1小时中期上下文（用于更长日内结构）
 	var midTermData *MidTermData
 	if opt.IncludeMidTermContext {
-		klines1h, err := getKlines(symbol, "1h", 80)
+		klines1h, err := GetKlines(symbol, "1h", 80)
 		if err == nil && len(klines1h) > 0 {
 			midTermData = calculateMidTermData(klines1h)
 		}
@@ -336,8 +336,8 @@ func GetWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 	}, nil
 }
 
-// getKlines 从Binance获取K线数据
-func getKlines(symbol, interval string, limit int) ([]Kline, error) {
+// GetKlines 从Binance获取K线数据
+func GetKlines(symbol, interval string, limit int) ([]Kline, error) {
 	url := fmt.Sprintf("%s/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
 		fapiBaseURL,
 		symbol, interval, limit)
