@@ -55,7 +55,7 @@ func SetQwenAPIKey(apiKey, secretKey string) {
 	defaultConfig.APIKey = apiKey
 	defaultConfig.SecretKey = secretKey
 	defaultConfig.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	defaultConfig.Model = "qwen-max" // 可选: qwen-turbo, qwen-plus, qwen-max
+	defaultConfig.Model = "qwen3.5-plus"
 }
 
 // SetCustomAPI 设置自定义OpenAI兼容API
