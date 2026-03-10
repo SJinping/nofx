@@ -620,20 +620,69 @@ func (t *FuturesTrader) ListOrders(symbol string, startTimeMs, endTimeMs int64, 
 		return nil, fmt.Errorf("ListOrders: symbol 不能为空")
 	}
 
-	svc := t.client.NewListOrdersService().Symbol(symbol)
-	if startTimeMs > 0 {
-		svc = svc.StartTime(startTimeMs)
-	}
-	if endTimeMs > 0 {
-		svc = svc.EndTime(endTimeMs)
-	}
-	if limit > 0 {
-		svc = svc.Limit(limit)
+	if startTimeMs > 0 && endTimeMs > 0 && startTimeMs > endTimeMs {
+		return nil, fmt.Errorf("ListOrders: startTimeMs(%d) > endTimeMs(%d)", startTimeMs, endTimeMs)
 	}
 
-	orders, err := svc.Do(context.Background())
-	if err != nil {
-		return nil, err
+	fetchRange := func(rangeStartMs, rangeEndMs int64, rangeLimit int) ([]*futures.Order, error) {
+		svc := t.client.NewListOrdersService().Symbol(symbol)
+		if rangeStartMs > 0 {
+			svc = svc.StartTime(rangeStartMs)
+		}
+		if rangeEndMs > 0 {
+			svc = svc.EndTime(rangeEndMs)
+		}
+		if rangeLimit > 0 {
+			svc = svc.Limit(rangeLimit)
+		}
+		return svc.Do(context.Background())
+	}
+
+	orders := make([]*futures.Order, 0)
+	// Binance Futures /fapi/v1/allOrders: 当同时传 startTime + endTime 时，时间区间最大 7 天。
+	const maxWindowMs int64 = 7 * 24 * 60 * 60 * 1000
+
+	// 超过 7 天时，按 7 天窗口倒序分片拉取，避免 -4165。
+	// 倒序可以在设置 limit 时优先拿到“最近”的订单。
+	if startTimeMs > 0 && endTimeMs > 0 && (endTimeMs-startTimeMs) > maxWindowMs {
+		cursorEnd := endTimeMs
+		remaining := limit
+
+		for {
+			rangeStart := cursorEnd - maxWindowMs + 1
+			if rangeStart < startTimeMs {
+				rangeStart = startTimeMs
+			}
+
+			rangeLimit := 0
+			if remaining > 0 {
+				rangeLimit = remaining
+			}
+
+			chunk, err := fetchRange(rangeStart, cursorEnd, rangeLimit)
+			if err != nil {
+				return nil, err
+			}
+			orders = append(orders, chunk...)
+
+			if remaining > 0 {
+				remaining -= len(chunk)
+				if remaining <= 0 {
+					break
+				}
+			}
+
+			if rangeStart <= startTimeMs {
+				break
+			}
+			cursorEnd = rangeStart - 1
+		}
+	} else {
+		var err error
+		orders, err = fetchRange(startTimeMs, endTimeMs, limit)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	parseF := func(s string) float64 {
