@@ -490,6 +490,15 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		it.LastTradeTime = ts.Format(time.RFC3339)
 	}
 
+	isTradeAction := func(action string) bool {
+		switch action {
+		case "open_long", "open_short", "close_long", "close_short", "partial_close":
+			return true
+		default:
+			return false
+		}
+	}
+
 	// 遍历日志（GetLatestRecords 返回已按时间从旧到新）
 	for _, record := range records {
 		if record == nil {
@@ -497,6 +506,10 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		}
 		for _, action := range record.Decisions {
 			if !action.Success {
+				continue
+			}
+			// 仅统计真实交易动作，忽略 wait/hold/update_stop_loss/update_take_profit 等。
+			if !isTradeAction(action.Action) {
 				continue
 			}
 
@@ -639,6 +652,8 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		if p.Symbol == "" {
 			continue
 		}
+		// 当前持仓中的币种即使没有历史成交，也应在列表中展示。
+		ensureItem(p.Symbol)
 		posBySymbol[p.Symbol] = map[string]interface{}{
 			"side":           p.Side,
 			"entry_price":    p.EntryPrice,
