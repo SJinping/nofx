@@ -940,3 +940,8 @@ func (t *AsterTrader) FormatQuantity(symbol string, quantity float64) (string, e
 func (t *AsterTrader) ListOrders(symbol string, startTimeMs, endTimeMs int64, limit int) ([]OrderRecord, error) {
 	return nil, fmt.Errorf("aster trader: ListOrders not supported")
 }
+
+// ListIncome Aster 版本暂不支持收支流水
+func (t *AsterTrader) ListIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error) {
+	return nil, fmt.Errorf("aster trader: ListIncome not supported")
+}

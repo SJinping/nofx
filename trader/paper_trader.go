@@ -485,6 +485,11 @@ func (pt *PaperTrader) ListOrders(symbol string, startTimeMs, endTimeMs int64, l
 	return nil, fmt.Errorf("paper trader: ListOrders not supported")
 }
 
+// ListIncome 纸上交易不支持收支流水
+func (pt *PaperTrader) ListIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error) {
+	return nil, fmt.Errorf("paper trader: ListIncome not supported")
+}
+
 // GetConfig 获取纸上交易配置
 func (pt *PaperTrader) GetConfig() *PaperTradingConfig {
 	pt.mutex.RLock()

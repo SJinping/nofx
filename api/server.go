@@ -207,6 +207,11 @@ type exchangeOrderStats struct {
 	// Estimated fees (based on assumed taker fee; order endpoint doesn't return commission)
 	EstimatedFee float64 `json:"estimated_fee"`
 
+	// Real income from exchange (via /fapi/v1/income; zero if unavailable)
+	RealCommission float64 `json:"real_commission"` // 真实手续费（负数=支出）
+	RealFundingFee float64 `json:"real_funding_fee"` // 真实资金费用（正=收到, 负=支出）
+	RealRealizedPnL float64 `json:"real_realized_pnl"` // 交易所已实现盈亏
+
 	// Pairing-based realized PnL (order-based estimate)
 	RealizedPnL float64 `json:"realized_pnl"`
 	Trades      int     `json:"trades"`
@@ -235,10 +240,13 @@ type exchangeOrdersResponse struct {
 }
 
 type exchangeTradedSymbolsSummary struct {
-	TotalSymbols      int     `json:"total_symbols"`
-	TotalRealizedPnL  float64 `json:"total_realized_pnl"`
-	TotalEstimatedFee float64 `json:"total_estimated_fee"`
-	TotalTrades       int     `json:"total_trades"`
+	TotalSymbols       int     `json:"total_symbols"`
+	TotalRealizedPnL   float64 `json:"total_realized_pnl"`
+	TotalEstimatedFee  float64 `json:"total_estimated_fee"`
+	TotalTrades        int     `json:"total_trades"`
+	TotalCommission    float64 `json:"total_commission"`
+	TotalFundingFee    float64 `json:"total_funding_fee"`
+	TotalRealRealized  float64 `json:"total_real_realized_pnl"`
 }
 
 type exchangeTradedSymbolsResponse struct {
@@ -818,6 +826,38 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 
 	feeRate := at.GetAssumedTakerFeeRate()
 
+	// Best-effort: 拉取所有 symbol 的 income 记录（资金费、手续费、已实现盈亏）
+	type symbolIncome struct {
+		Commission  float64
+		FundingFee  float64
+		RealizedPnL float64
+	}
+	incomeBySymbol := make(map[string]*symbolIncome, len(symbols))
+	allIncome, incomeErr := at.GetIncome("", "", startMs, endMs, 1000)
+	if incomeErr != nil {
+		log.Printf("⚠️ exchange traded-symbols: GetIncome failed (best-effort): trader=%s err=%v", traderID, incomeErr)
+	} else {
+		for _, rec := range allIncome {
+			sym := rec.Symbol
+			if sym == "" {
+				continue
+			}
+			si, ok := incomeBySymbol[sym]
+			if !ok {
+				si = &symbolIncome{}
+				incomeBySymbol[sym] = si
+			}
+			switch rec.IncomeType {
+			case "COMMISSION":
+				si.Commission += rec.Income
+			case "FUNDING_FEE":
+				si.FundingFee += rec.Income
+			case "REALIZED_PNL":
+				si.RealizedPnL += rec.Income
+			}
+		}
+	}
+
 	resp := exchangeTradedSymbolsResponse{
 		Symbols: make([]exchangeOrderStats, 0, len(symbols)),
 	}
@@ -825,15 +865,24 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 	for _, sym := range symbols {
 		orders, e := at.GetOrders(sym, startMs, endMs, limit)
 		if e != nil {
-			// 单个 symbol 失败不阻断整体（best-effort）
 			log.Printf("⚠️ exchange traded-symbols: ListOrders failed: trader=%s symbol=%s err=%v", traderID, sym, e)
 			continue
 		}
 		st := calcOrderStatsFromOrders(sym, orders, feeRate)
+
+		if si, ok := incomeBySymbol[sym]; ok {
+			st.RealCommission = si.Commission
+			st.RealFundingFee = si.FundingFee
+			st.RealRealizedPnL = si.RealizedPnL
+		}
+
 		resp.Symbols = append(resp.Symbols, st)
 		resp.Summary.TotalRealizedPnL += st.RealizedPnL
 		resp.Summary.TotalEstimatedFee += st.EstimatedFee
 		resp.Summary.TotalTrades += st.Trades
+		resp.Summary.TotalCommission += st.RealCommission
+		resp.Summary.TotalFundingFee += st.RealFundingFee
+		resp.Summary.TotalRealRealized += st.RealRealizedPnL
 	}
 
 	resp.Summary.TotalSymbols = len(resp.Symbols)

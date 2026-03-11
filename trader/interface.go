@@ -26,6 +26,18 @@ type OrderRecord struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// IncomeRecord 标准化收支记录（资金费用、手续费、已实现盈亏等）
+// 对应 Binance Futures /fapi/v1/income
+type IncomeRecord struct {
+	Symbol     string  `json:"symbol"`
+	IncomeType string  `json:"income_type"` // FUNDING_FEE, COMMISSION, REALIZED_PNL, TRANSFER, ...
+	Income     float64 `json:"income"`      // 正=收入, 负=支出
+	Asset      string  `json:"asset"`       // USDT / BNB / ...
+	Time       int64   `json:"time"`        // unix milli
+	TranID     int64   `json:"tran_id"`
+	TradeID    string  `json:"trade_id,omitempty"`
+}
+
 // Trader 交易器统一接口
 // 支持多个交易平台（币安、Hyperliquid等）
 type Trader interface {
@@ -68,4 +80,8 @@ type Trader interface {
 	// ListOrders 获取某币种在时间范围内的订单历史（平台不支持可返回 error）
 	// startTimeMs/endTimeMs 为毫秒时间戳（UnixMilli），limit 为最大返回数量（0 表示使用默认值）
 	ListOrders(symbol string, startTimeMs, endTimeMs int64, limit int) ([]OrderRecord, error)
+
+	// ListIncome 获取收支流水（资金费用、手续费、已实现盈亏等）
+	// incomeType 为空时返回所有类型；常用值: "FUNDING_FEE", "COMMISSION", "REALIZED_PNL"
+	ListIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error)
 }

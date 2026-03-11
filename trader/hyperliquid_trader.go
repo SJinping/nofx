@@ -578,6 +578,11 @@ func (t *HyperliquidTrader) ListOrders(symbol string, startTimeMs, endTimeMs int
 	return nil, fmt.Errorf("hyperliquid trader: ListOrders not supported")
 }
 
+// ListIncome Hyperliquid 版本暂不支持收支流水
+func (t *HyperliquidTrader) ListIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error) {
+	return nil, fmt.Errorf("hyperliquid trader: ListIncome not supported")
+}
+
 // FormatQuantity 格式化数量到正确的精度
 func (t *HyperliquidTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	coin := convertSymbolToHyperliquid(symbol)

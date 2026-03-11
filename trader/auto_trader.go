@@ -1498,6 +1498,11 @@ func (at *AutoTrader) GetOrders(symbol string, startTimeMs, endTimeMs int64, lim
 	return orders, nil
 }
 
+// GetIncome 获取收支流水（资金费用、手续费等）
+func (at *AutoTrader) GetIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error) {
+	return at.trader.ListIncome(symbol, incomeType, startTimeMs, endTimeMs, limit)
+}
+
 // GetErrorStats 获取错误统计
 func (at *AutoTrader) GetErrorStats() *stats.ErrorStats {
 	return at.errorStats

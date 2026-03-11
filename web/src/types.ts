@@ -170,6 +170,9 @@ export interface ExchangeOrderStats {
   total_executed_qty: number;
   total_notional: number;
   estimated_fee: number;
+  real_commission: number;
+  real_funding_fee: number;
+  real_realized_pnl: number;
   realized_pnl: number;
   trades: number;
   win_count: number;
@@ -195,6 +198,9 @@ export interface ExchangeTradedSymbolsSummary {
   total_realized_pnl: number;
   total_estimated_fee: number;
   total_trades: number;
+  total_commission: number;
+  total_funding_fee: number;
+  total_real_realized_pnl: number;
 }
 
 export interface ExchangeTradedSymbolsResponse {

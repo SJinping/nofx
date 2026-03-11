@@ -725,6 +725,49 @@ func (t *FuturesTrader) ListOrders(symbol string, startTimeMs, endTimeMs int64, 
 	return out, nil
 }
 
+// ListIncome 获取收支流水（Binance Futures: /fapi/v1/income）
+func (t *FuturesTrader) ListIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error) {
+	svc := t.client.NewGetIncomeHistoryService()
+	if symbol != "" {
+		svc = svc.Symbol(strings.ToUpper(strings.TrimSpace(symbol)))
+	}
+	if incomeType != "" {
+		svc = svc.IncomeType(incomeType)
+	}
+	if startTimeMs > 0 {
+		svc = svc.StartTime(startTimeMs)
+	}
+	if endTimeMs > 0 {
+		svc = svc.EndTime(endTimeMs)
+	}
+	if limit > 0 {
+		svc = svc.Limit(int64(limit))
+	}
+
+	history, err := svc.Do(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("ListIncome: %w", err)
+	}
+
+	out := make([]IncomeRecord, 0, len(history))
+	for _, h := range history {
+		if h == nil {
+			continue
+		}
+		income, _ := strconv.ParseFloat(h.Income, 64)
+		out = append(out, IncomeRecord{
+			Symbol:     h.Symbol,
+			IncomeType: h.IncomeType,
+			Income:     income,
+			Asset:      h.Asset,
+			Time:       h.Time,
+			TranID:     h.TranID,
+			TradeID:    h.TradeID,
+		})
+	}
+	return out, nil
+}
+
 // CalculatePositionSize 计算仓位大小
 func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float64, leverage int) float64 {
 	riskAmount := balance * (riskPercent / 100.0)
