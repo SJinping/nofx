@@ -83,6 +83,8 @@ func (s *Server) setupRoutes() {
 	{
 		// 竞赛总览
 		api.GET("/competition", s.handleCompetition)
+		// 市场概览（BTC/ETH/SOL 价格+涨跌+资金费率 + Fear&Greed）
+		api.GET("/market-overview", s.handleMarketOverview)
 
 		// Trader列表
 		api.GET("/traders", s.handleTraderList)
@@ -1668,6 +1670,94 @@ func (s *Server) handleKlines(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+// ===== Market Overview =====
+
+type marketCoinOverview struct {
+	Symbol       string  `json:"symbol"`
+	Price        float64 `json:"price"`
+	Change24h    float64 `json:"change_24h"`     // percent
+	FundingRate  float64 `json:"funding_rate"`
+}
+
+type fearGreedData struct {
+	Value      int    `json:"value"`       // 0-100
+	Label      string `json:"label"`       // "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
+}
+
+type marketOverviewResponse struct {
+	Coins     []marketCoinOverview `json:"coins"`
+	FearGreed fearGreedData        `json:"fear_greed"`
+	UpdatedAt string               `json:"updated_at"`
+}
+
+func (s *Server) handleMarketOverview(c *gin.Context) {
+	symbols := []string{"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+	baseURL := market.GetFAPIBaseURL()
+
+	coins := make([]marketCoinOverview, 0, len(symbols))
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for _, sym := range symbols {
+		co := marketCoinOverview{Symbol: sym}
+
+		// 24h ticker: price + priceChangePercent
+		if resp, err := client.Get(fmt.Sprintf("%s/fapi/v1/ticker/24hr?symbol=%s", baseURL, sym)); err == nil {
+			defer resp.Body.Close()
+			if body, err := ioutil.ReadAll(resp.Body); err == nil {
+				var t struct {
+					LastPrice          string `json:"lastPrice"`
+					PriceChangePercent string `json:"priceChangePercent"`
+				}
+				if json.Unmarshal(body, &t) == nil {
+					co.Price, _ = strconv.ParseFloat(t.LastPrice, 64)
+					co.Change24h, _ = strconv.ParseFloat(t.PriceChangePercent, 64)
+				}
+			}
+		}
+
+		// funding rate
+		if resp, err := client.Get(fmt.Sprintf("%s/fapi/v1/premiumIndex?symbol=%s", baseURL, sym)); err == nil {
+			defer resp.Body.Close()
+			if body, err := ioutil.ReadAll(resp.Body); err == nil {
+				var f struct {
+					LastFundingRate string `json:"lastFundingRate"`
+				}
+				if json.Unmarshal(body, &f) == nil {
+					co.FundingRate, _ = strconv.ParseFloat(f.LastFundingRate, 64)
+				}
+			}
+		}
+
+		coins = append(coins, co)
+	}
+
+	// Fear & Greed Index (best-effort, external API)
+	fg := fearGreedData{Value: -1, Label: "N/A"}
+	if resp, err := client.Get("https://api.alternative.me/fng/?limit=1"); err == nil {
+		defer resp.Body.Close()
+		if body, err := ioutil.ReadAll(resp.Body); err == nil {
+			var result struct {
+				Data []struct {
+					Value              string `json:"value"`
+					ValueClassification string `json:"value_classification"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(body, &result) == nil && len(result.Data) > 0 {
+				if v, e := strconv.Atoi(result.Data[0].Value); e == nil {
+					fg.Value = v
+					fg.Label = result.Data[0].ValueClassification
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, marketOverviewResponse{
+		Coins:     coins,
+		FearGreed: fg,
+		UpdatedAt: time.Now().Format(time.RFC3339),
+	})
 }
 
 // Start 启动服务器

@@ -234,6 +234,25 @@ export interface CompetitionData {
   count: number;
 }
 
+// 市场概览
+export interface MarketCoinOverview {
+  symbol: string;
+  price: number;
+  change_24h: number;
+  funding_rate: number;
+}
+
+export interface FearGreedData {
+  value: number;
+  label: string;
+}
+
+export interface MarketOverviewResponse {
+  coins: MarketCoinOverview[];
+  fear_greed: FearGreedData;
+  updated_at: string;
+}
+
 // K线数据
 export interface KlineData {
   open_time: number;

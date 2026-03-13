@@ -1,6 +1,6 @@
 import useSWR, { useSWRConfig } from 'swr';
 import { api } from '../lib/api';
-import type { CompetitionData } from '../types';
+import type { CompetitionData, MarketOverviewResponse } from '../types';
 import { ComparisonChart } from './ComparisonChart';
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
@@ -15,6 +15,12 @@ export function CompetitionPage() {
       refreshInterval: 5000,
       revalidateOnFocus: true,
     }
+  );
+
+  const { data: marketOverview } = useSWR<MarketOverviewResponse>(
+    'market-overview',
+    api.getMarketOverview,
+    { refreshInterval: 15000 }
   );
 
   if (!competition || !competition.traders) {
@@ -120,6 +126,63 @@ export function CompetitionPage() {
           </button>
         </div>
       </div>
+
+      {/* Market Overview Bar */}
+      {marketOverview && (
+        <div className="binance-card px-5 py-3 animate-slide-in" style={{ animationDelay: '0.05s' }}>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            {/* Coins */}
+            <div className="flex items-center gap-6">
+              {marketOverview.coins.map((coin) => {
+                const name = coin.symbol.replace('USDT', '');
+                const changeColor = coin.change_24h >= 0 ? '#0ECB81' : '#F6465D';
+                const arrow = coin.change_24h >= 0 ? '▲' : '▼';
+                const frPct = (coin.funding_rate * 100).toFixed(4);
+                const frColor = coin.funding_rate > 0 ? '#F6465D' : coin.funding_rate < 0 ? '#0ECB81' : '#848E9C';
+                return (
+                  <div key={coin.symbol} className="flex items-center gap-3">
+                    <span className="text-sm font-bold" style={{ color: '#EAECEF' }}>{name}</span>
+                    <span className="font-mono text-sm font-semibold" style={{ color: '#EAECEF' }}>
+                      ${coin.price < 1 ? coin.price.toFixed(4) : coin.price < 100 ? coin.price.toFixed(2) : coin.price.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                    <span className="font-mono text-xs font-semibold" style={{ color: changeColor }}>
+                      {arrow} {Math.abs(coin.change_24h).toFixed(2)}%
+                    </span>
+                    <span className="text-xs" style={{ color: '#848E9C' }}>
+                      FR <span className="font-mono" style={{ color: frColor }}>{frPct}%</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Fear & Greed */}
+            {marketOverview.fear_greed.value >= 0 && (() => {
+              const v = marketOverview.fear_greed.value;
+              const fgColor = v <= 25 ? '#F6465D' : v <= 45 ? '#FF8F00' : v <= 55 ? '#848E9C' : v <= 75 ? '#0ECB81' : '#00E676';
+              const labelMap: Record<string, string> = {
+                'Extreme Fear': '极度恐惧',
+                'Fear': '恐惧',
+                'Neutral': '中性',
+                'Greed': '贪婪',
+                'Extreme Greed': '极度贪婪',
+              };
+              const label = language === 'zh' ? (labelMap[marketOverview.fear_greed.label] || marketOverview.fear_greed.label) : marketOverview.fear_greed.label;
+              return (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs" style={{ color: '#848E9C' }}>
+                    {language === 'zh' ? '情绪' : 'Sentiment'}
+                  </span>
+                  <span className="font-mono text-sm font-bold" style={{ color: fgColor }}>{v}</span>
+                  <span className="text-xs font-semibold px-1.5 py-0.5 rounded" style={{ background: `${fgColor}18`, color: fgColor }}>
+                    {label}
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {/* Left/Right Split: Performance Chart + Leaderboard */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

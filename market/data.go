@@ -37,6 +37,11 @@ func SetFAPIBaseURL(baseURL string) {
 	fapiBaseURL = baseURL
 }
 
+// GetFAPIBaseURL returns the current FAPI base URL (for reuse outside this package).
+func GetFAPIBaseURL() string {
+	return fapiBaseURL
+}
+
 func fapiHostForDialTest() string {
 	u, err := url.Parse(fapiBaseURL)
 	if err == nil && u.Host != "" {

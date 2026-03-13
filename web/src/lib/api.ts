@@ -11,6 +11,7 @@ import type {
   ExchangeOrdersResponse,
   ExchangeTradedSymbolsResponse,
   KlineData,
+  MarketOverviewResponse,
 } from '../types';
 
 const API_BASE = '/api';
@@ -21,6 +22,12 @@ export const api = {
   async getCompetition(): Promise<CompetitionData> {
     const res = await fetch(`${API_BASE}/competition`);
     if (!res.ok) throw new Error('获取竞赛数据失败');
+    return res.json();
+  },
+
+  async getMarketOverview(): Promise<MarketOverviewResponse> {
+    const res = await fetch(`${API_BASE}/market-overview`);
+    if (!res.ok) throw new Error('获取市场概览失败');
     return res.json();
   },
 
