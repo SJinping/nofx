@@ -191,6 +191,21 @@ func fetchMarketDataForContext(ctx *Context) error {
 		ctx.MarketDataMap[symbol] = data
 	}
 
+	// NOFX Data: best-effort 批量获取 AI300 + 挂单热力图
+	nofxSymbols := make([]string, 0, len(ctx.MarketDataMap))
+	for sym := range ctx.MarketDataMap {
+		nofxSymbols = append(nofxSymbols, sym)
+	}
+	ai300Map, heatmapMap := market.BatchFetchNofxData(nofxSymbols)
+	for sym, data := range ctx.MarketDataMap {
+		if sig, ok := ai300Map[sym]; ok {
+			data.NofxAI300 = sig
+		}
+		if hm, ok := heatmapMap[sym]; ok {
+			data.NofxHeatmap = hm
+		}
+	}
+
 	// 加载OI Top数据（不影响主流程）
 	oiPositions, err := pool.GetOITopPositions()
 	if err == nil {

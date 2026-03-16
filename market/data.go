@@ -121,7 +121,11 @@ type Data struct {
 	IntradaySeries    *IntradayData
 	IntradayATR14     float64 // 3分钟K线 ATR14（价格单位）；用于短线止损距离等
 	LongerTermContext *LongerTermData
-	MidTermContext    *MidTermData // 1小时级别上下文（仅在需要时填充，用于“更长日内结构”）
+	MidTermContext    *MidTermData
+
+	// NOFX Data API (best-effort, nil = unavailable)
+	NofxAI300   *NofxAI300
+	NofxHeatmap *NofxHeatmap // 1小时级别上下文（仅在需要时填充，用于“更长日内结构”）
 }
 
 // OIData Open Interest数据
@@ -767,6 +771,43 @@ func Format(data *Data) string {
 		if len(data.MidTermContext.RSI14Values) > 0 {
 			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.MidTermContext.RSI14Values)))
 		}
+	}
+
+	// NOFX Data: fund flow signal + order book heatmap (compact, best-effort)
+	if data.NofxAI300 != nil || data.NofxHeatmap != nil {
+		sb.WriteString("Institutional Fund Flow & Order Book (real-time aggregated):\n")
+	}
+	if data.NofxAI300 != nil {
+		sb.WriteString(fmt.Sprintf("  Fund flow (1h): futures=%+.0f USDT, spot=%+.0f USDT, strength=%s (S>A>B>C)\n",
+			data.NofxAI300.FutureFlow, data.NofxAI300.SpotFlow, data.NofxAI300.Level))
+	}
+	if data.NofxHeatmap != nil {
+		h := data.NofxHeatmap
+		deltaDir := "neutral"
+		if h.Delta > 0 {
+			deltaDir = "bid_dominant"
+		} else if h.Delta < 0 {
+			deltaDir = "ask_dominant"
+		}
+		sb.WriteString(fmt.Sprintf("  Order book walls: bid_total=%.0f ask_total=%.0f delta=%.0f (%s)\n",
+			h.BidVolume, h.AskVolume, h.Delta, deltaDir))
+		if len(h.LargeBids) > 0 {
+			sb.WriteString("    Support walls:")
+			for _, b := range h.LargeBids {
+				sb.WriteString(fmt.Sprintf(" %.2f(%.0fU)", b.Price, b.Volume))
+			}
+			sb.WriteString("\n")
+		}
+		if len(h.LargeAsks) > 0 {
+			sb.WriteString("    Resistance walls:")
+			for _, a := range h.LargeAsks {
+				sb.WriteString(fmt.Sprintf(" %.2f(%.0fU)", a.Price, a.Volume))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	if data.NofxAI300 != nil || data.NofxHeatmap != nil {
+		sb.WriteString("\n")
 	}
 
 	return sb.String()
