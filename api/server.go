@@ -123,6 +123,8 @@ func (s *Server) setupRoutes() {
 
 		// 系统控制
 		api.POST("/system/pause", s.handleSystemPause)
+		api.GET("/system/auto-resume", s.handleGetAutoResume)
+		api.POST("/system/auto-resume", s.handleSetAutoResume)
 
 		// 运行时配置（热更新）
 		api.GET("/config", s.handleGetConfig)
@@ -1576,6 +1578,38 @@ func (s *Server) handleSystemPause(c *gin.Context) {
 		"success": true,
 		"message": fmt.Sprintf("系统%s交易执行", action),
 		"paused":  req.Paused,
+	})
+}
+
+// handleGetAutoResume 获取接续运行开关状态
+func (s *Server) handleGetAutoResume(c *gin.Context) {
+	enabled := s.traderManager.GetAutoResume()
+	c.JSON(http.StatusOK, gin.H{"auto_resume": enabled})
+}
+
+// handleSetAutoResume 设置接续运行开关
+func (s *Server) handleSetAutoResume(c *gin.Context) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	if err := s.traderManager.SetAutoResume(req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	status := "已关闭"
+	if req.Enabled {
+		status = "已开启"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":     true,
+		"message":     fmt.Sprintf("接续运行%s（下次启动生效）", status),
+		"auto_resume": req.Enabled,
 	})
 }
 

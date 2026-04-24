@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -69,6 +71,7 @@ type DecisionLogger struct {
 }
 
 // NewDecisionLogger 创建决策日志记录器
+// 自动从已有日志文件中恢复 cycleNumber，实现重启接续
 func NewDecisionLogger(logDir string) *DecisionLogger {
 	if logDir == "" {
 		logDir = "decision_logs"
@@ -79,10 +82,86 @@ func NewDecisionLogger(logDir string) *DecisionLogger {
 		fmt.Printf("⚠ 创建日志目录失败: %v\n", err)
 	}
 
+	maxCycle := scanMaxCycleNumber(logDir)
+	if maxCycle > 0 {
+		fmt.Printf("🔄 从已有日志恢复，当前最大周期编号: %d\n", maxCycle)
+	}
+
 	return &DecisionLogger{
 		logDir:      logDir,
-		cycleNumber: 0,
+		cycleNumber: maxCycle,
 	}
+}
+
+// GetCycleNumber 返回当前 cycleNumber（供外部同步 callCount 等）
+func (l *DecisionLogger) GetCycleNumber() int {
+	return l.cycleNumber
+}
+
+var cycleNumberRe = regexp.MustCompile(`_cycle(\d+)\.json$`)
+
+// scanMaxCycleNumber 扫描目录中已有日志文件，返回最大的 cycle 编号
+func scanMaxCycleNumber(logDir string) int {
+	files, err := ioutil.ReadDir(logDir)
+	if err != nil {
+		return 0
+	}
+	maxCycle := 0
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		if m := cycleNumberRe.FindStringSubmatch(f.Name()); len(m) == 2 {
+			if n, err := strconv.Atoi(m[1]); err == nil && n > maxCycle {
+				maxCycle = n
+			}
+		}
+	}
+	return maxCycle
+}
+
+// ArchiveLogs 将当前目录中的所有日志文件归档到带时间戳的子目录
+func ArchiveLogs(logDir string) error {
+	files, err := ioutil.ReadDir(logDir)
+	if err != nil {
+		return nil // 目录不存在或为空，无需归档
+	}
+
+	hasLogs := false
+	for _, f := range files {
+		if !f.IsDir() && strings.HasPrefix(f.Name(), "decision_") && strings.HasSuffix(f.Name(), ".json") {
+			hasLogs = true
+			break
+		}
+	}
+	if !hasLogs {
+		return nil
+	}
+
+	archiveDir := filepath.Join(logDir, fmt.Sprintf("archived_%s", time.Now().Format("20060102_150405")))
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		return fmt.Errorf("创建归档目录失败: %w", err)
+	}
+
+	count := 0
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		if !strings.HasPrefix(f.Name(), "decision_") || !strings.HasSuffix(f.Name(), ".json") {
+			continue
+		}
+		src := filepath.Join(logDir, f.Name())
+		dst := filepath.Join(archiveDir, f.Name())
+		if err := os.Rename(src, dst); err != nil {
+			fmt.Printf("⚠ 归档文件失败 %s: %v\n", f.Name(), err)
+			continue
+		}
+		count++
+	}
+
+	fmt.Printf("📦 已归档 %d 个日志文件到 %s\n", count, archiveDir)
+	return nil
 }
 
 // LogDecision 记录决策

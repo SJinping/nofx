@@ -85,6 +85,9 @@ type AutoTraderConfig struct {
 
 	// 自动止盈配置（零值时使用默认）
 	AutoTakeProfit decision.AutoTakeProfitConfig
+
+	// 接续运行：启动时自动恢复交易（不需要手动点击开始）
+	AutoResume bool
 }
 
 // AutoTrader 自动交易器
@@ -239,6 +242,9 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 	logDir := fmt.Sprintf("decision_logs/%s", config.ID)
 	decisionLogger := logger.NewDecisionLogger(logDir)
 
+	// 从已有日志恢复周期计数，实现重启接续
+	resumedCycle := decisionLogger.GetCycleNumber()
+
 	// 初始化错误统计（使用全局实例，按traderID区分）
 	errorStats := stats.GetErrorStats(config.ID)
 
@@ -249,6 +255,9 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 	} else {
 		tradeMemory = tm
 	}
+
+	// auto_resume=true 时启动即交易，否则等待前端手动开启
+	startPaused := !config.AutoResume
 
 	return &AutoTrader{
 		id:                    config.ID,
@@ -266,9 +275,9 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		peakEquity:            0,           // 第一次获取到净值后再初始化
 		stopUntil:             time.Time{}, // 默认无风控暂停
 		isRunning:             false,       // Run 调用后才变为 true
-		isPaused:              true,        // ⚠️ 启动时默认处于"暂停"状态，等待前端开关启动
+		isPaused:              startPaused,
 		startTime:             time.Now(),
-		callCount:             0,
+		callCount:             resumedCycle,
 		positionFirstSeenTime: make(map[string]int64),
 		autoDecisionState: decision.AutoDecisionState{
 			TP: make(map[string]*decision.AutoTPState),

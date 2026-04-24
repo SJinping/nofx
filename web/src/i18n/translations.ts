@@ -14,6 +14,8 @@ export const translations = {
     confirmPause: 'Are you sure you want to PAUSE the system? It will stop fetching market data and executing trades.',
     confirmResume: 'Are you sure you want to RESUME the system? It will start trading again.',
     operationFailed: 'Operation failed',
+    autoResume: 'Auto Resume',
+    autoResumeTooltip: 'Auto-start trading on restart (resume from previous logs)',
 
     // Footer
     footerTitle: 'NOFX - AI Trading Competition System',
@@ -142,6 +144,8 @@ export const translations = {
     confirmPause: '确定要暂停系统吗？系统将停止获取市场数据和执行交易。',
     confirmResume: '确定要恢复系统吗？系统将重新开始交易。',
     operationFailed: '操作失败',
+    autoResume: '接续运行',
+    autoResumeTooltip: '重启后自动开始交易（接续上次日志）',
 
     // Footer
     footerTitle: 'NOFX - AI交易竞赛系统',

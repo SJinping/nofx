@@ -111,6 +111,9 @@ type Config struct {
 
 	// 新增：是否开启数据录制（用于回测）
 	EnableRecording bool `json:"enable_recording"` // 是否开启录制
+
+	// 接续运行：启动时自动恢复交易（跳过手动点击开始）
+	AutoResume bool `json:"auto_resume,omitempty"`
 }
 
 // LoadConfig 从文件加载配置

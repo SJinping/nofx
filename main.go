@@ -5,6 +5,7 @@ import (
 	"log"
 	"nofx/api"
 	"nofx/config"
+	"nofx/logger"
 	"nofx/manager"
 	"nofx/market"
 	"nofx/pool"
@@ -21,10 +22,15 @@ func main() {
 	fmt.Println("╚════════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// 加载配置文件
+	// 解析命令行参数
 	configFile := "config.json"
-	if len(os.Args) > 1 {
-		configFile = os.Args[1]
+	freshStart := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--fresh" {
+			freshStart = true
+		} else if !strings.HasPrefix(arg, "-") {
+			configFile = arg
+		}
 	}
 
 	log.Printf("📋 加载配置文件: %s", configFile)
@@ -33,7 +39,23 @@ func main() {
 		log.Fatalf("❌ 加载配置失败: %v", err)
 	}
 
+	// --fresh: 归档所有已有日志，从头开始
+	if freshStart {
+		log.Println("🧹 --fresh 模式：归档已有决策日志...")
+		for _, traderCfg := range cfg.Traders {
+			logDir := fmt.Sprintf("decision_logs/%s", traderCfg.ID)
+			if err := logger.ArchiveLogs(logDir); err != nil {
+				log.Printf("⚠️  归档 %s 日志失败: %v", traderCfg.ID, err)
+			}
+		}
+		// --fresh 模式下忽略 auto_resume，强制从暂停状态开始
+		cfg.AutoResume = false
+	}
+
 	log.Printf("✓ 配置加载成功，共%d个trader参赛", len(cfg.Traders))
+	if cfg.AutoResume {
+		log.Println("🔄 接续运行模式：启动后自动开始交易")
+	}
 	fmt.Println()
 
 	// Binance market data source: mainnet vs testnet
@@ -82,6 +104,7 @@ func main() {
 			cfg.BinanceTestnet,    // Binance 主网/测试网
 			cfg.StopLossDistance,   // 止损最小距离配置
 			cfg.AutoTakeProfit,    // 自动止盈配置
+			cfg.AutoResume,        // 接续运行开关
 		)
 		if err != nil {
 			log.Fatalf("❌ 初始化trader失败: %v", err)

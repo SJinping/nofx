@@ -30,7 +30,7 @@ func NewTraderManager(configFilePath string) *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, autoResume bool) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -91,6 +91,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		StopLossDistance:         convertStopLossDistanceConfig(stopLossDistCfg),
 		AutoTakeProfit:           convertAutoTakeProfitConfig(autoTPCfg),
 		EnableRecording:          enableRecording,
+		AutoResume:               autoResume,
 	}
 
 	// 创建trader实例
@@ -402,6 +403,51 @@ func (tm *TraderManager) SetAllPaused(paused bool) {
 	for _, t := range tm.traders {
 		t.SetPaused(paused)
 	}
+}
+
+// GetAutoResume 读取 config.json 中的 auto_resume 字段
+func (tm *TraderManager) GetAutoResume() bool {
+	if tm.configFilePath == "" {
+		return false
+	}
+	data, err := os.ReadFile(tm.configFilePath)
+	if err != nil {
+		return false
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	if v, ok := raw["auto_resume"].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// SetAutoResume 更新 config.json 中的 auto_resume 字段
+func (tm *TraderManager) SetAutoResume(enabled bool) error {
+	if tm.configFilePath == "" {
+		return fmt.Errorf("无配置文件路径")
+	}
+	data, err := os.ReadFile(tm.configFilePath)
+	if err != nil {
+		return fmt.Errorf("读取配置文件失败: %w", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("解析配置文件失败: %w", err)
+	}
+	val, _ := json.Marshal(enabled)
+	raw["auto_resume"] = val
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化配置失败: %w", err)
+	}
+	if err := os.WriteFile(tm.configFilePath, append(out, '\n'), 0644); err != nil {
+		return fmt.Errorf("写入配置文件失败: %w", err)
+	}
+	log.Printf("💾 auto_resume=%v 已持久化到 %s", enabled, tm.configFilePath)
+	return nil
 }
 
 // GetComparisonData 获取对比数据

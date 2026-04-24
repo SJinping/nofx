@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { api } from '../lib/api';
 import type { CompetitionData, MarketOverviewResponse } from '../types';
@@ -57,6 +58,27 @@ export function CompetitionPage() {
   // 全局暂停状态（所有模型共享一个暂停状态，这里取第一个trader的 is_paused）
   const globalPaused = sortedTraders[0]?.is_paused ?? false;
 
+  // 接续运行开关
+  const { data: autoResumeData, mutate: mutateAutoResume } = useSWR(
+    'auto-resume',
+    api.getAutoResume,
+    { revalidateOnFocus: false }
+  );
+  const [autoResumeLoading, setAutoResumeLoading] = useState(false);
+  const autoResumeEnabled = autoResumeData?.auto_resume ?? false;
+
+  const handleToggleAutoResume = async () => {
+    setAutoResumeLoading(true);
+    try {
+      await api.setAutoResume(!autoResumeEnabled);
+      mutateAutoResume();
+    } catch (error: any) {
+      alert(t('operationFailed', language) + `: ${error.message}`);
+    } finally {
+      setAutoResumeLoading(false);
+    }
+  };
+
   const handleTogglePause = async () => {
     const isPaused = globalPaused;
     const confirmMsg = isPaused
@@ -106,24 +128,39 @@ export function CompetitionPage() {
               {(leader?.total_pnl ?? 0) >= 0 ? '+' : ''}{leader?.total_pnl_pct?.toFixed(2) || '0.00'}%
             </div>
           </div>
-          {/* 全局启动 / 暂停按钮 */}
-          <button
-            onClick={handleTogglePause}
-            className="flex items-center gap-2 px-3 py-2 rounded text-xs font-semibold transition-all hover:bg-opacity-80"
-            style={!globalPaused
-              ? { background: 'rgba(14, 203, 129, 0.12)', color: '#0ECB81', border: '1px solid rgba(14, 203, 129, 0.3)' }
-              : { background: 'rgba(246, 70, 93, 0.12)', color: '#F6465D', border: '1px solid rgba(246, 70, 93, 0.3)' }
-            }
-            title={globalPaused ? t('resume', language) : t('pause', language)}
-          >
-            <div
-              className={`w-2 h-2 rounded-full ${!globalPaused ? 'pulse-glow' : ''}`}
-              style={{ background: !globalPaused ? '#0ECB81' : '#F6465D' }}
-            />
-            <span className="mono">
-              {t(!globalPaused ? 'running' : 'stopped', language)}
-            </span>
-          </button>
+          {/* 全局启动 / 暂停按钮 + 接续运行开关 */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleTogglePause}
+              className="flex items-center gap-2 px-3 py-2 rounded text-xs font-semibold transition-all hover:bg-opacity-80"
+              style={!globalPaused
+                ? { background: 'rgba(14, 203, 129, 0.12)', color: '#0ECB81', border: '1px solid rgba(14, 203, 129, 0.3)' }
+                : { background: 'rgba(246, 70, 93, 0.12)', color: '#F6465D', border: '1px solid rgba(246, 70, 93, 0.3)' }
+              }
+              title={globalPaused ? t('resume', language) : t('pause', language)}
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${!globalPaused ? 'pulse-glow' : ''}`}
+                style={{ background: !globalPaused ? '#0ECB81' : '#F6465D' }}
+              />
+              <span className="mono">
+                {t(!globalPaused ? 'running' : 'stopped', language)}
+              </span>
+            </button>
+            <button
+              onClick={handleToggleAutoResume}
+              disabled={autoResumeLoading}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs transition-all hover:bg-opacity-80"
+              style={autoResumeEnabled
+                ? { background: 'rgba(240, 185, 11, 0.12)', color: '#F0B90B', border: '1px solid rgba(240, 185, 11, 0.3)' }
+                : { background: 'rgba(132, 142, 156, 0.08)', color: '#848E9C', border: '1px solid rgba(132, 142, 156, 0.2)' }
+              }
+              title={t('autoResumeTooltip', language)}
+            >
+              <span style={{ fontSize: '10px' }}>{autoResumeEnabled ? '🔄' : '⏸'}</span>
+              <span>{t('autoResume', language)}</span>
+            </button>
+          </div>
         </div>
       </div>
 

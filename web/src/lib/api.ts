@@ -334,6 +334,29 @@ export const api = {
     return res.json();
   },
 
+  // 获取接续运行开关状态
+  async getAutoResume(): Promise<{ auto_resume: boolean }> {
+    const res = await fetch(`${API_BASE}/system/auto-resume`);
+    if (!res.ok) throw new Error('获取接续运行状态失败');
+    return res.json();
+  },
+
+  // 设置接续运行开关
+  async setAutoResume(enabled: boolean): Promise<any> {
+    const res = await fetch(`${API_BASE}/system/auto-resume`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || '设置接续运行失败');
+    }
+    return res.json();
+  },
+
   // 日志查看器接口
   logViewer: {
     async getTraders(): Promise<string[]> {
