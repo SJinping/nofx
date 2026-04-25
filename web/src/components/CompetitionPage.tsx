@@ -24,6 +24,16 @@ export function CompetitionPage() {
     { refreshInterval: 15000 }
   );
 
+  // 接续运行开关
+  const { data: autoResumeData, mutate: mutateAutoResume } = useSWR(
+    'auto-resume',
+    api.getAutoResume,
+    { revalidateOnFocus: false }
+  );
+  const [autoResumeLoading, setAutoResumeLoading] = useState(false);
+  const autoResumeEnabled = autoResumeData?.auto_resume ?? false;
+
+
   if (!competition || !competition.traders) {
     return (
       <div className="space-y-6">
@@ -57,15 +67,6 @@ export function CompetitionPage() {
 
   // 全局暂停状态（所有模型共享一个暂停状态，这里取第一个trader的 is_paused）
   const globalPaused = sortedTraders[0]?.is_paused ?? false;
-
-  // 接续运行开关
-  const { data: autoResumeData, mutate: mutateAutoResume } = useSWR(
-    'auto-resume',
-    api.getAutoResume,
-    { revalidateOnFocus: false }
-  );
-  const [autoResumeLoading, setAutoResumeLoading] = useState(false);
-  const autoResumeEnabled = autoResumeData?.auto_resume ?? false;
 
   const handleToggleAutoResume = async () => {
     setAutoResumeLoading(true);
