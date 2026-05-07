@@ -42,20 +42,30 @@ var defaultConfig = Config{
 }
 
 // SetDeepSeekAPIKey 设置DeepSeek API密钥
-func SetDeepSeekAPIKey(apiKey string) {
+// modelName 为空时使用默认模型 deepseek-reasoner
+func SetDeepSeekAPIKey(apiKey string, modelName string) {
 	defaultConfig.Provider = ProviderDeepSeek
 	defaultConfig.APIKey = apiKey
 	defaultConfig.BaseURL = "https://api.deepseek.com/v1"
-	defaultConfig.Model = "deepseek-reasoner"
+	if modelName != "" {
+		defaultConfig.Model = modelName
+	} else {
+		defaultConfig.Model = "deepseek-reasoner"
+	}
 }
 
 // SetQwenAPIKey 设置阿里云Qwen API密钥
-func SetQwenAPIKey(apiKey, secretKey string) {
+// modelName 为空时使用默认模型 qwen3.5-plus
+func SetQwenAPIKey(apiKey, secretKey string, modelName string) {
 	defaultConfig.Provider = ProviderQwen
 	defaultConfig.APIKey = apiKey
 	defaultConfig.SecretKey = secretKey
 	defaultConfig.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-	defaultConfig.Model = "qwen3.5-plus"
+	if modelName != "" {
+		defaultConfig.Model = modelName
+	} else {
+		defaultConfig.Model = "qwen3.5-plus"
+	}
 }
 
 // SetCustomAPI 设置自定义OpenAI兼容API
@@ -74,6 +84,23 @@ func SetCustomAPI(apiURL, apiKey, modelName string) {
 
 	defaultConfig.Model = modelName
 	defaultConfig.Timeout = 120 * time.Second
+}
+
+// SetModel 运行时切换模型名称（热更新，下次 AI 调用立即生效）
+func SetModel(modelName string) {
+	if modelName != "" {
+		defaultConfig.Model = modelName
+	}
+}
+
+// GetModel 获取当前使用的模型名称
+func GetModel() string {
+	return defaultConfig.Model
+}
+
+// GetProvider 获取当前 Provider 类型
+func GetProvider() Provider {
+	return defaultConfig.Provider
 }
 
 // SetConfig 设置完整的AI配置（高级用户）

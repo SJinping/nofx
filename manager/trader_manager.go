@@ -6,6 +6,7 @@ import (
 	"log"
 	"nofx/config"
 	"nofx/decision"
+	"nofx/mcp"
 	"nofx/trader"
 	"os"
 	"path/filepath"
@@ -72,6 +73,8 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		UseQwen:                  cfg.AIModel == "qwen",
 		DeepSeekKey:              cfg.DeepSeekKey,
 		QwenKey:                  cfg.QwenKey,
+		DeepSeekModel:            cfg.DeepSeekModel,
+		QwenModel:                cfg.QwenModel,
 		CustomAPIURL:             cfg.CustomAPIURL,
 		CustomAPIKey:             cfg.CustomAPIKey,
 		CustomModelName:          cfg.CustomModelName,
@@ -341,9 +344,32 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 					continue
 				}
 				id, _ := traderMap["id"].(string)
-				// 如果指定了 traderID 则只更新对应的；否则更新全部
 				if traderID == "" || id == traderID {
 					traderMap["scan_interval_minutes"] = *patch.ScanIntervalMin
+				}
+			}
+		}
+	}
+
+	// ai_model 是 per-trader 字段，根据当前 provider 写入对应的模型名字段
+	if patch.AIModel != nil && *patch.AIModel != "" {
+		provider := mcp.GetProvider()
+		if traders, ok := raw["traders"].([]interface{}); ok {
+			for _, t := range traders {
+				traderMap, ok := t.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				id, _ := traderMap["id"].(string)
+				if traderID == "" || id == traderID {
+					switch provider {
+					case mcp.ProviderDeepSeek:
+						traderMap["deepseek_model"] = *patch.AIModel
+					case mcp.ProviderQwen:
+						traderMap["qwen_model"] = *patch.AIModel
+					case mcp.ProviderCustom:
+						traderMap["custom_model_name"] = *patch.AIModel
+					}
 				}
 			}
 		}

@@ -113,12 +113,12 @@ func main() {
 
 func initMCP() error {
 	if key := os.Getenv("DEEPSEEK_OPENAI_KEY"); key != "" {
-		mcp.SetDeepSeekAPIKey(key)
+		mcp.SetDeepSeekAPIKey(key, "")
 		fmt.Println("✅ 使用 DeepSeek API")
 		return nil
 	}
 	if key := os.Getenv("QWEN_OPENAI_API_KEY"); key != "" {
-		mcp.SetQwenAPIKey(key, "")
+		mcp.SetQwenAPIKey(key, "", "")
 		fmt.Println("✅ 使用 Qwen API")
 		return nil
 	}

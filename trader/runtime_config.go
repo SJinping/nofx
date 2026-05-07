@@ -3,6 +3,7 @@ package trader
 import (
 	"log"
 	"nofx/decision"
+	"nofx/mcp"
 	"sync"
 	"time"
 )
@@ -31,6 +32,7 @@ type RuntimeConfigSnapshot struct {
 	MaxDrawdown     float64                          `json:"max_drawdown"`
 	StopTradingMin  int                              `json:"stop_trading_minutes"`
 	ScanIntervalMin int                              `json:"scan_interval_minutes"`
+	AIModel         string                           `json:"ai_model"`
 }
 
 // RuntimeConfigPatch 用于部分更新运行时配置（零值表示不修改）
@@ -43,6 +45,7 @@ type RuntimeConfigPatch struct {
 	MaxDrawdown      *float64                            `json:"max_drawdown,omitempty"`
 	StopTradingMin   *int                                `json:"stop_trading_minutes,omitempty"`
 	ScanIntervalMin  *int                                `json:"scan_interval_minutes,omitempty"`
+	AIModel          *string                             `json:"ai_model,omitempty"`
 }
 
 // NewRuntimeConfig 从 AutoTraderConfig 初始化运行时配置
@@ -72,6 +75,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 		MaxDrawdown:     rc.maxDrawdown,
 		StopTradingMin:  int(rc.stopTradingTime.Minutes()),
 		ScanIntervalMin: int(rc.scanInterval.Minutes()),
+		AIModel:         mcp.GetModel(),
 	}
 }
 
@@ -116,6 +120,14 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 			log.Printf("🔧 运行时配置更新: ScanInterval %v → %v", rc.scanInterval, newDur)
 			rc.scanInterval = newDur
 			return true, newDur
+		}
+	}
+
+	if patch.AIModel != nil && *patch.AIModel != "" {
+		oldModel := mcp.GetModel()
+		if *patch.AIModel != oldModel {
+			log.Printf("🔧 运行时配置更新: AI Model %s → %s", oldModel, *patch.AIModel)
+			mcp.SetModel(*patch.AIModel)
 		}
 	}
 

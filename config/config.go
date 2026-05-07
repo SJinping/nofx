@@ -34,6 +34,11 @@ type TraderConfig struct {
 	QwenKey     string `json:"qwen_key,omitempty"`
 	DeepSeekKey string `json:"deepseek_key,omitempty"`
 
+	// 模型名称（可选，不填则使用默认值）
+	// DeepSeek 默认: deepseek-reasoner, Qwen 默认: qwen3.5-plus
+	DeepSeekModel string `json:"deepseek_model,omitempty"`
+	QwenModel     string `json:"qwen_model,omitempty"`
+
 	// 自定义AI API配置（支持任何OpenAI格式的API）
 	CustomAPIURL    string `json:"custom_api_url,omitempty"`
 	CustomAPIKey    string `json:"custom_api_key,omitempty"`

@@ -47,6 +47,10 @@ type AutoTraderConfig struct {
 	DeepSeekKey string
 	QwenKey     string
 
+	// 模型名称（可选，为空则使用默认）
+	DeepSeekModel string
+	QwenModel     string
+
 	// 自定义AI API配置
 	CustomAPIURL    string
 	CustomAPIKey    string
@@ -149,17 +153,22 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 
 	// 初始化AI
 	if config.AIModel == "custom" {
-		// 使用自定义API
 		mcp.SetCustomAPI(config.CustomAPIURL, config.CustomAPIKey, config.CustomModelName)
 		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
 	} else if config.UseQwen || config.AIModel == "qwen" {
-		// 使用Qwen
-		mcp.SetQwenAPIKey(config.QwenKey, "")
-		log.Printf("🤖 [%s] 使用阿里云Qwen AI", config.Name)
+		mcp.SetQwenAPIKey(config.QwenKey, "", config.QwenModel)
+		modelInfo := config.QwenModel
+		if modelInfo == "" {
+			modelInfo = "qwen3.5-plus (默认)"
+		}
+		log.Printf("🤖 [%s] 使用阿里云Qwen AI (模型: %s)", config.Name, modelInfo)
 	} else {
-		// 默认使用DeepSeek
-		mcp.SetDeepSeekAPIKey(config.DeepSeekKey)
-		log.Printf("🤖 [%s] 使用DeepSeek AI", config.Name)
+		mcp.SetDeepSeekAPIKey(config.DeepSeekKey, config.DeepSeekModel)
+		modelInfo := config.DeepSeekModel
+		if modelInfo == "" {
+			modelInfo = "deepseek-reasoner (默认)"
+		}
+		log.Printf("🤖 [%s] 使用DeepSeek AI (模型: %s)", config.Name, modelInfo)
 	}
 
 	// 初始化币种池API
