@@ -20,6 +20,7 @@ type RuntimeConfig struct {
 	maxDrawdown      float64       // 最大回撤百分比
 	stopTradingTime  time.Duration // 风控暂停时长
 	scanInterval     time.Duration // 扫描间隔
+	aiClient         *mcp.Client   // 该 trader 的 AI 客户端（用于热更新模型名）
 }
 
 // RuntimeConfigSnapshot 运行时配置的只读快照（无锁，安全传递）
@@ -49,7 +50,7 @@ type RuntimeConfigPatch struct {
 }
 
 // NewRuntimeConfig 从 AutoTraderConfig 初始化运行时配置
-func NewRuntimeConfig(cfg AutoTraderConfig) *RuntimeConfig {
+func NewRuntimeConfig(cfg AutoTraderConfig, aiClient *mcp.Client) *RuntimeConfig {
 	return &RuntimeConfig{
 		btcETHLeverage:  cfg.BTCETHLeverage,
 		altcoinLeverage: cfg.AltcoinLeverage,
@@ -59,6 +60,7 @@ func NewRuntimeConfig(cfg AutoTraderConfig) *RuntimeConfig {
 		maxDrawdown:     cfg.MaxDrawdown,
 		stopTradingTime: cfg.StopTradingTime,
 		scanInterval:    cfg.ScanInterval,
+		aiClient:        aiClient,
 	}
 }
 
@@ -66,6 +68,12 @@ func NewRuntimeConfig(cfg AutoTraderConfig) *RuntimeConfig {
 func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
+
+	aiModel := ""
+	if rc.aiClient != nil {
+		aiModel = rc.aiClient.GetModel()
+	}
+
 	return RuntimeConfigSnapshot{
 		BTCETHLeverage:  rc.btcETHLeverage,
 		AltcoinLeverage: rc.altcoinLeverage,
@@ -75,7 +83,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 		MaxDrawdown:     rc.maxDrawdown,
 		StopTradingMin:  int(rc.stopTradingTime.Minutes()),
 		ScanIntervalMin: int(rc.scanInterval.Minutes()),
-		AIModel:         mcp.GetModel(),
+		AIModel:         aiModel,
 	}
 }
 
@@ -123,11 +131,11 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 		}
 	}
 
-	if patch.AIModel != nil && *patch.AIModel != "" {
-		oldModel := mcp.GetModel()
+	if patch.AIModel != nil && *patch.AIModel != "" && rc.aiClient != nil {
+		oldModel := rc.aiClient.GetModel()
 		if *patch.AIModel != oldModel {
 			log.Printf("🔧 运行时配置更新: AI Model %s → %s", oldModel, *patch.AIModel)
-			mcp.SetModel(*patch.AIModel)
+			rc.aiClient.SetModel(*patch.AIModel)
 		}
 	}
 

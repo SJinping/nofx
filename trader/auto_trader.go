@@ -119,6 +119,9 @@ type AutoTrader struct {
 	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	autoDecisionState     decision.AutoDecisionState
 
+	// AI 客户端（每个 trader 独立实例）
+	aiClient *mcp.Client
+
 	// 运行时可热更新配置（线程安全）
 	runtimeCfg     *RuntimeConfig
 	scanIntervalCh chan time.Duration // 通知 Run() 循环重置 ticker
@@ -151,19 +154,20 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		}
 	}
 
-	// 初始化AI
+	// 初始化 AI 客户端（每个 trader 独立实例，互不干扰）
+	var aiClient *mcp.Client
 	if config.AIModel == "custom" {
-		mcp.SetCustomAPI(config.CustomAPIURL, config.CustomAPIKey, config.CustomModelName)
+		aiClient = mcp.NewCustomClient(config.CustomAPIURL, config.CustomAPIKey, config.CustomModelName)
 		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
 	} else if config.UseQwen || config.AIModel == "qwen" {
-		mcp.SetQwenAPIKey(config.QwenKey, "", config.QwenModel)
+		aiClient = mcp.NewQwenClient(config.QwenKey, "", config.QwenModel)
 		modelInfo := config.QwenModel
 		if modelInfo == "" {
 			modelInfo = "qwen3.5-plus (默认)"
 		}
 		log.Printf("🤖 [%s] 使用阿里云Qwen AI (模型: %s)", config.Name, modelInfo)
 	} else {
-		mcp.SetDeepSeekAPIKey(config.DeepSeekKey, config.DeepSeekModel)
+		aiClient = mcp.NewDeepSeekClient(config.DeepSeekKey, config.DeepSeekModel)
 		modelInfo := config.DeepSeekModel
 		if modelInfo == "" {
 			modelInfo = "deepseek-reasoner (默认)"
@@ -275,6 +279,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		exchange:              config.Exchange,
 		config:                config,
 		trader:                trader,
+		aiClient:              aiClient,
 		decisionLogger:        decisionLogger,
 		tradeMemory:           tradeMemory,
 		errorStats:            errorStats,
@@ -292,7 +297,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 			TP: make(map[string]*decision.AutoTPState),
 		},
 		// 运行时可热更新配置
-		runtimeCfg:     NewRuntimeConfig(config),
+		runtimeCfg:     NewRuntimeConfig(config, aiClient),
 		scanIntervalCh: make(chan time.Duration, 1),
 		// 初始化API缓存（30秒过期，减少币安API调用）
 		accountInfoCache: make(map[string]interface{}),
@@ -887,6 +892,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,
+		AI:                  at.aiClient,
 	}
 
 	// 注入可插拔策略，默认使用 StrategyA
@@ -1470,6 +1476,11 @@ func (at *AutoTrader) GetName() string {
 // GetAIModel 获取AI模型
 func (at *AutoTrader) GetAIModel() string {
 	return at.aiModel
+}
+
+// GetAIClient 获取该 trader 的 AI 客户端实例
+func (at *AutoTrader) GetAIClient() *mcp.Client {
+	return at.aiClient
 }
 
 // GetDecisionLogger 获取决策日志记录器

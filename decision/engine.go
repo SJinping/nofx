@@ -60,7 +60,7 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	userPrompt = fmt.Sprintf("**策略版本**: %s\n\n%s", strategy.Name(), userPrompt)
 
 	// 5. 调用AI API（使用 system + user prompt）
-	aiResponse, err := mcp.CallWithMessages(systemPrompt, userPrompt)
+	aiResponse, err := callAI(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		errType := stats.ClassifyLLMError(err.Error())
 		recordError(errType, err.Error(), "")
@@ -115,7 +115,7 @@ func GetFullDecisionFromText(ctx *Context, systemPrompt, userPrompt string) (*Fu
 	// 不需要，由参数传入
 
 	// 5. 调用AI API（使用 system + user prompt）
-	aiResponse, err := mcp.CallWithMessages(systemPrompt, userPrompt)
+	aiResponse, err := callAI(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		errType := stats.ClassifyLLMError(err.Error())
 		recordError(errType, err.Error(), "")
@@ -133,6 +133,15 @@ func GetFullDecisionFromText(ctx *Context, systemPrompt, userPrompt string) (*Fu
 	decision.Timestamp = time.Now()
 	decision.UserPrompt = userPrompt // 保存输入prompt
 	return decision, nil
+}
+
+// callAI 优先使用 ctx 中的 AI 客户端实例，否则回退到全局默认
+func callAI(ctx *Context, systemPrompt, userPrompt string) (string, error) {
+	if ctx.AI != nil {
+		return ctx.AI.CallWithMessages(systemPrompt, userPrompt)
+	}
+	// 回退到全局 mcp（兼容 cmd 工具和回测场景）
+	return mcp.CallWithMessagesGlobal(systemPrompt, userPrompt)
 }
 
 // fetchMarketDataForContext 为上下文中的所有币种获取市场数据和OI数据

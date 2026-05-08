@@ -61,7 +61,7 @@ func callOpenGuardLLM(symbol, side string, currentDecision any, similar []Simila
 	hb, _ := json.Marshal(hist)
 	sb.WriteString("similar_trades=" + string(hb) + "\n")
 
-	raw, err := mcp.CallWithMessages(system, sb.String())
+	raw, err := mcp.CallWithMessagesGlobal(system, sb.String())
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func callPostTradeReviewLLM(tr *TradeRecord) (*TradeAnalysis, error) {
 		}(),
 	)
 
-	raw, err := mcp.CallWithMessages(system, user)
+	raw, err := mcp.CallWithMessagesGlobal(system, user)
 	if err != nil {
 		return nil, err
 	}

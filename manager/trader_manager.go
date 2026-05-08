@@ -351,9 +351,8 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		}
 	}
 
-	// ai_model 是 per-trader 字段，根据当前 provider 写入对应的模型名字段
+	// ai_model 是 per-trader 字段，根据各 trader 的 provider 写入对应的模型名字段
 	if patch.AIModel != nil && *patch.AIModel != "" {
-		provider := mcp.GetProvider()
 		if traders, ok := raw["traders"].([]interface{}); ok {
 			for _, t := range traders {
 				traderMap, ok := t.(map[string]interface{})
@@ -362,6 +361,11 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 				}
 				id, _ := traderMap["id"].(string)
 				if traderID == "" || id == traderID {
+					// 从 trader 实例获取 provider
+					provider := mcp.ProviderDeepSeek // 默认
+					if at, exists := tm.traders[id]; exists {
+						provider = at.GetAIClient().GetProvider()
+					}
 					switch provider {
 					case mcp.ProviderDeepSeek:
 						traderMap["deepseek_model"] = *patch.AIModel

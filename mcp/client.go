@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,93 +33,115 @@ type Config struct {
 	MaxTokens  int
 }
 
-// 默认配置
-var defaultConfig = Config{
-	Provider:  ProviderDeepSeek,
-	BaseURL:   "https://api.deepseek.com/v1",
-	Model:     "deepseek-reasoner",
-	Timeout:   120 * time.Second, // 增加到120秒，因为AI需要分析大量数据
-	MaxTokens: 5000,
+// Client 独立的 AI 客户端实例（线程安全）。
+// 每个 trader 持有自己的 Client，互不干扰。
+type Client struct {
+	mu  sync.RWMutex
+	cfg Config
 }
 
-// SetDeepSeekAPIKey 设置DeepSeek API密钥
-// modelName 为空时使用默认模型 deepseek-reasoner
-func SetDeepSeekAPIKey(apiKey string, modelName string) {
-	defaultConfig.Provider = ProviderDeepSeek
-	defaultConfig.APIKey = apiKey
-	defaultConfig.BaseURL = "https://api.deepseek.com/v1"
-	if modelName != "" {
-		defaultConfig.Model = modelName
-	} else {
-		defaultConfig.Model = "deepseek-reasoner"
+// NewClient 创建新的 AI 客户端
+func NewClient() *Client {
+	return &Client{
+		cfg: Config{
+			Timeout:   120 * time.Second,
+			MaxTokens: 5000,
+		},
 	}
 }
 
-// SetQwenAPIKey 设置阿里云Qwen API密钥
-// modelName 为空时使用默认模型 qwen3.5-plus
-func SetQwenAPIKey(apiKey, secretKey string, modelName string) {
-	defaultConfig.Provider = ProviderQwen
-	defaultConfig.APIKey = apiKey
-	defaultConfig.SecretKey = secretKey
-	defaultConfig.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+// NewDeepSeekClient 创建 DeepSeek 客户端
+func NewDeepSeekClient(apiKey, modelName string) *Client {
+	model := "deepseek-reasoner"
 	if modelName != "" {
-		defaultConfig.Model = modelName
-	} else {
-		defaultConfig.Model = "qwen3.5-plus"
+		model = modelName
+	}
+	return &Client{
+		cfg: Config{
+			Provider:  ProviderDeepSeek,
+			APIKey:    apiKey,
+			BaseURL:   "https://api.deepseek.com/v1",
+			Model:     model,
+			Timeout:   120 * time.Second,
+			MaxTokens: 5000,
+		},
 	}
 }
 
-// SetCustomAPI 设置自定义OpenAI兼容API
-func SetCustomAPI(apiURL, apiKey, modelName string) {
-	defaultConfig.Provider = ProviderCustom
-	defaultConfig.APIKey = apiKey
+// NewQwenClient 创建 Qwen 客户端
+func NewQwenClient(apiKey, secretKey, modelName string) *Client {
+	model := "qwen3.5-plus"
+	if modelName != "" {
+		model = modelName
+	}
+	return &Client{
+		cfg: Config{
+			Provider:  ProviderQwen,
+			APIKey:    apiKey,
+			SecretKey: secretKey,
+			BaseURL:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			Model:     model,
+			Timeout:   120 * time.Second,
+			MaxTokens: 5000,
+		},
+	}
+}
 
-	// 检查URL是否以#结尾，如果是则使用完整URL（不添加/chat/completions）
+// NewCustomClient 创建自定义 OpenAI 兼容客户端
+func NewCustomClient(apiURL, apiKey, modelName string) *Client {
+	c := &Client{
+		cfg: Config{
+			Provider:  ProviderCustom,
+			APIKey:    apiKey,
+			Model:     modelName,
+			Timeout:   120 * time.Second,
+			MaxTokens: 5000,
+		},
+	}
 	if strings.HasSuffix(apiURL, "#") {
-		defaultConfig.BaseURL = strings.TrimSuffix(apiURL, "#")
-		defaultConfig.UseFullURL = true
+		c.cfg.BaseURL = strings.TrimSuffix(apiURL, "#")
+		c.cfg.UseFullURL = true
 	} else {
-		defaultConfig.BaseURL = apiURL
-		defaultConfig.UseFullURL = false
+		c.cfg.BaseURL = apiURL
 	}
-
-	defaultConfig.Model = modelName
-	defaultConfig.Timeout = 120 * time.Second
+	return c
 }
 
 // SetModel 运行时切换模型名称（热更新，下次 AI 调用立即生效）
-func SetModel(modelName string) {
-	if modelName != "" {
-		defaultConfig.Model = modelName
+func (c *Client) SetModel(modelName string) {
+	if modelName == "" {
+		return
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg.Model = modelName
 }
 
 // GetModel 获取当前使用的模型名称
-func GetModel() string {
-	return defaultConfig.Model
+func (c *Client) GetModel() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg.Model
 }
 
 // GetProvider 获取当前 Provider 类型
-func GetProvider() Provider {
-	return defaultConfig.Provider
+func (c *Client) GetProvider() Provider {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg.Provider
 }
 
-// SetConfig 设置完整的AI配置（高级用户）
-func SetConfig(config Config) {
-	if config.Timeout == 0 {
-		config.Timeout = 30 * time.Second
-	}
-	defaultConfig = config
-}
+// CallWithMessages 使用 system + user prompt 调用AI API
+func (c *Client) CallWithMessages(systemPrompt, userPrompt string) (string, error) {
+	c.mu.RLock()
+	cfg := c.cfg // 取快照
+	c.mu.RUnlock()
 
-// CallWithMessages 使用 system + user prompt 调用AI API（推荐）
-func CallWithMessages(systemPrompt, userPrompt string) (string, error) {
-	if defaultConfig.APIKey == "" {
-		return "", fmt.Errorf("AI API密钥未设置，请先调用 SetDeepSeekAPIKey() 或 SetQwenAPIKey()")
+	if cfg.APIKey == "" {
+		return "", fmt.Errorf("AI API密钥未设置")
 	}
 
-	// 重试配置
-	maxRetries := 1 // 只调用一次
+	maxRetries := 1
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -126,7 +149,7 @@ func CallWithMessages(systemPrompt, userPrompt string) (string, error) {
 			fmt.Printf("⚠️  AI API调用失败，正在重试 (%d/%d)...\n", attempt, maxRetries)
 		}
 
-		result, err := callOnce(systemPrompt, userPrompt)
+		result, err := doCall(cfg, systemPrompt, userPrompt)
 		if err == nil {
 			if attempt > 1 {
 				fmt.Printf("✓ AI API重试成功\n")
@@ -135,12 +158,10 @@ func CallWithMessages(systemPrompt, userPrompt string) (string, error) {
 		}
 
 		lastErr = err
-		// 如果不是网络错误，不重试
 		if !isRetryableError(err) {
 			return "", err
 		}
 
-		// 重试前等待
 		if attempt < maxRetries {
 			waitTime := time.Duration(attempt) * 2 * time.Second
 			fmt.Printf("⏳ 等待%v后重试...\n", waitTime)
@@ -151,12 +172,10 @@ func CallWithMessages(systemPrompt, userPrompt string) (string, error) {
 	return "", fmt.Errorf("重试%d次后仍然失败: %w", maxRetries, lastErr)
 }
 
-// callOnce 单次调用AI API（内部使用）
-func callOnce(systemPrompt, userPrompt string) (string, error) {
-	// 构建 messages 数组
+// doCall 单次调用AI API（纯函数，无副作用）
+func doCall(cfg Config, systemPrompt, userPrompt string) (string, error) {
 	messages := []map[string]string{}
 
-	// 如果有 system prompt，添加 system message
 	if systemPrompt != "" {
 		messages = append(messages, map[string]string{
 			"role":    "system",
@@ -164,36 +183,28 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 		})
 	}
 
-	// 添加 user message
 	messages = append(messages, map[string]string{
 		"role":    "user",
 		"content": userPrompt,
 	})
 
-	// 构建请求体
 	requestBody := map[string]interface{}{
-		"model":       defaultConfig.Model,
+		"model":       cfg.Model,
 		"messages":    messages,
-		"temperature": 0.5, // 降低temperature以提高JSON格式稳定性
-		"max_tokens":  defaultConfig.MaxTokens,
+		"temperature": 0.5,
+		"max_tokens":  cfg.MaxTokens,
 	}
-
-	// 注意：response_format 参数仅 OpenAI 支持，DeepSeek/Qwen 不支持
-	// 我们通过强化 prompt 和后处理来确保 JSON 格式正确
 
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
 		return "", fmt.Errorf("序列化请求失败: %w", err)
 	}
 
-	// 创建HTTP请求
 	var url string
-	if defaultConfig.UseFullURL {
-		// 使用完整URL，不添加/chat/completions
-		url = defaultConfig.BaseURL
+	if cfg.UseFullURL {
+		url = cfg.BaseURL
 	} else {
-		// 默认行为：添加/chat/completions
-		url = fmt.Sprintf("%s/chat/completions", defaultConfig.BaseURL)
+		url = fmt.Sprintf("%s/chat/completions", cfg.BaseURL)
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -202,26 +213,21 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	// 根据不同的Provider设置认证方式
-	switch defaultConfig.Provider {
+	switch cfg.Provider {
 	case ProviderDeepSeek:
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", defaultConfig.APIKey))
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 	case ProviderQwen:
-		// 阿里云Qwen使用API-Key认证
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", defaultConfig.APIKey))
-		// 注意：如果使用的不是兼容模式，可能需要不同的认证方式
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 	default:
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", defaultConfig.APIKey))
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
 	}
 
-	// 发送请求
-	// 显式禁用代理，避免遵循环境变量导致AI走代理
 	transport := &http.Transport{
 		Proxy:           nil,
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 	client := &http.Client{
-		Timeout:   defaultConfig.Timeout,
+		Timeout:   cfg.Timeout,
 		Transport: transport,
 	}
 	resp, err := client.Do(req)
@@ -230,7 +236,6 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// 读取响应
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %w", err)
@@ -240,7 +245,6 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 		return "", fmt.Errorf("API返回错误 (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// 解析响应
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -263,7 +267,6 @@ func callOnce(systemPrompt, userPrompt string) (string, error) {
 // isRetryableError 判断错误是否可重试
 func isRetryableError(err error) bool {
 	errStr := err.Error()
-	// 网络错误、超时、EOF等可以重试
 	retryableErrors := []string{
 		"EOF",
 		"timeout",
@@ -278,4 +281,74 @@ func isRetryableError(err error) bool {
 		}
 	}
 	return false
+}
+
+// ========== 全局兼容函数（供 cmd 工具和回测使用）==========
+
+var defaultClient = NewClient()
+
+// SetDeepSeekAPIKey 设置全局 DeepSeek 客户端（兼容旧调用方式）
+func SetDeepSeekAPIKey(apiKey string, modelName string) {
+	defaultClient.mu.Lock()
+	defer defaultClient.mu.Unlock()
+	defaultClient.cfg.Provider = ProviderDeepSeek
+	defaultClient.cfg.APIKey = apiKey
+	defaultClient.cfg.BaseURL = "https://api.deepseek.com/v1"
+	if modelName != "" {
+		defaultClient.cfg.Model = modelName
+	} else {
+		defaultClient.cfg.Model = "deepseek-reasoner"
+	}
+}
+
+// SetQwenAPIKey 设置全局 Qwen 客户端（兼容旧调用方式）
+func SetQwenAPIKey(apiKey, secretKey string, modelName string) {
+	defaultClient.mu.Lock()
+	defer defaultClient.mu.Unlock()
+	defaultClient.cfg.Provider = ProviderQwen
+	defaultClient.cfg.APIKey = apiKey
+	defaultClient.cfg.SecretKey = secretKey
+	defaultClient.cfg.BaseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	if modelName != "" {
+		defaultClient.cfg.Model = modelName
+	} else {
+		defaultClient.cfg.Model = "qwen3.5-plus"
+	}
+}
+
+// SetCustomAPI 设置全局自定义 API（兼容旧调用方式）
+func SetCustomAPI(apiURL, apiKey, modelName string) {
+	defaultClient.mu.Lock()
+	defer defaultClient.mu.Unlock()
+	defaultClient.cfg.Provider = ProviderCustom
+	defaultClient.cfg.APIKey = apiKey
+	if strings.HasSuffix(apiURL, "#") {
+		defaultClient.cfg.BaseURL = strings.TrimSuffix(apiURL, "#")
+		defaultClient.cfg.UseFullURL = true
+	} else {
+		defaultClient.cfg.BaseURL = apiURL
+		defaultClient.cfg.UseFullURL = false
+	}
+	defaultClient.cfg.Model = modelName
+	defaultClient.cfg.Timeout = 120 * time.Second
+}
+
+// CallWithMessagesGlobal 全局调用（供 cmd 工具使用）
+func CallWithMessagesGlobal(systemPrompt, userPrompt string) (string, error) {
+	return defaultClient.CallWithMessages(systemPrompt, userPrompt)
+}
+
+// SetModel 全局设置模型名（兼容）
+func SetModel(modelName string) {
+	defaultClient.SetModel(modelName)
+}
+
+// GetModel 全局获取模型名（兼容）
+func GetModel() string {
+	return defaultClient.GetModel()
+}
+
+// GetProvider 全局获取 Provider（兼容）
+func GetProvider() Provider {
+	return defaultClient.GetProvider()
 }

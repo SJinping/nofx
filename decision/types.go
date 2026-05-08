@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+// AICaller 抽象 AI 调用接口，解耦 decision 与 mcp 的直接依赖。
+// *mcp.Client 实现此接口。
+type AICaller interface {
+	CallWithMessages(systemPrompt, userPrompt string) (string, error)
+}
+
 // PositionInfo 持仓信息
 type PositionInfo struct {
 	Symbol           string  `json:"symbol"`
@@ -122,6 +128,9 @@ type Context struct {
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
 	TraderID        string `json:"-"` // TraderID (用于区分目录)
+
+	// AI 客户端（每个 trader 独立实例，为 nil 时使用全局默认）
+	AI AICaller `json:"-"`
 }
 
 // AutoDecisionState 自动决策跨周期状态（用于TP档位只触发一次、冷却等）
