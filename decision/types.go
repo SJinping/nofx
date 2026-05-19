@@ -24,6 +24,12 @@ type PositionInfo struct {
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
 	UpdateTime       int64   `json:"update_time"` // 持仓更新时间戳（毫秒）
+
+	// 入场论据（从 TradeMemory 注入，用于 prompt 构建，不序列化到日志）
+	EntryReasoning  string  `json:"-"`
+	EntryStopLoss   float64 `json:"-"`
+	EntryTakeProfit float64 `json:"-"`
+	EntryConfidence int     `json:"-"`
 }
 
 // AccountInfo 账户信息

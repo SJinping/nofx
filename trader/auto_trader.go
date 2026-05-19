@@ -804,6 +804,17 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	// ✅ 更新TradeEpisode滚动指标（每个周期一次，不落EpisodePoint）
 	if at.tradeMemory != nil {
 		at.tradeMemory.UpdateEpisodesFromPositions(at.id, positionInfos)
+
+		// 注入入场论据到 PositionInfo，供 prompt 构建时使用
+		for i := range positionInfos {
+			ep := at.tradeMemory.GetEpisodeSnapshot(positionInfos[i].Symbol, positionInfos[i].Side)
+			if ep != nil {
+				positionInfos[i].EntryReasoning = ep.EntryReasoning
+				positionInfos[i].EntryStopLoss = ep.StopLoss
+				positionInfos[i].EntryTakeProfit = ep.TakeProfit
+				positionInfos[i].EntryConfidence = ep.EntryConfidence
+			}
+		}
 	}
 
 	// 清理已平仓的持仓记录

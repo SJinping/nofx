@@ -41,10 +41,10 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("**量化标准**:\n")
 	sb.WriteString("- 优秀交易员：每天2-4笔 = 每小时0.1-0.2笔\n")
 	sb.WriteString("- 过度交易：每小时>2笔 = 严重问题\n")
-	sb.WriteString("- 最佳节奏：开仓后持有至少30-60分钟\n\n")
+	sb.WriteString("- 最佳节奏：开仓后持有至少30-60分钟或3个周期\n\n")
 	sb.WriteString("**自查**:\n")
 	sb.WriteString("如果你发现自己每个周期都在交易 → 说明标准太低\n")
-	sb.WriteString("如果你发现持仓<30分钟就平仓 → 说明太急躁\n\n")
+	sb.WriteString("如果你发现持仓<30分钟或少于3个周期就平仓 → 说明太急躁\n\n")
 
 	// === 开仓信号强度 ===
 	sb.WriteString("# 🎯 开仓标准（严格）\n\n")
@@ -72,13 +72,13 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("  → 🛑 停止交易，连续观望至少6个周期（18分钟）\n")
 	sb.WriteString("  → 🔍 深度反思：\n")
 	sb.WriteString("     • 交易频率过高？（每小时>2次就是过度）\n")
-	sb.WriteString("     • 持仓时间过短？（<30分钟就是过早平仓）\n")
+	sb.WriteString("     • 持仓时间过短？（<30分钟或3个周期就是过早平仓）\n")
 	sb.WriteString("     • 信号强度不足？（信心度<75）\n")
 	sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
 	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
 	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
 	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
-	sb.WriteString("  → 耐心持仓：至少持有30分钟以上\n\n")
+	sb.WriteString("  → 耐心持仓：至少持有30分钟或3个周期以上\n\n")
 	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
 	sb.WriteString("  → ✅ 维持当前策略\n\n")
 	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
@@ -88,9 +88,19 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	// === 决策流程 ===
 	sb.WriteString("# 📋 决策流程\n\n")
 	sb.WriteString("1. **分析夏普比率**: 当前策略是否有效？需要调整吗？\n")
-	sb.WriteString("2. **评估持仓**: 趋势是否改变？是否该止盈/止损？\n")
+	sb.WriteString("2. **评估持仓（必须对照入场论据）**: 见下方检查清单\n")
 	sb.WriteString("3. **寻找新机会**: 有强信号吗？多空机会？\n")
 	sb.WriteString("4. **输出决策**: 思维链分析 + JSON\n\n")
+
+	sb.WriteString("## 持仓评估检查清单（平仓前必须逐条回答）\n\n")
+	sb.WriteString("每个持仓数据下方会附带「入场论据」（开仓时的分析理由和止损/目标价）。\n")
+	sb.WriteString("**在考虑平仓前，你必须逐条检查**：\n")
+	sb.WriteString("1. 入场时的技术逻辑（如4h趋势方向、关键支撑/阻力、形态）是否已被**彻底推翻**？\n")
+	sb.WriteString("2. 价格是否已经触及或跌破/涨破止损价？\n")
+	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
+	sb.WriteString("   - 突发事件导致波动范式突变\n")
+	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
+	sb.WriteString("4. **不要用3分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n")
 
 	// === 输出格式 ===
 	sb.WriteString("# 📤 输出格式\n\n")
@@ -225,9 +235,19 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. **评估当前绩效状态**：判断应偏保守还是积极。\n")
-	sb.WriteString("2. **检查已有持仓**：趋势是否改变？止盈/止损是否需要调整（update_stop_loss/partial_close）？是否该平仓？\n")
+	sb.WriteString("2. **检查已有持仓（对照入场论据）**：见下方检查清单。\n")
 	sb.WriteString("3. **扫描新机会**：对候选标的进行多维度分析（趋势、结构、形态、资金）。\n")
 	sb.WriteString("4. **输出决策**：先自然语言分析，再输出 JSON。\n\n")
+
+	sb.WriteString("## 持仓评估检查清单（平仓前必须逐条回答）\n\n")
+	sb.WriteString("每个持仓数据下方会附带「入场论据」（开仓时的分析理由和止损/目标价）。\n")
+	sb.WriteString("**在考虑平仓前，你必须逐条检查**：\n")
+	sb.WriteString("1. 入场时的技术逻辑（如4h趋势方向、关键支撑/阻力、形态）是否已被**彻底推翻**？\n")
+	sb.WriteString("2. 价格是否已经触及或跌破/涨破止损价？\n")
+	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
+	sb.WriteString("   - 突发事件导致波动范式突变\n")
+	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
+	sb.WriteString("4. **不要用3分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n")
 
 	sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
@@ -318,9 +338,19 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) 
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. 判断当前是趋势阶段、震荡阶段，还是高波动/事件驱动阶段。\n")
 	sb.WriteString("2. 结合短周期价格/指标/波动/资金信息，评估是否存在高性价比短线机会。\n")
-	sb.WriteString("3. 如果有持仓，优先考虑止盈/止损/部分减仓等风险管理动作。\n")
+	sb.WriteString("3. 如果有持仓，**必须对照入场论据**进行评估（见下方检查清单）。\n")
 	sb.WriteString("4. 如果信号不足或方向不清晰，请选择 `hold` 或 `wait`。\n")
 	sb.WriteString("5. 只在信号充分、逻辑清晰、风险回报合理时，才给出开仓建议。\n\n")
+
+	sb.WriteString("## 持仓评估检查清单（平仓前必须逐条回答）\n\n")
+	sb.WriteString("每个持仓数据下方会附带「入场论据」（开仓时的分析理由和止损/目标价）。\n")
+	sb.WriteString("**在考虑平仓前，你必须逐条检查**：\n")
+	sb.WriteString("1. 入场时的技术逻辑（如趋势方向、关键支撑/阻力、形态）是否已被**彻底推翻**？\n")
+	sb.WriteString("2. 价格是否已经触及或跌破/涨破止损价？\n")
+	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
+	sb.WriteString("   - 突发事件导致波动范式突变\n")
+	sb.WriteString("   - 强平风险显著上升（保证金不足）\n")
+	sb.WriteString("4. 不要仅因短期RSI/MACD波动就推翻入场时的趋势判断\n\n")
 
 	sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
@@ -400,6 +430,8 @@ func buildUserPrompt(ctx *Context) string {
 				sb.WriteString(market.Format(marketData))
 				sb.WriteString("\n")
 			}
+			// 入场论据（供 LLM 对比是否应继续持有）
+			sb.WriteString(formatEntryThesis(pos))
 		}
 	} else {
 		sb.WriteString("**当前持仓**: 无\n\n")
@@ -435,6 +467,26 @@ func buildUserPrompt(ctx *Context) string {
 	sb.WriteString("---\n\n")
 	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
 
+	return sb.String()
+}
+
+// formatEntryThesis 格式化持仓的入场论据（供 LLM 对比当前状态）
+func formatEntryThesis(pos PositionInfo) string {
+	if pos.EntryReasoning == "" || strings.HasPrefix(pos.EntryReasoning, "(unknown") {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**入场论据** (信心度 %d", pos.EntryConfidence))
+	if pos.EntryStopLoss > 0 {
+		sb.WriteString(fmt.Sprintf(", 止损 %.4f", pos.EntryStopLoss))
+	}
+	if pos.EntryTakeProfit > 0 {
+		sb.WriteString(fmt.Sprintf(", 目标 %.4f", pos.EntryTakeProfit))
+	}
+	sb.WriteString("):\n")
+	sb.WriteString(pos.EntryReasoning)
+	sb.WriteString("\n")
+	sb.WriteString("**请对比**: 上述入场逻辑是否已被推翻？止损是否已触发？如果入场逻辑未变且止损未到，应继续持有。\n\n")
 	return sb.String()
 }
 
@@ -567,6 +619,8 @@ func buildUserPromptB(ctx *Context) string {
 				sb.WriteString(extraUserPromptForStrategyB(marketData))
 				sb.WriteString("\n")
 			}
+			// 入场论据（供 LLM 对比是否应继续持有）
+			sb.WriteString(formatEntryThesis(pos))
 		}
 	} else {
 		sb.WriteString("**当前持仓**: 无\n\n")

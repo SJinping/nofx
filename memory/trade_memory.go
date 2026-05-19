@@ -112,9 +112,23 @@ func (tm *TradeMemory) UpdateEpisodesFromPositions(traderID string, positions []
 		mark := p.MarkPrice
 		if mark <= 0 {
 			mark = p.EntryPrice
-		}
-		tm.updateRollingLocked(ep, mark, now)
 	}
+	tm.updateRollingLocked(ep, mark, now)
+	}
+}
+
+// GetEpisodeSnapshot 返回指定持仓的 TradeEpisode 拷贝（线程安全，只读）。
+// 如果不存在返回 nil。
+func (tm *TradeMemory) GetEpisodeSnapshot(symbol, side string) *TradeEpisode {
+	k := strings.ToUpper(symbol) + "_" + strings.ToLower(side)
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	ep, ok := tm.episodes[k]
+	if !ok || ep == nil {
+		return nil
+	}
+	copy := *ep
+	return &copy
 }
 
 func (tm *TradeMemory) updateRollingLocked(ep *TradeEpisode, markPrice float64, now time.Time) {
