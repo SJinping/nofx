@@ -550,5 +550,78 @@ func ExtraValidate(d *Decision, ctx *Context) error {
 		}
 	}
 
+	// 最低持仓时间硬约束：阻止过早平仓
+	if err := validateMinHoldingTime(d, ctx); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// validateMinHoldingTime 检查 LLM 平仓/减仓时是否满足最低持仓时间要求。
+// 例外条件（放行）：
+//  1. 止损价已被击穿
+//  2. 浮亏超过 -8%
+//  3. 距离强平价不足 15%
+func validateMinHoldingTime(d *Decision, ctx *Context) error {
+	minHold := ctx.MinHoldMinutes
+	if minHold <= 0 {
+		return nil
+	}
+
+	isCloseAction := d.Action == ActionCloseLong || d.Action == ActionCloseShort || d.Action == ActionPartialClose
+	if !isCloseAction {
+		return nil
+	}
+
+	var pos *PositionInfo
+	for i := range ctx.Positions {
+		if ctx.Positions[i].Symbol == d.Symbol {
+			pos = &ctx.Positions[i]
+			break
+		}
+	}
+	if pos == nil {
+		return nil
+	}
+
+	holdMs := time.Now().UnixMilli() - pos.UpdateTime
+	if holdMs < 0 {
+		holdMs = 0
+	}
+	holdMinutes := float64(holdMs) / 60000.0
+	if holdMinutes >= float64(minHold) {
+		return nil
+	}
+
+	// 例外 1: 浮亏严重（> -8%）
+	if pos.UnrealizedPnLPct < -8.0 {
+		return nil
+	}
+
+	// 例外 2: 止损价已被击穿
+	if pos.EntryStopLoss > 0 && pos.MarkPrice > 0 {
+		if pos.Side == "long" && pos.MarkPrice <= pos.EntryStopLoss {
+			return nil
+		}
+		if pos.Side == "short" && pos.MarkPrice >= pos.EntryStopLoss {
+			return nil
+		}
+	}
+
+	// 例外 3: 距离强平价不足 15%
+	if pos.LiquidationPrice > 0 && pos.MarkPrice > 0 {
+		distPct := 0.0
+		if pos.Side == "long" {
+			distPct = (pos.MarkPrice - pos.LiquidationPrice) / pos.MarkPrice * 100
+		} else {
+			distPct = (pos.LiquidationPrice - pos.MarkPrice) / pos.MarkPrice * 100
+		}
+		if distPct < 15.0 {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("持仓 %s 仅持有 %.1f 分钟，最低要求 %d 分钟，禁止过早平仓（浮亏 %.2f%% 未达阈值）",
+		d.Symbol, holdMinutes, minHold, pos.UnrealizedPnLPct)
 }

@@ -113,6 +113,7 @@ type Config struct {
 	MinRiskReward        float64                `json:"min_risk_reward"`        // 最小风险回报比
 	StopLossDistance     StopLossDistanceConfig `json:"stop_loss_distance"`     // 止损最小距离配置
 	AutoTakeProfit       AutoTakeProfitConfig   `json:"auto_take_profit"`       // 自动止盈配置
+	MinHoldMinutes       int                    `json:"min_hold_minutes"`       // LLM 平仓最低持仓时间（分钟，0=不限制）
 
 	// 新增：是否开启数据录制（用于回测）
 	EnableRecording bool `json:"enable_recording"` // 是否开启录制

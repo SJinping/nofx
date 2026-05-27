@@ -55,6 +55,7 @@ type DecisionAction struct {
 	Action         string    `json:"action"`                    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
 	Symbol         string    `json:"symbol"`                    // 币种
 	DecisionSource string    `json:"decision_source,omitempty"` // 决策来源: llm/auto_stop_loss/auto_take_profit/...
+	Reasoning      string    `json:"reasoning,omitempty"`       // 决策理由（自动止盈/止损时包含触发条件）
 	Quantity       float64   `json:"quantity"`                  // 数量
 	Leverage       int       `json:"leverage"`                  // 杠杆（开仓时）
 	Price          float64   `json:"price"`                     // 执行价格
@@ -68,6 +69,7 @@ type DecisionAction struct {
 type DecisionLogger struct {
 	logDir      string
 	cycleNumber int
+	statsCache  *TradeStatsCache
 }
 
 // NewDecisionLogger 创建决策日志记录器
@@ -87,10 +89,18 @@ func NewDecisionLogger(logDir string) *DecisionLogger {
 		fmt.Printf("🔄 从已有日志恢复，当前最大周期编号: %d\n", maxCycle)
 	}
 
-	return &DecisionLogger{
+	dl := &DecisionLogger{
 		logDir:      logDir,
 		cycleNumber: maxCycle,
 	}
+
+	dl.statsCache = NewTradeStatsCache(logDir)
+	// 启动时增量补算：从 statsCache.LastProcessedCycle 之后的记录
+	if dl.statsCache.GetLastProcessedCycle() < maxCycle {
+		dl.rebuildStatsCache()
+	}
+
+	return dl
 }
 
 // GetCycleNumber 返回当前 cycleNumber（供外部同步 callCount 等）
@@ -189,7 +199,51 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 	}
 
 	fmt.Printf("📝 决策记录已保存: %s\n", filename)
+
+	// 增量更新统计缓存
+	if l.statsCache != nil {
+		l.statsCache.ProcessRecords([]*DecisionRecord{record})
+		if err := l.statsCache.Save(); err != nil {
+			fmt.Printf("⚠ 保存统计缓存失败: %v\n", err)
+		}
+	}
+
 	return nil
+}
+
+// GetTradeStatsCache 返回交易统计缓存
+func (l *DecisionLogger) GetTradeStatsCache() *TradeStatsCache {
+	return l.statsCache
+}
+
+// rebuildStatsCache 从磁盘日志增量补算统计
+func (l *DecisionLogger) rebuildStatsCache() {
+	lastCycle := l.statsCache.GetLastProcessedCycle()
+	fmt.Printf("🔄 补算交易统计缓存（从 cycle %d 开始）...\n", lastCycle+1)
+
+	records, err := l.GetLatestRecords(100000)
+	if err != nil {
+		fmt.Printf("⚠ 读取日志用于统计补算失败: %v\n", err)
+		return
+	}
+
+	// 只取 lastCycle 之后的记录（GetLatestRecords 返回正序）
+	var newRecords []*DecisionRecord
+	for _, r := range records {
+		if r.CycleNumber > lastCycle {
+			newRecords = append(newRecords, r)
+		}
+	}
+
+	if len(newRecords) == 0 {
+		return
+	}
+
+	l.statsCache.ProcessRecords(newRecords)
+	if err := l.statsCache.Save(); err != nil {
+		fmt.Printf("⚠ 保存统计缓存失败: %v\n", err)
+	}
+	fmt.Printf("✅ 统计缓存已更新，处理了 %d 条新记录\n", len(newRecords))
 }
 
 // GetLatestRecords 获取最近N条记录（按时间正序：从旧到新）
@@ -365,7 +419,8 @@ type TradeOutcome struct {
 	Duration    string    `json:"duration"`      // 持仓时长
 	OpenTime    time.Time `json:"open_time"`     // 开仓时间
 	CloseTime   time.Time `json:"close_time"`    // 平仓时间
-	WasStopLoss bool      `json:"was_stop_loss"` // 是否止损
+	WasStopLoss bool      `json:"was_stop_loss"` // 是否止损（auto_stop_loss 触发）
+	CloseSource string    `json:"close_source"`  // 平仓来源: llm/auto_stop_loss/auto_take_profit
 }
 
 // PerformanceAnalysis 交易表现分析
@@ -461,7 +516,6 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, tradeLimit int) 
 					side := openPos["side"].(string)
 					quantity := openPos["quantity"].(float64)
 
-					// 计算盈亏百分比
 					pnlPct := 0.0
 					if side == "long" {
 						pnlPct = ((action.Price - openPrice) / openPrice) * 100
@@ -469,8 +523,6 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, tradeLimit int) 
 						pnlPct = ((openPrice - action.Price) / openPrice) * 100
 					}
 
-					// 计算实际盈亏（USDT）
-					// ✅ 注意：USDT盈亏不应再乘杠杆。杠杆只影响保证金占用；数量/名义仓位已体现杠杆效果。
 					pnl := 0.0
 					if side == "long" {
 						pnl = (action.Price - openPrice) * quantity
@@ -478,17 +530,23 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int, tradeLimit int) 
 						pnl = (openPrice - action.Price) * quantity
 					}
 
-					// 记录交易结果
+					closeSource := action.DecisionSource
+					if closeSource == "" {
+						closeSource = "llm"
+					}
+
 					outcome := TradeOutcome{
-						Symbol:     symbol,
-						Side:       side,
-						OpenPrice:  openPrice,
-						ClosePrice: action.Price,
-						PnL:        pnl,
-						PnLPct:     pnlPct,
-						Duration:   action.Timestamp.Sub(openTime).String(),
-						OpenTime:   openTime,
-						CloseTime:  action.Timestamp,
+						Symbol:      symbol,
+						Side:        side,
+						OpenPrice:   openPrice,
+						ClosePrice:  action.Price,
+						PnL:         pnl,
+						PnLPct:      pnlPct,
+						Duration:    action.Timestamp.Sub(openTime).String(),
+						OpenTime:    openTime,
+						CloseTime:   action.Timestamp,
+						WasStopLoss: closeSource == "auto_stop_loss",
+						CloseSource: closeSource,
 					}
 
 					analysis.RecentTrades = append(analysis.RecentTrades, outcome)

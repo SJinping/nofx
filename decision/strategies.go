@@ -6,7 +6,7 @@ type StrategyA struct{}
 func (StrategyA) Name() string { return "A" }
 
 func (StrategyA) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPrompt(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	return buildSystemPrompt(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.ScanIntervalMin)
 }
 
 func (StrategyA) BuildUserPrompt(ctx *Context) string {
@@ -27,7 +27,7 @@ type StrategyB struct{}
 func (StrategyB) Name() string { return "B" }
 
 func (StrategyB) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPromptB(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	return buildSystemPromptB(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.ScanIntervalMin)
 }
 
 func (StrategyB) BuildUserPrompt(ctx *Context) string {
@@ -49,7 +49,7 @@ type StrategyV struct{}
 func (StrategyV) Name() string { return "V" }
 
 func (StrategyV) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPromptShortTerm(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	return buildSystemPromptShortTerm(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.ScanIntervalMin)
 }
 
 func (StrategyV) BuildUserPrompt(ctx *Context) string {
@@ -61,5 +61,5 @@ func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
 }
 
 func (StrategyV) ExtraValidate(d *Decision, ctx *Context) error {
-	return nil
+	return validateMinHoldingTime(d, ctx)
 }

@@ -10,7 +10,10 @@ import (
 
 // buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
 // 注意风险回报比要与minRiskReward保持一致
-func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
+func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = 3
+	}
 	var sb strings.Builder
 
 	// === 核心使命 ===
@@ -25,7 +28,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- ❌ 频繁交易、小盈小亏 → 增加波动，严重降低夏普\n")
 	sb.WriteString("- ❌ 过度交易、手续费损耗 → 直接亏损\n")
 	sb.WriteString("- ❌ 过早平仓、频繁进出 → 错失大行情\n\n")
-	sb.WriteString("**关键认知**: 系统每3分钟扫描一次，但不意味着每次都要交易！\n")
+	sb.WriteString(fmt.Sprintf("**关键认知**: 系统每%d分钟扫描一次，但不意味着每次都要交易！\n", scanIntervalMin))
 	sb.WriteString("大多数时候应该是 `wait` 或 `hold`，只在极佳机会时才开仓。\n\n")
 
 	// === 硬约束（风险控制）===
@@ -41,16 +44,16 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("**量化标准**:\n")
 	sb.WriteString("- 优秀交易员：每天2-4笔 = 每小时0.1-0.2笔\n")
 	sb.WriteString("- 过度交易：每小时>2笔 = 严重问题\n")
-	sb.WriteString("- 最佳节奏：开仓后持有至少30-60分钟或3个周期\n\n")
+	sb.WriteString(fmt.Sprintf("- 最佳节奏：开仓后持有至少30-60分钟或3个周期（%d分钟）\n\n", 3*scanIntervalMin))
 	sb.WriteString("**自查**:\n")
 	sb.WriteString("如果你发现自己每个周期都在交易 → 说明标准太低\n")
-	sb.WriteString("如果你发现持仓<30分钟或少于3个周期就平仓 → 说明太急躁\n\n")
+	sb.WriteString(fmt.Sprintf("如果你发现持仓<30分钟或少于3个周期（%d分钟）就平仓 → 说明太急躁\n\n", 3*scanIntervalMin))
 
 	// === 开仓信号强度 ===
 	sb.WriteString("# 🎯 开仓标准（严格）\n\n")
 	sb.WriteString("只在**强信号**时开仓，不确定就观望。\n\n")
 	sb.WriteString("**你拥有的完整数据**：\n")
-	sb.WriteString("- 📊 **原始序列**：3分钟价格序列(MidPrices数组) + 4小时K线序列\n")
+	sb.WriteString(fmt.Sprintf("- 📊 **原始序列**：%d分钟价格序列(MidPrices数组) + 4小时K线序列\n", scanIntervalMin))
 	sb.WriteString("- 📈 **技术序列**：EMA20序列、MACD序列、RSI7序列、RSI14序列\n")
 	sb.WriteString("- 💰 **资金序列**：成交量序列、持仓量(OI)序列、资金费率\n")
 	sb.WriteString("- 🎯 **筛选标记**：AI500评分 / OI_Top排名（如果有标注）\n\n")
@@ -69,16 +72,16 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("# 🧬 历史表现学习\n\n")
 	sb.WriteString("每次你会收到**最近一段时间的交易笔数**、**胜率**、**夏普比率**作为绩效反馈（周期级别）：\n\n")
 	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	sb.WriteString("  → 🛑 停止交易，连续观望至少6个周期（18分钟）\n")
+	sb.WriteString(fmt.Sprintf("  → 🛑 停止交易，连续观望至少6个周期（%d分钟或60分钟）\n", 6*scanIntervalMin))
 	sb.WriteString("  → 🔍 深度反思：\n")
 	sb.WriteString("     • 交易频率过高？（每小时>2次就是过度）\n")
-	sb.WriteString("     • 持仓时间过短？（<30分钟或3个周期就是过早平仓）\n")
+	sb.WriteString(fmt.Sprintf("     • 持仓时间过短？（<%d分钟或3个周期就是过早平仓）\n", 3*scanIntervalMin))
 	sb.WriteString("     • 信号强度不足？（信心度<75）\n")
 	sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
 	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
 	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
 	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
-	sb.WriteString("  → 耐心持仓：至少持有30分钟或3个周期以上\n\n")
+	sb.WriteString(fmt.Sprintf("  → 耐心持仓：至少持有%d分钟或3个周期以上\n\n", 3*scanIntervalMin))
 	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
 	sb.WriteString("  → ✅ 维持当前策略\n\n")
 	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
@@ -100,7 +103,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
 	sb.WriteString("   - 突发事件导致波动范式突变\n")
 	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
-	sb.WriteString("4. **不要用3分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n")
+	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", scanIntervalMin))
 
 	// === 输出格式 ===
 	sb.WriteString("# 📤 输出格式\n\n")
@@ -121,6 +124,9 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short等涉及币种仓位的操作时，`symbol`字段必填\n")
 	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从\"当前持仓列表\"和\"候选币种列表\"中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
 
+	// === 系统自动风控机制 ===
+	sb.WriteString(autoRiskControlPrompt())
+
 	// === 关键提醒 ===
 	sb.WriteString("---\n\n")
 	sb.WriteString("**记住**: \n")
@@ -133,7 +139,10 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int) string {
 }
 
 // buildSystemPromptB B策略的System Prompt
-func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
+func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = 3
+	}
 	var sb strings.Builder
 
 	sb.WriteString("你是一个专业的加密货币合约交易决策 AI。\n")
@@ -147,7 +156,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- 宁可放弃一般机会，也只做高质量交易\n")
 	sb.WriteString("- 尽量减少不必要的波动、回撤和频繁进出\n")
 	sb.WriteString("- 任何决策都要先考虑风险，再考虑收益\n")
-	sb.WriteString("**重要**：系统会定期（每几分钟）更新数据，但不意味着每次都要交易。\n")
+	sb.WriteString(fmt.Sprintf("**重要**：系统会定期（每%d分钟）更新数据，但不意味着每次都要交易。\n", scanIntervalMin))
 	sb.WriteString("大多数时间，你的决策应该是：`wait` 或 `hold`，只在极佳机会出现时才建议开仓或加仓。\n\n")
 
 	sb.WriteString("# 2️⃣ 交易哲学 & 行为原则\n\n")
@@ -194,7 +203,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("# 4️⃣ 基于夏普率的自我调节\n\n")
 	sb.WriteString("你会收到**最近一段时间的**胜率**、**夏普比率**作为绩效反馈，你需要据此调节：\n")
 	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	sb.WriteString("- **停止新开仓**：连续观望至少6个周期（18分钟）。期间允许且优先做风控：`update_stop_loss` / `partial_close`；如止损触发、结构被破坏或强平风险上升，可执行必要的 `close_long/close_short`。\n\n")
+	sb.WriteString(fmt.Sprintf("- **停止新开仓**：连续观望至少6个周期（%d分钟）。期间允许且优先做风控：`update_stop_loss` / `partial_close`；如止损触发、结构被破坏或强平风险上升，可执行必要的 `close_long/close_short`。\n\n", 6*scanIntervalMin))
 	sb.WriteString("**深度反思**：\n")
 	sb.WriteString("- 交易频率过高？（每小时>1次就是过度）\n")
 	sb.WriteString("- 持仓时间过短？（<30分钟就是过早平仓，止损/结构破坏等例外除外）\n")
@@ -222,16 +231,16 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- **不孤注一掷**：单一标的的风险不应占用账户的绝大部分。\n")
 	sb.WriteString("- **风险回报思维**：每次建议开仓时，确保风险回报比合理（建议 > 1:2，理想 > 1:3）。\n\n")
 	sb.WriteString("## 止损距离与仓位联动，按币种分层（重要）\n\n")
-	sb.WriteString("山寨币波动显著大于BTC/ETH，止损如果贴得过近，会被3分钟噪声/滑点频繁扫掉。\n")
+	sb.WriteString(fmt.Sprintf("山寨币波动显著大于BTC/ETH，止损如果贴得过近，会被%d分钟噪声/滑点频繁扫掉。\n", scanIntervalMin))
 	sb.WriteString("必须按币种分层设置止损“距离”，并与仓位联动：\n")
-	sb.WriteString("- **BTC/ETH（主流）**：止损距离建议 ≥ max(0.15%价格, 0.3×`intraday_atr14 (3m)`)。\n")
-	sb.WriteString("- **山寨币（除BTC/ETH）**：止损距离建议 ≥ max(0.35%价格, 0.6×`intraday_atr14 (3m)`)。\n")
+	sb.WriteString(fmt.Sprintf("- **BTC/ETH（主流）**：止损距离建议 ≥ max(0.15%%价格, 0.3×`intraday_atr14 (%dm)`)。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- **山寨币（除BTC/ETH）**：止损距离建议 ≥ max(0.35%%价格, 0.6×`intraday_atr14 (%dm)`)。\n", scanIntervalMin))
 	sb.WriteString("当为山寨币给出更宽止损时，必须同步降低 `position_size_usd`，以保持单笔风险可控（不要因为止损变宽而把风险放大）。\n\n")
 	sb.WriteString("- **检查已有持仓**：**核心自问**：入场时的技术理由（如EMA支撑、多头排列）是否已经彻底破坏？如果只是正常的利润回撤，严禁随意执行 `close_long/short`。如果只是想收紧风险，请使用 `update_stop_loss` 而非直接平仓。\n") // 强化
 	sb.WriteString("\n")
 	sb.WriteString("**移动止损（update_stop_loss）纪律**：\n")
 	sb.WriteString("- 移动止损不是为了“马上出场”，而是为了在行情给到空间时保护利润。\n")
-	sb.WriteString("- 不要把止损贴到当前价附近导致被3分钟噪声扫掉。新止损应至少保留明显的波动空间（优先参考 `intraday_atr14 (3m)` / `normalized_volatility`）。\n\n")
+	sb.WriteString(fmt.Sprintf("- 不要把止损贴到当前价附近导致被%d分钟噪声扫掉。新止损应至少保留明显的波动空间（优先参考 `intraday_atr14 (%dm)` / `normalized_volatility`）。\n\n", scanIntervalMin, scanIntervalMin))
 
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. **评估当前绩效状态**：判断应偏保守还是积极。\n")
@@ -247,7 +256,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
 	sb.WriteString("   - 突发事件导致波动范式突变\n")
 	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
-	sb.WriteString("4. **不要用3分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n")
+	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", scanIntervalMin))
 
 	sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
@@ -272,11 +281,16 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int) string {
 	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close等涉及币种仓位的操作时，`symbol`字段必填\n")
 	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从\"当前持仓列表\"和\"候选币种列表\"中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
 
+	sb.WriteString(autoRiskControlPrompt())
+
 	return sb.String()
 }
 
 // buildSystemPromptShortTerm 专注短期/波动交易的 System Prompt（策略 V）
-func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) string {
+func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = 3
+	}
 	var sb strings.Builder
 
 	sb.WriteString("你是一个专门做短期/高波动交易的加密货币合约交易 AI。\n")
@@ -292,7 +306,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) 
 
 	// 2️⃣ 时间尺度与交易频率
 	sb.WriteString("# 2️⃣ 时间尺度与交易频率\n\n")
-	sb.WriteString("- 主要时间尺度：3 分钟 K 线 + 1 小时 / 4 小时背景。\n")
+	sb.WriteString(fmt.Sprintf("- 主要时间尺度：%d 分钟 K 线 + 1 小时 / 4 小时背景。\n", scanIntervalMin))
 	sb.WriteString("- 典型持仓时间：5–60 分钟，除非趋势非常强，不应频繁几十秒进出。\n")
 	sb.WriteString("- 每小时 0–3 笔新开仓是合理区间，**连续很多周期都在交易通常是不健康的**。\n")
 	sb.WriteString("- 如果信号一般或方向不清晰，宁可观望，不要为了\"做点什么\"而下单。\n\n")
@@ -301,7 +315,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) 
 	sb.WriteString("# 3️⃣ 波动与信号强度\n\n")
 	sb.WriteString("你应重点利用以下信息构建短期交易逻辑：\n")
 	sb.WriteString("- normalized_volatility (ATR14/price)：波动率放大/收缩。\n")
-	sb.WriteString("- 3 分钟价格序列：突破/回踩/震荡区间边缘、假突破形态。\n")
+	sb.WriteString(fmt.Sprintf("- %d 分钟价格序列：突破/回踩/震荡区间边缘、假突破形态。\n", scanIntervalMin))
 	sb.WriteString("- EMA/MACD 序列：短周期趋势方向、背离、动能衰减。\n")
 	sb.WriteString("- RSI7/RSI14：短期超买超卖、急跌急涨后的情绪极值。\n")
 	sb.WriteString("- 成交量 / OI 序列：放量突破、缩量反弹、持仓量急剧上升/下降。\n\n")
@@ -375,6 +389,8 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int) 
 	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close等涉及币种仓位的操作时，`symbol`字段必填\n")
 	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从\"当前持仓列表\"和\"候选币种列表\"中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
 
+	sb.WriteString(autoRiskControlPrompt())
+
 	return sb.String()
 }
 
@@ -394,13 +410,17 @@ func buildUserPrompt(ctx *Context) string {
 	}
 
 	// 账户
-	sb.WriteString(fmt.Sprintf("**账户**: 净值%.2f | 余额%.2f (%.1f%%) | 盈亏%+.2f%% | 保证金%.1f%% | 持仓%d个\n\n",
+	sb.WriteString(fmt.Sprintf("**账户**: 净值%.2f | 余额%.2f (%.1f%%) | 盈亏%+.2f%% | 保证金%.1f%% | 持仓%d个\n",
 		ctx.Account.TotalEquity,
 		ctx.Account.AvailableBalance,
 		(ctx.Account.AvailableBalance/ctx.Account.TotalEquity)*100,
 		ctx.Account.TotalPnLPct,
 		ctx.Account.MarginUsedPct,
 		ctx.Account.PositionCount))
+	if ctx.Account.PeakEquity > 0 {
+		sb.WriteString(fmt.Sprintf("**全局峰值净值**: %.2f | 当前回撤: %.2f%%\n", ctx.Account.PeakEquity, ctx.Account.DrawdownFromPeakPct))
+	}
+	sb.WriteString("\n")
 
 	// 持仓（完整市场数据）
 	if len(ctx.Positions) > 0 {
@@ -491,13 +511,15 @@ func formatEntryThesis(pos PositionInfo) string {
 }
 
 // extraUserPromptForStrategyB 策略B的额外用户提示词信息
-func extraUserPromptForStrategyB(marketData *market.Data) string {
+func extraUserPromptForStrategyB(marketData *market.Data, scanIntervalMin int) string {
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = 3
+	}
 	var sb strings.Builder
-	// 日内波动刻画：3m ATR14（价格单位），用于止损距离/噪声过滤
 	if marketData.IntradayATR14 > 0 {
 		sb.WriteString(fmt.Sprintf(
-			"intraday_atr14 (3m) = %.4f\n\n",
-			marketData.IntradayATR14,
+			"intraday_atr14 (%dm) = %.4f\n\n",
+			scanIntervalMin, marketData.IntradayATR14,
 		))
 	}
 
@@ -581,13 +603,17 @@ func buildUserPromptB(ctx *Context) string {
 	}
 
 	// 账户
-	sb.WriteString(fmt.Sprintf("**账户**: 净值%.2f | 余额%.2f (%.1f%%) | 盈亏%+.2f%% | 保证金%.1f%% | 持仓%d个\n\n",
+	sb.WriteString(fmt.Sprintf("**账户**: 净值%.2f | 余额%.2f (%.1f%%) | 盈亏%+.2f%% | 保证金%.1f%% | 持仓%d个\n",
 		ctx.Account.TotalEquity,
 		ctx.Account.AvailableBalance,
 		(ctx.Account.AvailableBalance/ctx.Account.TotalEquity)*100,
 		ctx.Account.TotalPnLPct,
 		ctx.Account.MarginUsedPct,
 		ctx.Account.PositionCount))
+	if ctx.Account.PeakEquity > 0 {
+		sb.WriteString(fmt.Sprintf("**全局峰值净值**: %.2f | 当前回撤: %.2f%%\n", ctx.Account.PeakEquity, ctx.Account.DrawdownFromPeakPct))
+	}
+	sb.WriteString("\n")
 
 	// 持仓（完整市场数据）
 	if len(ctx.Positions) > 0 {
@@ -616,7 +642,7 @@ func buildUserPromptB(ctx *Context) string {
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
 				sb.WriteString(market.Format(marketData))
 				// 相对于strategyA，strategyB增加了一些新指标
-				sb.WriteString(extraUserPromptForStrategyB(marketData))
+				sb.WriteString(extraUserPromptForStrategyB(marketData, ctx.ScanIntervalMin))
 				sb.WriteString("\n")
 			}
 			// 入场论据（供 LLM 对比是否应继续持有）
@@ -646,7 +672,7 @@ func buildUserPromptB(ctx *Context) string {
 		// 使用FormatMarketData输出完整市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
 		sb.WriteString(market.Format(marketData))
-		sb.WriteString(extraUserPromptForStrategyB(marketData))
+		sb.WriteString(extraUserPromptForStrategyB(marketData, ctx.ScanIntervalMin))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
@@ -657,6 +683,22 @@ func buildUserPromptB(ctx *Context) string {
 	sb.WriteString("---\n\n")
 	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
 
+	return sb.String()
+}
+
+// autoRiskControlPrompt 返回系统自动风控机制的描述（注入 System Prompt）
+func autoRiskControlPrompt() string {
+	var sb strings.Builder
+	sb.WriteString("## 系统自动风控机制\n\n")
+	sb.WriteString("本系统内置自动风控规则，在你的决策**之前**独立运行。当触发时，**该周期不会调用你**，系统直接执行操作。\n")
+	sb.WriteString("你会在下一次被调用时看到这些操作的记录（在「近期系统自动操作」中）。\n\n")
+	sb.WriteString("**自动止盈**：当某个持仓的净ROI（扣除手续费和滑点后）达到阈值时，系统会分阶段部分平仓或全部平仓。\n")
+	sb.WriteString("**自动止损**：当夏普比率极差、连续亏损过多或保证金占用过高时，系统会对浮亏持仓执行部分平仓以降低风险。\n\n")
+	sb.WriteString("**你应该**：\n")
+	sb.WriteString("1. 查看「近期系统自动操作」和「最近交易结果」中的平仓来源\n")
+	sb.WriteString("2. 如果某个持仓已被系统部分平仓，评估剩余仓位是否仍有持有价值\n")
+	sb.WriteString("3. 从自动止损事件中学习：如果某类交易反复触发自动止损，说明入场质量可能有问题\n")
+	sb.WriteString("4. 不要与自动风控对抗（例如系统刚止损平仓后立即重新开仓同方向）\n\n")
 	return sb.String()
 }
 
@@ -675,7 +717,6 @@ func getPerformance(ctx *Context) string {
 	case logger.PerformanceAnalysis:
 		perf = &v
 	default:
-		// 类型不符就直接返回空，防止 panic
 		return "夏普比率: 0.00"
 	}
 
@@ -686,5 +727,69 @@ func getPerformance(ctx *Context) string {
 		perf.SharpeRatio,
 		perf.CurrentLosingStreak,
 	))
+
+	// 最近交易结果（含平仓来源）
+	sb.WriteString(formatRecentTrades(ctx.RecentTrades))
+
+	// 近期系统自动操作记录
+	sb.WriteString(formatAutoEvents(ctx.RecentAutoEvents))
+
+	return sb.String()
+}
+
+// formatRecentTrades 格式化最近交易结果（含平仓来源）
+func formatRecentTrades(trades []logger.TradeOutcome) string {
+	if len(trades) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n**最近交易结果**:\n")
+	for i, t := range trades {
+		sourceLabel := "LLM"
+		switch t.CloseSource {
+		case "auto_stop_loss":
+			sourceLabel = "系统自动止损"
+		case "auto_take_profit":
+			sourceLabel = "系统自动止盈"
+		}
+		sb.WriteString(fmt.Sprintf("  %d. %s %s | 开%.4f→平%.4f | 盈亏%+.2f%% (%.2f USDT) | 持仓%s | 平仓来源: %s\n",
+			i+1, t.Symbol, strings.ToUpper(t.Side),
+			t.OpenPrice, t.ClosePrice,
+			t.PnLPct, t.PnL,
+			t.Duration,
+			sourceLabel,
+		))
+	}
+	return sb.String()
+}
+
+// formatAutoEvents 格式化近期系统自动操作记录
+func formatAutoEvents(events []AutoEventSummary) string {
+	if len(events) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n**近期系统自动操作**（系统自动执行，不经过你的决策）:\n")
+	for _, ev := range events {
+		sourceLabel := "自动止盈"
+		if ev.Source == "auto_stop_loss" {
+			sourceLabel = "自动止损"
+		}
+		actionLabel := ev.Action
+		switch ev.Action {
+		case "partial_close":
+			actionLabel = "部分平仓"
+		case "close_long":
+			actionLabel = "平多"
+		case "close_short":
+			actionLabel = "平空"
+		}
+		line := fmt.Sprintf("  - [%s] %s %s (%s)", ev.Time, ev.Symbol, actionLabel, sourceLabel)
+		if ev.Reasoning != "" {
+			line += " | " + ev.Reasoning
+		}
+		sb.WriteString(line + "\n")
+	}
+	sb.WriteString("**注意**: 上述操作已由系统自动执行。请在你的分析中考虑这些操作的影响，避免重复操作。\n")
 	return sb.String()
 }

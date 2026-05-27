@@ -1,6 +1,7 @@
 package decision
 
 import (
+	"nofx/logger"
 	"nofx/market"
 	"time"
 )
@@ -34,13 +35,15 @@ type PositionInfo struct {
 
 // AccountInfo 账户信息
 type AccountInfo struct {
-	TotalEquity      float64 `json:"total_equity"`      // 账户净值
-	AvailableBalance float64 `json:"available_balance"` // 可用余额
-	TotalPnL         float64 `json:"total_pnl"`         // 总盈亏
-	TotalPnLPct      float64 `json:"total_pnl_pct"`     // 总盈亏百分比
-	MarginUsed       float64 `json:"margin_used"`       // 已用保证金
-	MarginUsedPct    float64 `json:"margin_used_pct"`   // 保证金使用率
-	PositionCount    int     `json:"position_count"`    // 持仓数量
+	TotalEquity        float64 `json:"total_equity"`         // 账户净值
+	AvailableBalance   float64 `json:"available_balance"`    // 可用余额
+	TotalPnL           float64 `json:"total_pnl"`            // 总盈亏
+	TotalPnLPct        float64 `json:"total_pnl_pct"`        // 总盈亏百分比
+	MarginUsed         float64 `json:"margin_used"`          // 已用保证金
+	MarginUsedPct      float64 `json:"margin_used_pct"`      // 保证金使用率
+	PositionCount      int     `json:"position_count"`       // 持仓数量
+	PeakEquity         float64 `json:"peak_equity"`          // 全局历史最高净值
+	DrawdownFromPeakPct float64 `json:"drawdown_from_peak_pct"` // 当前回撤百分比（负数）
 }
 
 // CandidateCoin 候选币种（来自币种池）
@@ -131,12 +134,33 @@ type Context struct {
 	// 自动止盈配置（从config层传入，零值时使用默认）
 	AutoTakeProfit AutoTakeProfitConfig `json:"-"`
 
+	// 近期系统自动操作记录（注入 prompt，供 LLM 学习止盈/止损反馈）
+	RecentAutoEvents []AutoEventSummary     `json:"-"`
+	// 近期完整交易结果（注入 prompt，含平仓来源）
+	RecentTrades     []logger.TradeOutcome  `json:"-"`
+
+	// 扫描周期（分钟），用于 prompt 中动态替换写死的 "3分钟"
+	ScanIntervalMin int `json:"-"`
+	// 最低持仓时间（分钟），LLM 平仓前的硬约束（0=不限制）
+	MinHoldMinutes  int `json:"-"`
+
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
 	TraderID        string `json:"-"` // TraderID (用于区分目录)
 
 	// AI 客户端（每个 trader 独立实例，为 nil 时使用全局默认）
 	AI AICaller `json:"-"`
+}
+
+// AutoEventSummary 近期系统自动操作摘要（注入 prompt，供 LLM 学习）
+type AutoEventSummary struct {
+	Time       string // 触发时间 (HH:MM)
+	Symbol     string // 币种
+	Action     string // partial_close / close_long / close_short
+	Source     string // auto_stop_loss / auto_take_profit
+	Reasoning  string // 触发原因
+	ClosePct   float64 // 平仓比例（0 表示全平）
+	Price      float64 // 执行价格
 }
 
 // AutoDecisionState 自动决策跨周期状态（用于TP档位只触发一次、冷却等）

@@ -132,6 +132,9 @@ export interface TradedSymbolsSummary {
   closed_count: number;
   total_realized_pnl: number;
   total_unrealized_pnl: number;
+  total_trades: number;
+  total_win_count: number;
+  total_win_rate: number;
 }
 
 export interface TradedSymbolsResponse {

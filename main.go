@@ -105,6 +105,7 @@ func main() {
 			cfg.StopLossDistance,   // 止损最小距离配置
 			cfg.AutoTakeProfit,    // 自动止盈配置
 			cfg.AutoResume,        // 接续运行开关
+			cfg.MinHoldMinutes,    // LLM 最低持仓时间
 		)
 		if err != nil {
 			log.Fatalf("❌ 初始化trader失败: %v", err)

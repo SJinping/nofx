@@ -188,6 +188,9 @@ type tradedSymbolsSummary struct {
 	ClosedCount        int     `json:"closed_count"`
 	TotalRealizedPnL   float64 `json:"total_realized_pnl"`
 	TotalUnrealizedPnL float64 `json:"total_unrealized_pnl"`
+	TotalTrades        int     `json:"total_trades"`
+	TotalWinCount      int     `json:"total_win_count"`
+	TotalWinRate       float64 `json:"total_win_rate"`
 }
 
 type tradedSymbolsResponse struct {
@@ -448,7 +451,7 @@ func calcOrderStatsFromOrders(symbol string, orders []traderpkg.OrderRecord, ass
 }
 
 // handleTradedSymbols 返回按币种汇总的盈亏详情（已实现 + 当前未实现）。
-// 数据来源：决策日志（open/close/partial_close）+ 当前持仓快照（positions）。
+// 数据来源：TradeStatsCache（增量持久化）+ 当前持仓快照（positions）。
 func (s *Server) handleTradedSymbols(c *gin.Context) {
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
@@ -462,26 +465,26 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		return
 	}
 
-	// 读取尽可能多的记录。这里用较大上限以覆盖“开仓在更早周期、平仓在最近周期”的情况。
-	records, err := trader.GetDecisionLogger().GetLatestRecords(100000)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("读取决策日志失败: %v", err)})
-		return
-	}
+	cachedStats := trader.GetDecisionLogger().GetTradeStatsCache().GetSymbolStats()
 
-	type openPos struct {
-		side      string
-		openPrice float64
-		openTime  time.Time
-		quantity  float64
-		leverage  int
-	}
-
-	// symbol_side -> openPos
-	openPositions := make(map[string]*openPos)
-
-	// symbol -> summary item
 	items := make(map[string]*tradedSymbolSummaryItem)
+	for _, cs := range cachedStats {
+		items[cs.Symbol] = &tradedSymbolSummaryItem{
+			Symbol:            cs.Symbol,
+			Status:            tradedSymbolClosed,
+			TotalTrades:       cs.TotalTrades,
+			WinCount:          cs.WinCount,
+			LossCount:         cs.LossCount,
+			RealizedPnL:       cs.RealizedPnL,
+			OpenLongCount:     cs.OpenLongCount,
+			OpenShortCount:    cs.OpenShortCount,
+			CloseLongCount:    cs.CloseLongCount,
+			CloseShortCount:   cs.CloseShortCount,
+			PartialCloseCount: cs.PartialCloseCount,
+			FirstTradeTime:    cs.FirstTradeTime,
+			LastTradeTime:     cs.LastTradeTime,
+		}
+	}
 
 	ensureItem := func(symbol string) *tradedSymbolSummaryItem {
 		if it, ok := items[symbol]; ok {
@@ -495,152 +498,6 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		return it
 	}
 
-	updateTradeTime := func(it *tradedSymbolSummaryItem, ts time.Time) {
-		if it.FirstTradeTime == "" {
-			it.FirstTradeTime = ts.Format(time.RFC3339)
-		}
-		it.LastTradeTime = ts.Format(time.RFC3339)
-	}
-
-	isTradeAction := func(action string) bool {
-		switch action {
-		case "open_long", "open_short", "close_long", "close_short", "partial_close":
-			return true
-		default:
-			return false
-		}
-	}
-
-	// 遍历日志（GetLatestRecords 返回已按时间从旧到新）
-	for _, record := range records {
-		if record == nil {
-			continue
-		}
-		for _, action := range record.Decisions {
-			if !action.Success {
-				continue
-			}
-			// 仅统计真实交易动作，忽略 wait/hold/update_stop_loss/update_take_profit 等。
-			if !isTradeAction(action.Action) {
-				continue
-			}
-
-			symbol := action.Symbol
-			if symbol == "" {
-				continue
-			}
-			it := ensureItem(symbol)
-			updateTradeTime(it, action.Timestamp)
-
-			// side 推断：open/close 带方向；partial_close 需要从当前持仓推断
-			side := ""
-			switch action.Action {
-			case "open_long", "close_long":
-				side = "long"
-			case "open_short", "close_short":
-				side = "short"
-			}
-
-			posKey := ""
-			if side != "" {
-				posKey = symbol + "_" + side
-			}
-
-			switch action.Action {
-			case "open_long":
-				it.OpenLongCount++
-				openPositions[posKey] = &openPos{
-					side:      "long",
-					openPrice: action.Price,
-					openTime:  action.Timestamp,
-					quantity:  action.Quantity,
-					leverage:  action.Leverage,
-				}
-			case "open_short":
-				it.OpenShortCount++
-				openPositions[posKey] = &openPos{
-					side:      "short",
-					openPrice: action.Price,
-					openTime:  action.Timestamp,
-					quantity:  action.Quantity,
-					leverage:  action.Leverage,
-				}
-			case "close_long":
-				it.CloseLongCount++
-				if op, ok := openPositions[posKey]; ok && op != nil {
-					// USDT 盈亏：不额外乘杠杆（名义仓位已由 quantity 体现）
-					pnl := (action.Price - op.openPrice) * op.quantity
-					it.RealizedPnL += pnl
-					it.TotalTrades++
-					if pnl > 0 {
-						it.WinCount++
-					} else if pnl < 0 {
-						it.LossCount++
-					}
-					delete(openPositions, posKey)
-				}
-			case "close_short":
-				it.CloseShortCount++
-				if op, ok := openPositions[posKey]; ok && op != nil {
-					pnl := (op.openPrice - action.Price) * op.quantity
-					it.RealizedPnL += pnl
-					it.TotalTrades++
-					if pnl > 0 {
-						it.WinCount++
-					} else if pnl < 0 {
-						it.LossCount++
-					}
-					delete(openPositions, posKey)
-				}
-			case "partial_close":
-				// best-effort：尝试在 long/short 中找到一个打开的仓位
-				it.PartialCloseCount++
-
-				var opKey string
-				var op *openPos
-				if opl, ok := openPositions[symbol+"_long"]; ok && opl != nil {
-					opKey = symbol + "_long"
-					op = opl
-				} else if ops, ok := openPositions[symbol+"_short"]; ok && ops != nil {
-					opKey = symbol + "_short"
-					op = ops
-				}
-				if op == nil {
-					continue
-				}
-
-				closeQty := action.Quantity
-				if closeQty <= 0 || closeQty > op.quantity {
-					// 若数量异常，按“全平”处理（避免算不出盈亏）
-					closeQty = op.quantity
-				}
-
-				pnl := 0.0
-				if op.side == "long" {
-					pnl = (action.Price - op.openPrice) * closeQty
-				} else {
-					pnl = (op.openPrice - action.Price) * closeQty
-				}
-
-				it.RealizedPnL += pnl
-				it.TotalTrades++
-				if pnl > 0 {
-					it.WinCount++
-				} else if pnl < 0 {
-					it.LossCount++
-				}
-
-				op.quantity -= closeQty
-				if op.quantity <= 0 {
-					delete(openPositions, opKey)
-				} else {
-					openPositions[opKey] = op
-				}
-			}
-		}
-	}
-
-	// 当前持仓快照用于未实现盈亏 + 状态
 	positions, _ := trader.GetPositions()
 	posBySymbol := make(map[string]map[string]interface{})
 
@@ -683,6 +540,8 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 	totalRealized := 0.0
 	totalUnrealized := 0.0
 	holdingCount := 0
+	totalTrades := 0
+	totalWinCount := 0
 
 	for _, it := range items {
 		if it == nil {
@@ -714,13 +573,7 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 				Leverage:   lev,
 			}
 		} else {
-			// 实际持仓（交易所查询）中没有该币种 → 视为已平仓。
-			// 不再依赖决策日志的 openPositions 推断，因为止损/止盈单在交易所侧触发
-			// 或手动平仓时，决策日志不会记录对应的平仓事件，会导致误判为持仓中。
 			it.Status = tradedSymbolClosed
-			// 清理残留的 openPositions 记录，确保盈亏统计不受影响
-			delete(openPositions, it.Symbol+"_long")
-			delete(openPositions, it.Symbol+"_short")
 		}
 
 		it.TotalPnL = it.RealizedPnL + it.UnrealizedPnL
@@ -731,6 +584,8 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 
 		totalRealized += it.RealizedPnL
 		totalUnrealized += it.UnrealizedPnL
+		totalTrades += it.TotalTrades
+		totalWinCount += it.WinCount
 
 		resp.Symbols = append(resp.Symbols, *it)
 	}
@@ -745,12 +600,20 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		return resp.Symbols[i].TotalPnL > resp.Symbols[j].TotalPnL
 	})
 
+	totalWinRate := 0.0
+	if totalTrades > 0 {
+		totalWinRate = (float64(totalWinCount) / float64(totalTrades)) * 100
+	}
+
 	resp.Summary = tradedSymbolsSummary{
 		TotalSymbols:       len(resp.Symbols),
 		HoldingCount:       holdingCount,
 		ClosedCount:        len(resp.Symbols) - holdingCount,
 		TotalRealizedPnL:   totalRealized,
 		TotalUnrealizedPnL: totalUnrealized,
+		TotalTrades:        totalTrades,
+		TotalWinCount:      totalWinCount,
+		TotalWinRate:       totalWinRate,
 	}
 
 	c.JSON(http.StatusOK, resp)

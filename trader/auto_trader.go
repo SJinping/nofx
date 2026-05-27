@@ -90,6 +90,9 @@ type AutoTraderConfig struct {
 	// 自动止盈配置（零值时使用默认）
 	AutoTakeProfit decision.AutoTakeProfitConfig
 
+	// LLM 平仓前的最低持仓时间（分钟，0=不限制）
+	MinHoldMinutes int
+
 	// 接续运行：启动时自动恢复交易（不需要手动点击开始）
 	AutoResume bool
 }
@@ -541,6 +544,7 @@ func (at *AutoTrader) runCycle() error {
 			Action:         d.Action,
 			Symbol:         d.Symbol,
 			DecisionSource: d.DecisionSource,
+			Reasoning:      d.Reasoning,
 			Quantity:       0,
 			Leverage:       d.Leverage,
 			Price:          0,
@@ -876,6 +880,48 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		performance = nil
 	}
 
+	// 5.5 提取近期系统自动操作记录和最近交易结果（供 prompt 注入）
+	var recentAutoEvents []decision.AutoEventSummary
+	var recentTrades []logger.TradeOutcome
+	if performance != nil {
+		if len(performance.RecentTrades) > 5 {
+			recentTrades = performance.RecentTrades[:5]
+		} else {
+			recentTrades = performance.RecentTrades
+		}
+	}
+	// 从最近决策日志中提取自动操作事件
+	recentRecords, _ := at.decisionLogger.GetLatestRecords(10)
+	for _, rec := range recentRecords {
+		for _, act := range rec.Decisions {
+			if !act.Success {
+				continue
+			}
+			if act.DecisionSource != "auto_stop_loss" && act.DecisionSource != "auto_take_profit" {
+				continue
+			}
+			recentAutoEvents = append(recentAutoEvents, decision.AutoEventSummary{
+				Time:      act.Timestamp.Format("15:04"),
+				Symbol:    act.Symbol,
+				Action:    act.Action,
+				Source:    act.DecisionSource,
+				Reasoning: act.Reasoning,
+				Price:     act.Price,
+			})
+		}
+	}
+	// 只保留最近 10 条自动事件
+	if len(recentAutoEvents) > 10 {
+		recentAutoEvents = recentAutoEvents[len(recentAutoEvents)-10:]
+	}
+
+	// 5.6 更新全局峰值净值并计算回撤
+	var peakEquity, drawdownFromPeakPct float64
+	if statsCache := at.decisionLogger.GetTradeStatsCache(); statsCache != nil && totalEquity > 0 {
+		peakEquity, drawdownFromPeakPct = statsCache.UpdatePeakEquity(totalEquity, time.Now().Format("2006-01-02 15:04:05"))
+		_ = statsCache.Save()
+	}
+
 	// 6. 构建上下文（从运行时配置读取可热更新的参数）
 	rcSnap := at.runtimeCfg.Get()
 	ctx := &decision.Context{
@@ -885,21 +931,27 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		BTCETHLeverage:  rcSnap.BTCETHLeverage,  // 从运行时配置读取
 		AltcoinLeverage: rcSnap.AltcoinLeverage, // 从运行时配置读取
 		Account: decision.AccountInfo{
-			TotalEquity:      totalEquity,
-			AvailableBalance: availableBalance,
-			TotalPnL:         totalPnL,
-			TotalPnLPct:      totalPnLPct,
-			MarginUsed:       totalMarginUsed,
-			MarginUsedPct:    marginUsedPct,
-			PositionCount:    len(positionInfos),
+			TotalEquity:         totalEquity,
+			AvailableBalance:    availableBalance,
+			TotalPnL:            totalPnL,
+			TotalPnLPct:         totalPnLPct,
+			MarginUsed:          totalMarginUsed,
+			MarginUsedPct:       marginUsedPct,
+			PositionCount:       len(positionInfos),
+			PeakEquity:          peakEquity,
+			DrawdownFromPeakPct: drawdownFromPeakPct,
 		},
 		Positions:           positionInfos,
 		CandidateCoins:      candidateCoins,
-		Performance:         performance, // 添加历史表现分析
+		Performance:         performance,
+		RecentAutoEvents:    recentAutoEvents,
+		RecentTrades:        recentTrades,
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
 		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
 		AutoTakeProfit:      rcSnap.AutoTakeProfit,  // 从运行时配置读取
+		ScanIntervalMin:    rcSnap.ScanIntervalMin, // 用于 prompt 动态时间
+		MinHoldMinutes:     rcSnap.MinHoldMinutes,  // LLM 最低持仓时间
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,

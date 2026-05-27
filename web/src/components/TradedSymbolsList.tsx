@@ -32,6 +32,8 @@ const translations: Record<string, Record<string, string>> = {
     lastTrade: '最后交易',
     summary: '汇总',
     symbols: '币种',
+    totalTrades: '总交易',
+    totalWinRate: '总胜率',
     loading: '加载中...',
   },
   en: {
@@ -59,6 +61,8 @@ const translations: Record<string, Record<string, string>> = {
     lastTrade: 'Last Trade',
     summary: 'Summary',
     symbols: 'Symbols',
+    totalTrades: 'Total Trades',
+    totalWinRate: 'Win Rate',
     loading: 'Loading...',
   },
 };
@@ -228,7 +232,7 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
 
       {/* 汇总信息 */}
       {summary && summary.total_symbols > 0 && (
-        <div className="grid grid-cols-4 gap-3 mb-5 p-4 rounded" style={{ background: '#1E2329' }}>
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-5 p-4 rounded" style={{ background: '#1E2329' }}>
           <div className="text-center">
             <div className="text-xs mb-1" style={{ color: '#848E9C' }}>{t('symbols')}</div>
             <div className="text-lg font-bold" style={{ color: '#EAECEF' }}>{summary.total_symbols}</div>
@@ -236,6 +240,16 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
           <div className="text-center">
             <div className="text-xs mb-1" style={{ color: '#848E9C' }}>{t('holding')}</div>
             <div className="text-lg font-bold" style={{ color: '#F0B90B' }}>{summary.holding_count}</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: '#848E9C' }}>{t('totalTrades')}</div>
+            <div className="text-lg font-bold" style={{ color: '#EAECEF' }}>{summary.total_trades || 0}</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xs mb-1" style={{ color: '#848E9C' }}>{t('totalWinRate')}</div>
+            <div className="text-lg font-bold" style={{ color: (summary.total_win_rate || 0) >= 50 ? '#0ECB81' : '#F6465D' }}>
+              {(summary.total_win_rate || 0).toFixed(1)}%
+            </div>
           </div>
           <div className="text-center">
             <div className="text-xs mb-1" style={{ color: '#848E9C' }}>{t('realizedPnL')}</div>

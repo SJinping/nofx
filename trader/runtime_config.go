@@ -20,6 +20,7 @@ type RuntimeConfig struct {
 	maxDrawdown      float64       // 最大回撤百分比
 	stopTradingTime  time.Duration // 风控暂停时长
 	scanInterval     time.Duration // 扫描间隔
+	minHoldMinutes   int           // LLM 平仓最低持仓时间（分钟，0=不限制）
 	aiClient         *mcp.Client   // 该 trader 的 AI 客户端（用于热更新模型名）
 }
 
@@ -33,6 +34,7 @@ type RuntimeConfigSnapshot struct {
 	MaxDrawdown     float64                          `json:"max_drawdown"`
 	StopTradingMin  int                              `json:"stop_trading_minutes"`
 	ScanIntervalMin int                              `json:"scan_interval_minutes"`
+	MinHoldMinutes  int                              `json:"min_hold_minutes"`
 	AIModel         string                           `json:"ai_model"`
 }
 
@@ -46,6 +48,7 @@ type RuntimeConfigPatch struct {
 	MaxDrawdown      *float64                            `json:"max_drawdown,omitempty"`
 	StopTradingMin   *int                                `json:"stop_trading_minutes,omitempty"`
 	ScanIntervalMin  *int                                `json:"scan_interval_minutes,omitempty"`
+	MinHoldMinutes   *int                                `json:"min_hold_minutes,omitempty"`
 	AIModel          *string                             `json:"ai_model,omitempty"`
 }
 
@@ -60,6 +63,7 @@ func NewRuntimeConfig(cfg AutoTraderConfig, aiClient *mcp.Client) *RuntimeConfig
 		maxDrawdown:     cfg.MaxDrawdown,
 		stopTradingTime: cfg.StopTradingTime,
 		scanInterval:    cfg.ScanInterval,
+		minHoldMinutes:  cfg.MinHoldMinutes,
 		aiClient:        aiClient,
 	}
 }
@@ -83,6 +87,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 		MaxDrawdown:     rc.maxDrawdown,
 		StopTradingMin:  int(rc.stopTradingTime.Minutes()),
 		ScanIntervalMin: int(rc.scanInterval.Minutes()),
+		MinHoldMinutes:  rc.minHoldMinutes,
 		AIModel:         aiModel,
 	}
 }
@@ -121,6 +126,10 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 		newDur := time.Duration(*patch.StopTradingMin) * time.Minute
 		log.Printf("🔧 运行时配置更新: StopTradingTime %v → %v", rc.stopTradingTime, newDur)
 		rc.stopTradingTime = newDur
+	}
+	if patch.MinHoldMinutes != nil && *patch.MinHoldMinutes >= 0 {
+		log.Printf("🔧 运行时配置更新: MinHoldMinutes %d → %d", rc.minHoldMinutes, *patch.MinHoldMinutes)
+		rc.minHoldMinutes = *patch.MinHoldMinutes
 	}
 	if patch.ScanIntervalMin != nil && *patch.ScanIntervalMin >= 1 {
 		newDur := time.Duration(*patch.ScanIntervalMin) * time.Minute

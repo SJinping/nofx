@@ -31,7 +31,7 @@ func NewTraderManager(configFilePath string) *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, autoResume bool) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, autoResume bool, minHoldMinutes int) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -93,6 +93,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		MinRiskReward:            cfg.MinRiskReward,
 		StopLossDistance:         convertStopLossDistanceConfig(stopLossDistCfg),
 		AutoTakeProfit:           convertAutoTakeProfitConfig(autoTPCfg),
+		MinHoldMinutes:           minHoldMinutes,
 		EnableRecording:          enableRecording,
 		AutoResume:               autoResume,
 	}
@@ -261,6 +262,9 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 	}
 	if patch.StopTradingMin != nil {
 		raw["stop_trading_minutes"] = *patch.StopTradingMin
+	}
+	if patch.MinHoldMinutes != nil {
+		raw["min_hold_minutes"] = *patch.MinHoldMinutes
 	}
 
 	// leverage 是嵌套对象
