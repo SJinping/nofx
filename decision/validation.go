@@ -528,8 +528,8 @@ func ExtraValidate(d *Decision, ctx *Context) error {
 			if perf.SharpeRatio < -0.5 {
 				return fmt.Errorf("sharpe 比率 %.2f 过差，禁止新开仓，只允许平仓/减仓/移动止损", perf.SharpeRatio)
 			}
-			if perf.CurrentLosingStreak >= 2 {
-				return fmt.Errorf("当前已连续亏损 %d 笔，禁止新开仓，先处理已有仓位", perf.CurrentLosingStreak)
+			if perf.CurrentLosingStreak >= 4 {
+				return fmt.Errorf("当前已连续亏损 %d 笔，暂停新开仓，等待市场明确信号", perf.CurrentLosingStreak)
 			}
 		}
 	}
