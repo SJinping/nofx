@@ -61,5 +61,8 @@ func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
 }
 
 func (StrategyV) ExtraValidate(d *Decision, ctx *Context) error {
+	if err := validateBTCDirectionConstraint(d, ctx); err != nil {
+		return err
+	}
 	return validateMinHoldingTime(d, ctx)
 }

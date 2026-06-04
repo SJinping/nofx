@@ -8,6 +8,76 @@ import (
 	"time"
 )
 
+// formatBTCEnvironment 从 BTC 市场数据中提取 4h 环境标签，供 user prompt 注入。
+// 返回空字符串表示无法判断（BTC 数据缺失）。
+func formatBTCEnvironment(ctx *Context) string {
+	btcData, ok := ctx.MarketDataMap["BTCUSDT"]
+	if !ok || btcData == nil || btcData.LongerTermContext == nil {
+		return ""
+	}
+	lt := btcData.LongerTermContext
+	structure := lt.MarketStructure // "uptrend" / "downtrend" / "range"
+
+	label := ""
+	detail := ""
+	switch structure {
+	case "downtrend":
+		label = "下跌趋势"
+		detail = "EMA20 < EMA50"
+	case "uptrend":
+		label = "上涨趋势"
+		detail = "EMA20 > EMA50"
+	case "range":
+		label = "震荡"
+		detail = "EMA20 与 EMA50 缠绕"
+	default:
+		return ""
+	}
+
+	macdStr := ""
+	if len(lt.MACDValues) > 0 {
+		lastMACD := lt.MACDValues[len(lt.MACDValues)-1]
+		if lastMACD < 0 {
+			macdStr = ", MACD < 0"
+		} else {
+			macdStr = ", MACD > 0"
+		}
+	}
+
+	return fmt.Sprintf("**BTC 4h 市场环境**: %s (%s%s)\n", label, detail, macdStr)
+}
+
+// getBTCMarketStructure 从 Context 中获取 BTC 4h 市场结构标签（供 validation 使用）
+func GetBTCMarketStructure(ctx *Context) string {
+	btcData, ok := ctx.MarketDataMap["BTCUSDT"]
+	if !ok || btcData == nil || btcData.LongerTermContext == nil {
+		return ""
+	}
+	return btcData.LongerTermContext.MarketStructure
+}
+
+// btcDirectionConstraintPrompt 生成 BTC 市场环境与方向约束规则段落（注入 system prompt）
+func btcDirectionConstraintPrompt() string {
+	var sb strings.Builder
+	sb.WriteString("# 🧭 市场环境与方向约束（每次决策前必须判断）\n\n")
+	sb.WriteString("你会在用户消息中看到 **BTC 4h 市场环境** 标签（下跌趋势/震荡/上涨趋势）。\n")
+	sb.WriteString("BTC 是加密市场的主导资产，绝大多数山寨币与 BTC 高度正相关，BTC 下跌时山寨币通常跌幅更大。\n\n")
+
+	sb.WriteString("**BTC 4h 下跌趋势时**：\n")
+	sb.WriteString("- 山寨币做多的信心度门槛提高到 **>= 90**（正常是 75），仅在极少数有独立催化剂的币种上考虑做多\n")
+	sb.WriteString("- **优先寻找做空机会**（顺势交易），弱势山寨币做空是下跌市场中获利的主要方式\n")
+	sb.WriteString("- BTC/ETH 自身也优先考虑做空\n")
+	sb.WriteString("- 如果找不到高质量做空机会 → `wait`，不要勉强做多\n\n")
+
+	sb.WriteString("**BTC 4h 震荡时**：\n")
+	sb.WriteString("- 多空均可，按正常信号强度判断\n\n")
+
+	sb.WriteString("**BTC 4h 上涨趋势时**：\n")
+	sb.WriteString("- 可以在强势币种上做多\n")
+	sb.WriteString("- 做空需极高置信度（**>= 90**），逆势做空风险极大\n\n")
+	return sb.String()
+}
+
 // buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
 // 注意风险回报比要与minRiskReward保持一致
 func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
@@ -87,6 +157,9 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
 	sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
 	sb.WriteString("**关键**: 夏普比率是重要指标，它会自然惩罚频繁交易和过度进出。\n\n")
+
+	// === 市场环境与方向约束 ===
+	sb.WriteString(btcDirectionConstraintPrompt())
 
 	// === 决策流程 ===
 	sb.WriteString("# 📋 决策流程\n\n")
@@ -242,6 +315,9 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 	sb.WriteString("- 移动止损不是为了“马上出场”，而是为了在行情给到空间时保护利润。\n")
 	sb.WriteString(fmt.Sprintf("- 不要把止损贴到当前价附近导致被%d分钟噪声扫掉。新止损应至少保留明显的波动空间（优先参考 `intraday_atr14 (%dm)` / `normalized_volatility`）。\n\n", scanIntervalMin, scanIntervalMin))
 
+	// === 市场环境与方向约束 ===
+	sb.WriteString(btcDirectionConstraintPrompt())
+
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. **评估当前绩效状态**：判断应偏保守还是积极。\n")
 	sb.WriteString("2. **检查已有持仓（对照入场论据）**：见下方检查清单。\n")
@@ -348,6 +424,9 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("  • 置信度 **≥ 70** 才能开仓；\n")
 	sb.WriteString("  • 市场健康，可适度积极。\n\n")
 
+	// === 市场环境与方向约束 ===
+	sb.WriteString(btcDirectionConstraintPrompt())
+
 	// 6️⃣ 决策流程 & 输出格式（复用 B 的 JSON 规范）
 	sb.WriteString("# 6️⃣ 决策流程\n\n")
 	sb.WriteString("1. 判断当前是趋势阶段、震荡阶段，还是高波动/事件驱动阶段。\n")
@@ -404,9 +483,13 @@ func buildUserPrompt(ctx *Context) string {
 
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
+		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
 			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
 			btcData.CurrentMACD, btcData.CurrentRSI7))
+		if envLabel := formatBTCEnvironment(ctx); envLabel != "" {
+			sb.WriteString(envLabel)
+		}
+		sb.WriteString("\n")
 	}
 
 	// 账户
@@ -597,9 +680,13 @@ func buildUserPromptB(ctx *Context) string {
 
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n\n",
+		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
 			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
 			btcData.CurrentMACD, btcData.CurrentRSI7))
+		if envLabel := formatBTCEnvironment(ctx); envLabel != "" {
+			sb.WriteString(envLabel)
+		}
+		sb.WriteString("\n")
 	}
 
 	// 账户

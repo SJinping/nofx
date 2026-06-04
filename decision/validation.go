@@ -550,9 +550,50 @@ func ExtraValidate(d *Decision, ctx *Context) error {
 		}
 	}
 
+	// BTC 市场环境方向约束：BTC downtrend 时山寨币做多需 confidence >= 90；BTC uptrend 时做空需 >= 90
+	if err := validateBTCDirectionConstraint(d, ctx); err != nil {
+		return err
+	}
+
 	// 最低持仓时间硬约束：阻止过早平仓
 	if err := validateMinHoldingTime(d, ctx); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// validateBTCDirectionConstraint BTC 市场环境硬约束。
+// - BTC 4h downtrend 时：山寨币（非 BTC/ETH）open_long 需 confidence >= 90
+// - BTC 4h uptrend 时：任何 open_short 需 confidence >= 90
+// 不完全禁止操作，而是大幅提高门槛；BTC/ETH 自身做空不受 downtrend 限制（它们有自身技术信号）。
+func validateBTCDirectionConstraint(d *Decision, ctx *Context) error {
+	if d.Action != ActionOpenLong && d.Action != ActionOpenShort {
+		return nil
+	}
+
+	btcStructure := GetBTCMarketStructure(ctx)
+	if btcStructure == "" {
+		return nil
+	}
+
+	sym := strings.ToUpper(strings.TrimSpace(d.Symbol))
+	isMajor := sym == "BTCUSDT" || sym == "ETHUSDT"
+
+	const requiredConfidence = 90
+
+	if btcStructure == "downtrend" && d.Action == ActionOpenLong && !isMajor {
+		if d.Confidence < requiredConfidence {
+			return fmt.Errorf("BTC 4h 处于下跌趋势，山寨币 %s 做多需信心度 >= %d（当前 %d），请优先考虑做空或观望",
+				d.Symbol, requiredConfidence, d.Confidence)
+		}
+	}
+
+	if btcStructure == "uptrend" && d.Action == ActionOpenShort {
+		if d.Confidence < requiredConfidence {
+			return fmt.Errorf("BTC 4h 处于上涨趋势，%s 做空需信心度 >= %d（当前 %d），逆势做空风险极大",
+				d.Symbol, requiredConfidence, d.Confidence)
+		}
 	}
 
 	return nil
