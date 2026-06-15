@@ -313,9 +313,30 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 	}
 
 	// 只有在 Sharpe 很差 或 连续亏损较多 时才触发自动降风险
-	badSharpe := perf.SharpeRatio < -0.65
+	badSharpe := perf.SharpeRatio < -0.5
 	longLosingStreak := perf.CurrentLosingStreak >= 3
 	highMargin := ctx.Account.MarginUsedPct > 85
+
+	// 无条件止损线：任何仓位浮亏超过 5% 直接全平（不需要 Sharpe/连亏前置条件）
+	var unconditionalDecisions []Decision
+	for _, pos := range ctx.Positions {
+		if pos.UnrealizedPnLPct < -5 {
+			closeAction := ActionCloseLong
+			if strings.ToLower(pos.Side) == "short" {
+				closeAction = ActionCloseShort
+			}
+			unconditionalDecisions = append(unconditionalDecisions, Decision{
+				Symbol:         pos.Symbol,
+				Action:         closeAction,
+				Reasoning:      fmt.Sprintf("无条件止损：浮亏 %.2f%% 超过 -5%% 硬限制，强制全平", pos.UnrealizedPnLPct),
+				Confidence:     100,
+				DecisionSource: "auto_stop_loss",
+			})
+		}
+	}
+	if len(unconditionalDecisions) > 0 {
+		return unconditionalDecisions
+	}
 
 	if !(badSharpe || longLosingStreak || highMargin) {
 		return nil
@@ -324,30 +345,35 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 	var decisions []Decision
 
 	for _, pos := range ctx.Positions {
-		// 1. 浮亏超过 -3%
-		// 2. 或整体保证金过高时，全部仓位平仓50%
-		if pos.UnrealizedPnLPct < -3 || ctx.Account.MarginUsedPct > 90 {
-			action := ActionPartialClose
-			pct := 30.0
+		if pos.UnrealizedPnLPct < -2 || ctx.Account.MarginUsedPct > 90 {
 			if pos.UnrealizedPnLPct < -6 {
-				pct = 50.0
-			} else if pos.UnrealizedPnLPct < -10 {
-				pct = 70.0
+				closeAction := ActionCloseLong
+				if strings.ToLower(pos.Side) == "short" {
+					closeAction = ActionCloseShort
+				}
+				decisions = append(decisions, Decision{
+					Symbol: pos.Symbol,
+					Action: closeAction,
+					Reasoning: fmt.Sprintf("Sharpe=%.2f, 连亏=%d, 浮亏%.2f%% 超 -6%%，全部平仓止损",
+						perf.SharpeRatio, perf.CurrentLosingStreak, pos.UnrealizedPnLPct),
+					Confidence:     100,
+					DecisionSource: "auto_stop_loss",
+				})
+			} else {
+				pct := 50.0
+				if pos.UnrealizedPnLPct < -4 {
+					pct = 70.0
+				}
+				decisions = append(decisions, Decision{
+					Symbol:          pos.Symbol,
+					Action:          ActionPartialClose,
+					ClosePercentage: pct,
+					Reasoning: fmt.Sprintf("Sharpe=%.2f, 连亏=%d, 保证金=%.1f%%，自动减仓%.0f%%止损",
+						perf.SharpeRatio, perf.CurrentLosingStreak, ctx.Account.MarginUsedPct, pct),
+					Confidence:     100,
+					DecisionSource: "auto_stop_loss",
+				})
 			}
-
-			decisions = append(decisions, Decision{
-				Symbol:          pos.Symbol,
-				Action:          action,
-				ClosePercentage: pct,
-				Reasoning: fmt.Sprintf("Sharpe=%.2f, 连亏=%d, 保证金=%.1f%%，自动减仓%.1f%%止损",
-					perf.SharpeRatio,
-					perf.CurrentLosingStreak,
-					ctx.Account.MarginUsedPct,
-					pct,
-				),
-				Confidence:     100,
-				DecisionSource: "auto_stop_loss",
-			})
 		}
 	}
 
