@@ -857,7 +857,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		})
 	}
 
-	log.Printf("📋 合并币种池: AI500前%d + OI_Top20 = 总计%d个候选币种",
+	log.Printf("📋 合并币种池: AI500前%d + OI_Top5 = 总计%d个候选币种",
 		ai500Limit, len(candidateCoins))
 
 	// 4. 计算总盈亏

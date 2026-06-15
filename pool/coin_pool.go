@@ -596,15 +596,20 @@ func loadOITopCache() ([]OIPosition, error) {
 	return cache.Positions, nil
 }
 
-// GetOITopSymbols 获取OI Top的币种符号列表
+// GetOITopSymbols 获取OI Top的币种符号列表（限制为 top 5）
 func GetOITopSymbols() ([]string, error) {
 	positions, err := GetOITopPositions()
 	if err != nil {
 		return nil, err
 	}
 
+	const oiTopLimit = 5
+
 	var symbols []string
 	for _, pos := range positions {
+		if len(symbols) >= oiTopLimit {
+			break
+		}
 		symbol := normalizeSymbol(pos.Symbol)
 		if !isValidSymbol(symbol) {
 			log.Printf("⚠️  跳过非法OI Top币种符号: %q (原始: %q)", symbol, pos.Symbol)
