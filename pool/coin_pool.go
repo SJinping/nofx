@@ -596,14 +596,14 @@ func loadOITopCache() ([]OIPosition, error) {
 	return cache.Positions, nil
 }
 
-// GetOITopSymbols 获取OI Top的币种符号列表（限制为 top 5）
+// GetOITopSymbols 获取OI Top的币种符号列表（限制为 top 10）
 func GetOITopSymbols() ([]string, error) {
 	positions, err := GetOITopPositions()
 	if err != nil {
 		return nil, err
 	}
 
-	const oiTopLimit = 5
+	const oiTopLimit = 10
 
 	var symbols []string
 	for _, pos := range positions {

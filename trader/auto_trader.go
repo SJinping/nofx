@@ -6,8 +6,8 @@ import (
 	"log"
 	"nofx/decision"
 	"nofx/logger"
-	"nofx/memory"
 	"nofx/mcp"
+	"nofx/memory"
 	"nofx/pool"
 	"nofx/stats"
 	"strconv"
@@ -857,7 +857,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		})
 	}
 
-	log.Printf("📋 合并币种池: AI500前%d + OI_Top5 = 总计%d个候选币种",
+	log.Printf("📋 合并币种池: AI500前%d + OI_Top10 = 总计%d个候选币种",
 		ai500Limit, len(candidateCoins))
 
 	// 4. 计算总盈亏
@@ -949,9 +949,9 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
 		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
-		AutoTakeProfit:      rcSnap.AutoTakeProfit,  // 从运行时配置读取
-		ScanIntervalMin:    rcSnap.ScanIntervalMin, // 用于 prompt 动态时间
-		MinHoldMinutes:     rcSnap.MinHoldMinutes,  // LLM 最低持仓时间
+		AutoTakeProfit:      rcSnap.AutoTakeProfit,   // 从运行时配置读取
+		ScanIntervalMin:     rcSnap.ScanIntervalMin,  // 用于 prompt 动态时间
+		MinHoldMinutes:      rcSnap.MinHoldMinutes,   // LLM 最低持仓时间
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,
