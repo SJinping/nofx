@@ -54,6 +54,32 @@ func fapiHostForDialTest() string {
 // 统一HTTP客户端（支持 SOCKS5 / HTTP(S) 代理）
 var httpClient = newHTTPClient()
 
+type v2rayConfig struct {
+	Inbounds []struct {
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
+	} `json:"inbounds"`
+}
+
+func getV2RayInboundPort(protocol string) int {
+	data, err := ioutil.ReadFile("/usr/local/etc/v2ray/config.json")
+	if err != nil {
+		return 0
+	}
+
+	var cfg v2rayConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return 0
+	}
+
+	for _, inbound := range cfg.Inbounds {
+		if inbound.Protocol == protocol && inbound.Port > 0 {
+			return inbound.Port
+		}
+	}
+	return 0
+}
+
 func newHTTPClient() *http.Client {
 	// 1. 优先尝试 SOCKS5 代理（ALL_PROXY=socks5h://host:port）
 	if proxyEnv := os.Getenv("ALL_PROXY"); proxyEnv != "" {
@@ -65,8 +91,8 @@ func newHTTPClient() *http.Client {
 				auth = &proxy.Auth{User: u.User.Username(), Password: pw}
 			}
 			if dialer, err := proxy.SOCKS5("tcp", addr, auth, proxy.Direct); err == nil {
-					// 测试 SOCKS5 连接是否可用（快速连接测试到币安API）
-					testConn, testErr := dialer.Dial("tcp", fapiHostForDialTest()+":443")
+				// 测试 SOCKS5 连接是否可用（快速连接测试到币安API）
+				testConn, testErr := dialer.Dial("tcp", fapiHostForDialTest()+":443")
 				if testErr == nil {
 					testConn.Close()
 					// SOCKS5 可用，使用它
@@ -89,7 +115,34 @@ func newHTTPClient() *http.Client {
 		}
 	}
 
-	// 2. 回退到 HTTP(S)_PROXY（标准库自动检测环境变量）
+	// 2. 如果环境变量尚未配置，直接读取 V2Ray 本机 SOCKS inbound。
+	// market 包的 httpClient 在 package init 阶段创建，可能早于 trader.setupProxyForBinance() 设置 ALL_PROXY；
+	// 因此这里不能只依赖环境变量，否则 K线/市场数据会直连 Binance，被对端 reset/timeout。
+	if socksPort := getV2RayInboundPort("socks"); socksPort > 0 {
+		addr := fmt.Sprintf("127.0.0.1:%d", socksPort)
+		if dialer, err := proxy.SOCKS5("tcp", addr, nil, proxy.Direct); err == nil {
+			testConn, testErr := dialer.Dial("tcp", fapiHostForDialTest()+":443")
+			if testErr == nil {
+				testConn.Close()
+				log.Printf("✓ market HTTP客户端使用 V2Ray SOCKS5 代理: %s", addr)
+				return &http.Client{
+					Transport: &http.Transport{
+						DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+							return dialer.Dial(network, address)
+						},
+						TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+						TLSHandshakeTimeout:   10 * time.Second,
+						ResponseHeaderTimeout: 12 * time.Second,
+						IdleConnTimeout:       30 * time.Second,
+					},
+					Timeout: 15 * time.Second,
+				}
+			}
+			log.Printf("⚠️  V2Ray SOCKS5 代理 %s 连接失败: %v，回退到 HTTP(S)_PROXY", addr, testErr)
+		}
+	}
+
+	// 3. 回退到 HTTP(S)_PROXY（标准库自动检测环境变量）
 	if httpProxy := os.Getenv("HTTPS_PROXY"); httpProxy != "" {
 		log.Printf("✓ 使用 HTTP(S) 代理: %s", httpProxy)
 	} else if httpProxy := os.Getenv("HTTP_PROXY"); httpProxy != "" {
