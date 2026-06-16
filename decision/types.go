@@ -143,6 +143,8 @@ type Context struct {
 	ScanIntervalMin int `json:"-"`
 	// 最低持仓时间（分钟），LLM 平仓前的硬约束（0=不限制）
 	MinHoldMinutes  int `json:"-"`
+	// 候选币种 OI 价值过滤门槛（百万USD，0=不过滤）
+	MinOIValueMillions float64 `json:"-"`
 
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制

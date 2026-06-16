@@ -93,6 +93,9 @@ type AutoTraderConfig struct {
 	// LLM 平仓前的最低持仓时间（分钟，0=不限制）
 	MinHoldMinutes int
 
+	// 候选币种 OI 价值过滤门槛（百万USD，默认30M）
+	MinOIValueMillions float64
+
 	// 接续运行：启动时自动恢复交易（不需要手动点击开始）
 	AutoResume bool
 }
@@ -952,6 +955,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		AutoTakeProfit:      rcSnap.AutoTakeProfit,   // 从运行时配置读取
 		ScanIntervalMin:     rcSnap.ScanIntervalMin,  // 用于 prompt 动态时间
 		MinHoldMinutes:      rcSnap.MinHoldMinutes,   // LLM 最低持仓时间
+		MinOIValueMillions:  rcSnap.MinOIValueMil,    // OI 价值过滤门槛
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,

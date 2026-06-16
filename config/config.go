@@ -115,6 +115,9 @@ type Config struct {
 	AutoTakeProfit       AutoTakeProfitConfig   `json:"auto_take_profit"`       // 自动止盈配置
 	MinHoldMinutes       int                    `json:"min_hold_minutes"`       // LLM 平仓最低持仓时间（分钟，0=不限制）
 
+	// 候选币种 OI 价值过滤门槛（单位：百万USD，默认30）
+	MinOIValueMillions float64 `json:"min_oi_value_millions,omitempty"`
+
 	// 新增：是否开启数据录制（用于回测）
 	EnableRecording bool `json:"enable_recording"` // 是否开启录制
 
