@@ -65,6 +65,18 @@ type TraderConfig struct {
 
 	// 新增：Prompt策略选择（A 或 B）
 	PromptStrategy string `json:"prompt_strategy,omitempty"`
+
+	// 高峰时段暂停（节省 API 费用）
+	PeakHourPause *PeakHourPauseConfig `json:"peak_hour_pause,omitempty"`
+}
+
+// PeakHourPauseConfig 高峰时段暂停配置
+// 在高峰时段暂停 LLM 调用以节省 API 费用（如 DeepSeek 高峰定价 2x）。
+// 有持仓时仍继续调用 LLM 直到平仓。
+type PeakHourPauseConfig struct {
+	Enabled bool   `json:"enabled"`          // 是否启用高峰暂停
+	Start   string `json:"start,omitempty"`  // 高峰开始时间 "HH:MM"（北京时间，默认 "09:00"）
+	End     string `json:"end,omitempty"`    // 高峰结束时间 "HH:MM"（北京时间，默认 "18:00"）
 }
 
 // LeverageConfig 杠杆配置

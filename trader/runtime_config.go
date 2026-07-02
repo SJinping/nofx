@@ -25,6 +25,13 @@ type RuntimeConfig struct {
 	aiClient         *mcp.Client   // 该 trader 的 AI 客户端（用于热更新模型名）
 }
 
+// PeakHourPauseSnapshot 高峰时段暂停配置的只读快照
+type PeakHourPauseSnapshot struct {
+	Enabled bool   `json:"enabled"`
+	Start   string `json:"start"`
+	End     string `json:"end"`
+}
+
 // RuntimeConfigSnapshot 运行时配置的只读快照（无锁，安全传递）
 type RuntimeConfigSnapshot struct {
 	BTCETHLeverage  int                              `json:"btc_eth_leverage"`
@@ -38,6 +45,14 @@ type RuntimeConfigSnapshot struct {
 	MinHoldMinutes  int                              `json:"min_hold_minutes"`
 	MinOIValueMil   float64                          `json:"min_oi_value_millions"`
 	AIModel         string                           `json:"ai_model"`
+	PeakHourPause   PeakHourPauseSnapshot            `json:"peak_hour_pause"`
+}
+
+// PeakHourPausePatch 高峰时段暂停配置的部分更新
+type PeakHourPausePatch struct {
+	Enabled *bool   `json:"enabled,omitempty"`
+	Start   *string `json:"start,omitempty"`
+	End     *string `json:"end,omitempty"`
 }
 
 // RuntimeConfigPatch 用于部分更新运行时配置（零值表示不修改）
@@ -53,6 +68,7 @@ type RuntimeConfigPatch struct {
 	MinHoldMinutes   *int                                `json:"min_hold_minutes,omitempty"`
 	MinOIValueMil    *float64                            `json:"min_oi_value_millions,omitempty"`
 	AIModel          *string                             `json:"ai_model,omitempty"`
+	PeakHourPause    *PeakHourPausePatch                 `json:"peak_hour_pause,omitempty"`
 }
 
 // NewRuntimeConfig 从 AutoTraderConfig 初始化运行时配置

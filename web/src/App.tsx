@@ -16,6 +16,7 @@ import type {
   DecisionRecord,
   Statistics,
   TraderInfo,
+  PeakHourStatus,
 } from './types';
 
 type Page = 'competition' | 'trader' | 'logs';
@@ -238,6 +239,24 @@ function App() {
                   </span>
                 </div>
               )}
+              {/* Peak Hour Indicator */}
+              {currentPage === 'trader' && status?.peak_hour?.enabled && status.peak_hour.in_peak_hours && (
+                <div
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs"
+                  style={status.peak_hour.paused
+                    ? { background: 'rgba(240, 185, 11, 0.1)', color: '#F0B90B', border: '1px solid rgba(240, 185, 11, 0.2)' }
+                    : { background: 'rgba(96, 165, 250, 0.1)', color: '#60a5fa', border: '1px solid rgba(96, 165, 250, 0.2)' }
+                  }
+                >
+                  {status.peak_hour.paused ? '💤' : '🔔'}
+                  <span className="font-medium">
+                    {status.peak_hour.paused
+                      ? (language === 'zh' ? '高峰暂停' : 'Peak Pause')
+                      : (language === 'zh' ? '高峰运行中' : 'Peak Override')
+                    }
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -299,6 +318,79 @@ function App() {
 }
 
 // Trader Details Page Component
+function PeakHourBanner({ peakHour, traderId, language }: {
+  peakHour: PeakHourStatus;
+  traderId: string;
+  language: Language;
+}) {
+  const [loading, setLoading] = useState(false);
+  const { mutate } = useSWR('status');
+
+  const handleOverride = async () => {
+    setLoading(true);
+    try {
+      await api.setPeakHourOverride(!peakHour.override_active, traderId);
+      mutate();
+      window.location.reload();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!peakHour.in_peak_hours) {
+    return (
+      <div className="mb-4 p-3 rounded flex items-center justify-between text-xs"
+        style={{ background: 'rgba(14, 203, 129, 0.08)', border: '1px solid rgba(14, 203, 129, 0.2)', color: '#0ECB81' }}>
+        <span>⏰ {language === 'zh' ? `非高峰时段（高峰 ${peakHour.peak_start}~${peakHour.peak_end} 北京时间），正常运行` : `Off-peak hours (peak: ${peakHour.peak_start}~${peakHour.peak_end} CST), running normally`}</span>
+      </div>
+    );
+  }
+
+  if (peakHour.paused) {
+    return (
+      <div className="mb-4 p-3 rounded flex items-center justify-between text-sm"
+        style={{ background: 'rgba(240, 185, 11, 0.1)', border: '1px solid rgba(240, 185, 11, 0.3)', color: '#F0B90B' }}>
+        <span>💤 {language === 'zh'
+          ? `高峰时段暂停中（${peakHour.peak_start}~${peakHour.peak_end} 北京时间，API费用2x），无持仓时跳过LLM调用`
+          : `Peak hour pause active (${peakHour.peak_start}~${peakHour.peak_end} CST, 2x API cost), skipping LLM calls`
+        }</span>
+        <button
+          onClick={handleOverride}
+          disabled={loading}
+          className="px-3 py-1 rounded text-xs font-semibold transition-colors"
+          style={{ background: '#F0B90B', color: '#181A20' }}
+        >
+          {loading ? '...' : (language === 'zh' ? '恢复运行' : 'Resume')}
+        </button>
+      </div>
+    );
+  }
+
+  if (peakHour.override_active) {
+    return (
+      <div className="mb-4 p-3 rounded flex items-center justify-between text-sm"
+        style={{ background: 'rgba(96, 165, 250, 0.1)', border: '1px solid rgba(96, 165, 250, 0.3)', color: '#60a5fa' }}>
+        <span>🔔 {language === 'zh'
+          ? `高峰时段已手动恢复运行（${peakHour.peak_start}~${peakHour.peak_end}），下次高峰期将自动重新暂停`
+          : `Peak hours manually resumed (${peakHour.peak_start}~${peakHour.peak_end}), will auto-pause next peak period`
+        }</span>
+        <button
+          onClick={handleOverride}
+          disabled={loading}
+          className="px-3 py-1 rounded text-xs font-semibold transition-colors"
+          style={{ background: 'rgba(96, 165, 250, 0.2)', color: '#60a5fa', border: '1px solid rgba(96, 165, 250, 0.3)' }}
+        >
+          {loading ? '...' : (language === 'zh' ? '重新暂停' : 'Re-pause')}
+        </button>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 function TraderDetailsPage({
   selectedTrader,
   status,
@@ -396,6 +488,15 @@ function TraderDetailsPage({
           )}
         </div>
       </div>
+
+      {/* Peak Hour Banner */}
+      {status?.peak_hour?.enabled && (
+        <PeakHourBanner
+          peakHour={status.peak_hour}
+          traderId={selectedTrader.trader_id}
+          language={language}
+        />
+      )}
 
       {/* Debug Info */}
       {account && (

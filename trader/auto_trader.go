@@ -98,6 +98,16 @@ type AutoTraderConfig struct {
 
 	// 接续运行：启动时自动恢复交易（不需要手动点击开始）
 	AutoResume bool
+
+	// 高峰时段暂停配置
+	PeakHourPause *PeakHourPauseConfig
+}
+
+// PeakHourPauseConfig 高峰时段暂停配置（per-trader）
+type PeakHourPauseConfig struct {
+	Enabled bool
+	Start   string // "HH:MM" 北京时间，默认 "09:00"
+	End     string // "HH:MM" 北京时间，默认 "18:00"
 }
 
 // AutoTrader 自动交易器
@@ -127,6 +137,14 @@ type AutoTrader struct {
 
 	// AI 客户端（每个 trader 独立实例）
 	aiClient *mcp.Client
+
+	// 高峰时段暂停
+	peakHourEnabled  bool   // 是否启用高峰暂停
+	peakHourStart    string // "HH:MM" 北京时间
+	peakHourEnd      string // "HH:MM" 北京时间
+	peakHourOverride bool   // 用户手动恢复（仅当次高峰期生效）
+	lastPeakCheck    bool   // 上一次是否在高峰期（用于检测高峰期切换以重置 override）
+	peakMu           sync.RWMutex
 
 	// 运行时可热更新配置（线程安全）
 	runtimeCfg     *RuntimeConfig
@@ -302,6 +320,10 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		autoDecisionState: decision.AutoDecisionState{
 			TP: make(map[string]*decision.AutoTPState),
 		},
+		// 高峰时段暂停
+		peakHourEnabled: config.PeakHourPause != nil && config.PeakHourPause.Enabled,
+		peakHourStart:   peakHourDefault(config.PeakHourPause, true),
+		peakHourEnd:     peakHourDefault(config.PeakHourPause, false),
 		// 运行时可热更新配置
 		runtimeCfg:     NewRuntimeConfig(config, aiClient),
 		scanIntervalCh: make(chan time.Duration, 1),
@@ -367,9 +389,133 @@ func (at *AutoTrader) SetPaused(paused bool) {
 	log.Printf("⏯ [%s] 交易状态已切换为: %s", at.name, status)
 }
 
+// ===== 高峰时段暂停 =====
+
+func peakHourDefault(cfg *PeakHourPauseConfig, isStart bool) string {
+	if cfg != nil {
+		if isStart && cfg.Start != "" {
+			return cfg.Start
+		}
+		if !isStart && cfg.End != "" {
+			return cfg.End
+		}
+	}
+	if isStart {
+		return "09:00"
+	}
+	return "18:00"
+}
+
+var cstZone = time.FixedZone("CST", 8*3600)
+
+// isInPeakHours 判断当前北京时间是否在高峰时段
+func (at *AutoTrader) isInPeakHours() bool {
+	if !at.peakHourEnabled {
+		return false
+	}
+	now := time.Now().In(cstZone)
+	nowMin := now.Hour()*60 + now.Minute()
+
+	startMin := parseHHMM(at.peakHourStart)
+	endMin := parseHHMM(at.peakHourEnd)
+	if startMin < 0 || endMin < 0 {
+		return false
+	}
+
+	if startMin < endMin {
+		return nowMin >= startMin && nowMin < endMin
+	}
+	// 跨午夜（如 22:00~06:00）
+	return nowMin >= startMin || nowMin < endMin
+}
+
+func parseHHMM(s string) int {
+	var h, m int
+	if _, err := fmt.Sscanf(s, "%d:%d", &h, &m); err != nil {
+		return -1
+	}
+	return h*60 + m
+}
+
+// shouldSkipForPeakHour 判断本周期是否应跳过 LLM 调用。
+// 返回 true 表示跳过（高峰暂停生效且无持仓且无 override）。
+func (at *AutoTrader) shouldSkipForPeakHour(positionCount int) bool {
+	inPeak := at.isInPeakHours()
+
+	at.peakMu.Lock()
+	defer at.peakMu.Unlock()
+
+	// 高峰期结束后重新进入 → 重置 override
+	if !inPeak && at.lastPeakCheck {
+		at.peakHourOverride = false
+	}
+	at.lastPeakCheck = inPeak
+
+	if !inPeak {
+		return false
+	}
+	if at.peakHourOverride {
+		return false
+	}
+	if positionCount > 0 {
+		return false
+	}
+	return true
+}
+
+// SetPeakHourOverride 手动切换高峰时段 override（用户恢复/重新暂停）
+func (at *AutoTrader) SetPeakHourOverride(override bool) {
+	at.peakMu.Lock()
+	defer at.peakMu.Unlock()
+	at.peakHourOverride = override
+	action := "恢复运行"
+	if !override {
+		action = "重新暂停"
+	}
+	log.Printf("🔔 [%s] 高峰时段手动%s", at.name, action)
+}
+
+// SetPeakHourEnabled 动态开启/关闭高峰时段暂停
+func (at *AutoTrader) SetPeakHourEnabled(enabled bool) {
+	at.peakMu.Lock()
+	defer at.peakMu.Unlock()
+	at.peakHourEnabled = enabled
+	if !enabled {
+		at.peakHourOverride = false
+	}
+	log.Printf("🔔 [%s] 高峰时段暂停: %v", at.name, enabled)
+}
+
+// GetPeakHourStatus 返回高峰时段暂停状态（供 API/前端）
+func (at *AutoTrader) GetPeakHourStatus() map[string]interface{} {
+	inPeak := at.isInPeakHours()
+	at.peakMu.RLock()
+	override := at.peakHourOverride
+	enabled := at.peakHourEnabled
+	at.peakMu.RUnlock()
+
+	paused := enabled && inPeak && !override
+	return map[string]interface{}{
+		"enabled":          enabled,
+		"in_peak_hours":    inPeak,
+		"paused":           paused,
+		"override_active":  override,
+		"peak_start":       at.peakHourStart,
+		"peak_end":         at.peakHourEnd,
+	}
+}
+
 // GetRuntimeConfig 返回当前运行时配置快照（供 API 层调用）
 func (at *AutoTrader) GetRuntimeConfig() RuntimeConfigSnapshot {
-	return at.runtimeCfg.Get()
+	snap := at.runtimeCfg.Get()
+	at.peakMu.RLock()
+	snap.PeakHourPause = PeakHourPauseSnapshot{
+		Enabled: at.peakHourEnabled,
+		Start:   at.peakHourStart,
+		End:     at.peakHourEnd,
+	}
+	at.peakMu.RUnlock()
+	return snap
 }
 
 // UpdateRuntimeConfig 部分更新运行时配置（供 API 层调用）
@@ -381,6 +527,27 @@ func (at *AutoTrader) UpdateRuntimeConfig(patch RuntimeConfigPatch) {
 		case at.scanIntervalCh <- newInterval:
 		default:
 		}
+	}
+
+	// 高峰时段暂停配置（状态存在 AutoTrader 上，不在 RuntimeConfig 中）
+	if p := patch.PeakHourPause; p != nil {
+		at.peakMu.Lock()
+		if p.Enabled != nil {
+			at.peakHourEnabled = *p.Enabled
+			if !*p.Enabled {
+				at.peakHourOverride = false
+			}
+			log.Printf("🔧 运行时配置更新: PeakHourPause.Enabled → %v", *p.Enabled)
+		}
+		if p.Start != nil && *p.Start != "" {
+			log.Printf("🔧 运行时配置更新: PeakHourPause.Start %s → %s", at.peakHourStart, *p.Start)
+			at.peakHourStart = *p.Start
+		}
+		if p.End != nil && *p.End != "" {
+			log.Printf("🔧 运行时配置更新: PeakHourPause.End %s → %s", at.peakHourEnd, *p.End)
+			at.peakHourEnd = *p.End
+		}
+		at.peakMu.Unlock()
 	}
 }
 
@@ -446,6 +613,17 @@ func (at *AutoTrader) runCycle() error {
 
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("风险控制暂停中，剩余 %.0f 分钟", remaining.Minutes())
+		at.decisionLogger.LogDecision(record)
+		return nil
+	}
+
+	// 3.6 高峰时段暂停：无持仓时跳过 LLM 调用（节省 API 费用）
+	if at.shouldSkipForPeakHour(ctx.Account.PositionCount) {
+		now := time.Now().In(cstZone)
+		log.Printf("💤 [%s] 高峰时段暂停（%s~%s 北京时间），当前 %s，无持仓，跳过 LLM 调用",
+			at.name, at.peakHourStart, at.peakHourEnd, now.Format("15:04"))
+		record.Success = true
+		record.ErrorMessage = fmt.Sprintf("高峰时段暂停（%s~%s），无持仓，跳过 LLM", at.peakHourStart, at.peakHourEnd)
 		at.decisionLogger.LogDecision(record)
 		return nil
 	}
@@ -1632,6 +1810,9 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 		"last_reset_time": at.lastResetTime.Format(time.RFC3339),
 		"ai_provider":     aiProvider,
 	}
+
+	// 添加高峰时段暂停状态
+	result["peak_hour"] = at.GetPeakHourStatus()
 
 	// 添加错误统计摘要
 	if at.errorStats != nil {

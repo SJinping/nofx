@@ -126,6 +126,11 @@ func (s *Server) setupRoutes() {
 		api.GET("/system/auto-resume", s.handleGetAutoResume)
 		api.POST("/system/auto-resume", s.handleSetAutoResume)
 
+		// 高峰时段暂停
+		api.GET("/peak-hour", s.handleGetPeakHour)
+		api.POST("/peak-hour/override", s.handlePeakHourOverride)
+		api.POST("/peak-hour/toggle", s.handlePeakHourToggle)
+
 		// 运行时配置（热更新）
 		api.GET("/config", s.handleGetConfig)
 		api.PUT("/config", s.handleUpdateConfig)
@@ -1474,6 +1479,81 @@ func (s *Server) handleSetAutoResume(c *gin.Context) {
 		"message":     fmt.Sprintf("接续运行%s（下次启动生效）", status),
 		"auto_resume": req.Enabled,
 	})
+}
+
+// handleGetPeakHour 获取指定 trader 的高峰时段暂停状态
+func (s *Server) handleGetPeakHour(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	status := trader.GetPeakHourStatus()
+	status["trader_id"] = traderID
+	c.JSON(http.StatusOK, status)
+}
+
+// handlePeakHourOverride 切换高峰时段 override（手动恢复/重新暂停）
+func (s *Server) handlePeakHourOverride(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		Override bool `json:"override"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	trader.SetPeakHourOverride(req.Override)
+	status := trader.GetPeakHourStatus()
+	status["trader_id"] = traderID
+	c.JSON(http.StatusOK, status)
+}
+
+// handlePeakHourToggle 开启/关闭高峰时段暂停功能
+func (s *Server) handlePeakHourToggle(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	trader.SetPeakHourEnabled(req.Enabled)
+	status := trader.GetPeakHourStatus()
+	status["trader_id"] = traderID
+	c.JSON(http.StatusOK, status)
 }
 
 // handleGetConfig 获取运行时配置

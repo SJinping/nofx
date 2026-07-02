@@ -357,6 +357,36 @@ export const api = {
     return res.json();
   },
 
+  // 高峰时段暂停
+  async getPeakHourStatus(traderId?: string): Promise<any> {
+    const q = traderId ? `?trader_id=${traderId}` : '';
+    const res = await fetch(`${API_BASE}/peak-hour${q}`);
+    if (!res.ok) throw new Error('获取高峰时段状态失败');
+    return res.json();
+  },
+
+  async setPeakHourOverride(override: boolean, traderId?: string): Promise<any> {
+    const q = traderId ? `?trader_id=${traderId}` : '';
+    const res = await fetch(`${API_BASE}/peak-hour/override${q}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ override }),
+    });
+    if (!res.ok) throw new Error('设置高峰时段 override 失败');
+    return res.json();
+  },
+
+  async setPeakHourEnabled(enabled: boolean, traderId?: string): Promise<any> {
+    const q = traderId ? `?trader_id=${traderId}` : '';
+    const res = await fetch(`${API_BASE}/peak-hour/toggle${q}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) throw new Error('设置高峰时段开关失败');
+    return res.json();
+  },
+
   // 日志查看器接口
   logViewer: {
     async getTraders(): Promise<string[]> {

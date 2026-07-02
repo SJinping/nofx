@@ -1,9 +1,18 @@
+export interface PeakHourStatus {
+  enabled: boolean;
+  in_peak_hours: boolean;
+  paused: boolean;
+  override_active: boolean;
+  peak_start: string;
+  peak_end: string;
+}
+
 export interface SystemStatus {
   trader_id: string;
   trader_name: string;
   ai_model: string;
   is_running: boolean;
-  is_paused?: boolean;  // 新增：是否暂停（可选）
+  is_paused?: boolean;
   start_time: string;
   runtime_minutes: number;
   call_count: number;
@@ -12,6 +21,7 @@ export interface SystemStatus {
   stop_until: string;
   last_reset_time: string;
   ai_provider: string;
+  peak_hour?: PeakHourStatus;
 }
 
 export interface AccountInfo {

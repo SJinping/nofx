@@ -97,6 +97,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		MinOIValueMillions:       minOIValueMillions,
 		EnableRecording:          enableRecording,
 		AutoResume:               autoResume,
+		PeakHourPause:           convertPeakHourPauseConfig(cfg.PeakHourPause),
 	}
 
 	// 创建trader实例
@@ -387,6 +388,35 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		}
 	}
 
+	// peak_hour_pause 是 per-trader 字段
+	if patch.PeakHourPause != nil {
+		if traders, ok := raw["traders"].([]interface{}); ok {
+			for _, t := range traders {
+				traderMap, ok := t.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				id, _ := traderMap["id"].(string)
+				if traderID == "" || id == traderID {
+					phpMap, _ := traderMap["peak_hour_pause"].(map[string]interface{})
+					if phpMap == nil {
+						phpMap = make(map[string]interface{})
+					}
+					if patch.PeakHourPause.Enabled != nil {
+						phpMap["enabled"] = *patch.PeakHourPause.Enabled
+					}
+					if patch.PeakHourPause.Start != nil {
+						phpMap["start"] = *patch.PeakHourPause.Start
+					}
+					if patch.PeakHourPause.End != nil {
+						phpMap["end"] = *patch.PeakHourPause.End
+					}
+					traderMap["peak_hour_pause"] = phpMap
+				}
+			}
+		}
+	}
+
 	// 3. 写回 config.json（格式化缩进以保持可读性）
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
@@ -603,6 +633,17 @@ func (tm *TraderManager) writeConfigChangeLog(
 
 // convertStopLossDistanceConfig 将配置层的百分比值（如0.15表示0.15%）转换为decision层的小数形式（0.0015）
 // 零值字段使用默认值
+func convertPeakHourPauseConfig(cfg *config.PeakHourPauseConfig) *trader.PeakHourPauseConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &trader.PeakHourPauseConfig{
+		Enabled: cfg.Enabled,
+		Start:   cfg.Start,
+		End:     cfg.End,
+	}
+}
+
 func convertStopLossDistanceConfig(cfg config.StopLossDistanceConfig) decision.StopLossDistanceConfig {
 	defaults := decision.DefaultStopLossDistanceConfig()
 
