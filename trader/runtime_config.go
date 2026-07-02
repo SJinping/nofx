@@ -14,7 +14,9 @@ type RuntimeConfig struct {
 	mu               sync.RWMutex
 	btcETHLeverage   int
 	altcoinLeverage  int
-	stopLossDistance  decision.StopLossDistanceConfig
+	leverageClip     decision.LeverageClipConfig
+	marginValidation decision.MarginValidationConfig
+	stopLossDistance decision.StopLossDistanceConfig
 	autoTakeProfit   decision.AutoTakeProfitConfig
 	maxDailyLoss     float64       // 最大日亏损百分比
 	maxDrawdown      float64       // 最大回撤百分比
@@ -34,18 +36,20 @@ type PeakHourPauseSnapshot struct {
 
 // RuntimeConfigSnapshot 运行时配置的只读快照（无锁，安全传递）
 type RuntimeConfigSnapshot struct {
-	BTCETHLeverage  int                              `json:"btc_eth_leverage"`
-	AltcoinLeverage int                              `json:"altcoin_leverage"`
-	StopLossDistance decision.StopLossDistanceConfig  `json:"stop_loss_distance"`
-	AutoTakeProfit  decision.AutoTakeProfitConfig     `json:"auto_take_profit"`
-	MaxDailyLoss    float64                          `json:"max_daily_loss"`
-	MaxDrawdown     float64                          `json:"max_drawdown"`
-	StopTradingMin  int                              `json:"stop_trading_minutes"`
-	ScanIntervalMin int                              `json:"scan_interval_minutes"`
-	MinHoldMinutes  int                              `json:"min_hold_minutes"`
-	MinOIValueMil   float64                          `json:"min_oi_value_millions"`
-	AIModel         string                           `json:"ai_model"`
-	PeakHourPause   PeakHourPauseSnapshot            `json:"peak_hour_pause"`
+	BTCETHLeverage   int                             `json:"btc_eth_leverage"`
+	AltcoinLeverage  int                             `json:"altcoin_leverage"`
+	LeverageClip     decision.LeverageClipConfig     `json:"leverage_clip"`
+	MarginValidation decision.MarginValidationConfig `json:"margin_validation"`
+	StopLossDistance decision.StopLossDistanceConfig `json:"stop_loss_distance"`
+	AutoTakeProfit   decision.AutoTakeProfitConfig   `json:"auto_take_profit"`
+	MaxDailyLoss     float64                         `json:"max_daily_loss"`
+	MaxDrawdown      float64                         `json:"max_drawdown"`
+	StopTradingMin   int                             `json:"stop_trading_minutes"`
+	ScanIntervalMin  int                             `json:"scan_interval_minutes"`
+	MinHoldMinutes   int                             `json:"min_hold_minutes"`
+	MinOIValueMil    float64                         `json:"min_oi_value_millions"`
+	AIModel          string                          `json:"ai_model"`
+	PeakHourPause    PeakHourPauseSnapshot           `json:"peak_hour_pause"`
 }
 
 // PeakHourPausePatch 高峰时段暂停配置的部分更新
@@ -57,18 +61,20 @@ type PeakHourPausePatch struct {
 
 // RuntimeConfigPatch 用于部分更新运行时配置（零值表示不修改）
 type RuntimeConfigPatch struct {
-	BTCETHLeverage   *int                                `json:"btc_eth_leverage,omitempty"`
-	AltcoinLeverage  *int                                `json:"altcoin_leverage,omitempty"`
-	StopLossDistance *decision.StopLossDistanceConfig     `json:"stop_loss_distance,omitempty"`
-	AutoTakeProfit   *decision.AutoTakeProfitConfig       `json:"auto_take_profit,omitempty"`
-	MaxDailyLoss     *float64                            `json:"max_daily_loss,omitempty"`
-	MaxDrawdown      *float64                            `json:"max_drawdown,omitempty"`
-	StopTradingMin   *int                                `json:"stop_trading_minutes,omitempty"`
-	ScanIntervalMin  *int                                `json:"scan_interval_minutes,omitempty"`
-	MinHoldMinutes   *int                                `json:"min_hold_minutes,omitempty"`
-	MinOIValueMil    *float64                            `json:"min_oi_value_millions,omitempty"`
-	AIModel          *string                             `json:"ai_model,omitempty"`
-	PeakHourPause    *PeakHourPausePatch                 `json:"peak_hour_pause,omitempty"`
+	BTCETHLeverage   *int                             `json:"btc_eth_leverage,omitempty"`
+	AltcoinLeverage  *int                             `json:"altcoin_leverage,omitempty"`
+	LeverageClip     *decision.LeverageClipConfig     `json:"leverage_clip,omitempty"`
+	MarginValidation *decision.MarginValidationConfig `json:"margin_validation,omitempty"`
+	StopLossDistance *decision.StopLossDistanceConfig `json:"stop_loss_distance,omitempty"`
+	AutoTakeProfit   *decision.AutoTakeProfitConfig   `json:"auto_take_profit,omitempty"`
+	MaxDailyLoss     *float64                         `json:"max_daily_loss,omitempty"`
+	MaxDrawdown      *float64                         `json:"max_drawdown,omitempty"`
+	StopTradingMin   *int                             `json:"stop_trading_minutes,omitempty"`
+	ScanIntervalMin  *int                             `json:"scan_interval_minutes,omitempty"`
+	MinHoldMinutes   *int                             `json:"min_hold_minutes,omitempty"`
+	MinOIValueMil    *float64                         `json:"min_oi_value_millions,omitempty"`
+	AIModel          *string                          `json:"ai_model,omitempty"`
+	PeakHourPause    *PeakHourPausePatch              `json:"peak_hour_pause,omitempty"`
 }
 
 // NewRuntimeConfig 从 AutoTraderConfig 初始化运行时配置
@@ -78,17 +84,19 @@ func NewRuntimeConfig(cfg AutoTraderConfig, aiClient *mcp.Client) *RuntimeConfig
 		minOI = 30 // 默认 30M USD
 	}
 	return &RuntimeConfig{
-		btcETHLeverage:  cfg.BTCETHLeverage,
-		altcoinLeverage: cfg.AltcoinLeverage,
+		btcETHLeverage:   cfg.BTCETHLeverage,
+		altcoinLeverage:  cfg.AltcoinLeverage,
+		leverageClip:     cfg.LeverageClip,
+		marginValidation: cfg.MarginValidation,
 		stopLossDistance: cfg.StopLossDistance,
-		autoTakeProfit:  cfg.AutoTakeProfit,
-		maxDailyLoss:    cfg.MaxDailyLoss,
-		maxDrawdown:     cfg.MaxDrawdown,
-		stopTradingTime: cfg.StopTradingTime,
-		scanInterval:    cfg.ScanInterval,
-		minHoldMinutes:  cfg.MinHoldMinutes,
-		minOIValueMil:   minOI,
-		aiClient:        aiClient,
+		autoTakeProfit:   cfg.AutoTakeProfit,
+		maxDailyLoss:     cfg.MaxDailyLoss,
+		maxDrawdown:      cfg.MaxDrawdown,
+		stopTradingTime:  cfg.StopTradingTime,
+		scanInterval:     cfg.ScanInterval,
+		minHoldMinutes:   cfg.MinHoldMinutes,
+		minOIValueMil:    minOI,
+		aiClient:         aiClient,
 	}
 }
 
@@ -103,17 +111,19 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 	}
 
 	return RuntimeConfigSnapshot{
-		BTCETHLeverage:  rc.btcETHLeverage,
-		AltcoinLeverage: rc.altcoinLeverage,
+		BTCETHLeverage:   rc.btcETHLeverage,
+		AltcoinLeverage:  rc.altcoinLeverage,
+		LeverageClip:     rc.leverageClip,
+		MarginValidation: rc.marginValidation,
 		StopLossDistance: rc.stopLossDistance,
-		AutoTakeProfit:  rc.autoTakeProfit,
-		MaxDailyLoss:    rc.maxDailyLoss,
-		MaxDrawdown:     rc.maxDrawdown,
-		StopTradingMin:  int(rc.stopTradingTime.Minutes()),
-		ScanIntervalMin: int(rc.scanInterval.Minutes()),
-		MinHoldMinutes:  rc.minHoldMinutes,
-		MinOIValueMil:   rc.minOIValueMil,
-		AIModel:         aiModel,
+		AutoTakeProfit:   rc.autoTakeProfit,
+		MaxDailyLoss:     rc.maxDailyLoss,
+		MaxDrawdown:      rc.maxDrawdown,
+		StopTradingMin:   int(rc.stopTradingTime.Minutes()),
+		ScanIntervalMin:  int(rc.scanInterval.Minutes()),
+		MinHoldMinutes:   rc.minHoldMinutes,
+		MinOIValueMil:    rc.minOIValueMil,
+		AIModel:          aiModel,
 	}
 }
 
@@ -130,6 +140,14 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	if patch.AltcoinLeverage != nil && *patch.AltcoinLeverage > 0 {
 		log.Printf("🔧 运行时配置更新: AltcoinLeverage %d → %d", rc.altcoinLeverage, *patch.AltcoinLeverage)
 		rc.altcoinLeverage = *patch.AltcoinLeverage
+	}
+	if patch.LeverageClip != nil {
+		log.Printf("🔧 运行时配置更新: LeverageClip 已修改")
+		rc.leverageClip = *patch.LeverageClip
+	}
+	if patch.MarginValidation != nil {
+		log.Printf("🔧 运行时配置更新: MarginValidation 已修改")
+		rc.marginValidation = *patch.MarginValidation
 	}
 	if patch.StopLossDistance != nil {
 		log.Printf("🔧 运行时配置更新: StopLossDistance 已修改")

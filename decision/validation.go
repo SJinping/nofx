@@ -195,6 +195,9 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 				return fmt.Errorf("山寨币单币种仓位价值不能超过%.0f USDT（1.5倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
 			}
 		}
+		if err := validateRequiredMargin(d, ctx); err != nil {
+			return err
+		}
 		if d.StopLoss <= 0 || d.TakeProfit <= 0 {
 			return fmt.Errorf("止损和止盈必须大于0")
 		}
@@ -691,4 +694,43 @@ func validateMinHoldingTime(d *Decision, ctx *Context) error {
 
 	return fmt.Errorf("持仓 %s 仅持有 %.1f 分钟，最低要求 %d 分钟，禁止过早平仓（浮亏 %.2f%% 未达阈值）",
 		d.Symbol, holdMinutes, minHold, pos.UnrealizedPnLPct)
+}
+
+func validateRequiredMargin(d *Decision, ctx *Context) error {
+	if ctx == nil || !ctx.MarginValidation.Enabled {
+		return nil
+	}
+	if d.Action != ActionOpenLong && d.Action != ActionOpenShort {
+		return nil
+	}
+	if d.Leverage <= 0 || d.PositionSizeUSD <= 0 {
+		return nil
+	}
+
+	available := ctx.Account.AvailableBalance
+	if available <= 0 {
+		return fmt.Errorf("可用保证金无效，无法进行保证金预检：available_balance=%.2f", available)
+	}
+
+	usagePct := ctx.MarginValidation.AvailableBalanceUsagePct
+	if usagePct <= 0 || usagePct > 100 {
+		usagePct = 95.0
+	}
+	feeBufferPct := ctx.MarginValidation.FeeBufferPct
+	if feeBufferPct < 0 {
+		feeBufferPct = 0
+	}
+	if feeBufferPct == 0 {
+		feeBufferPct = 0.1
+	}
+
+	requiredMargin := d.PositionSizeUSD / float64(d.Leverage)
+	feeBuffer := d.PositionSizeUSD * feeBufferPct / 100.0
+	requiredTotal := requiredMargin + feeBuffer
+	allowed := available * usagePct / 100.0
+	if requiredTotal > allowed {
+		return fmt.Errorf("可用保证金不足：%s %s 仓位 %.2f USDT / %dx 需保证金 %.2f + buffer %.2f = %.2f，可用 %.2f，允许使用 %.1f%%=%.2f",
+			d.Symbol, d.Action, d.PositionSizeUSD, d.Leverage, requiredMargin, feeBuffer, requiredTotal, available, usagePct, allowed)
+	}
+	return nil
 }

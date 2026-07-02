@@ -68,6 +68,7 @@ type AutoTraderConfig struct {
 	// 杠杆配置
 	BTCETHLeverage  int // BTC和ETH的杠杆倍数
 	AltcoinLeverage int // 山寨币的杠杆倍数
+	LeverageClip    decision.LeverageClipConfig
 
 	// 风险控制（仅作为提示，AI可自主决定）
 	MaxDailyLoss    float64       // 最大日亏损百分比（提示）
@@ -83,6 +84,9 @@ type AutoTraderConfig struct {
 	// 成本假设（用于风控/校验/自动止盈，不影响实际下单）
 	AssumedTakerFeeRate float64
 	AssumedSlippageRate float64
+
+	// 保证金预检配置
+	MarginValidation decision.MarginValidationConfig
 
 	// 止损最小距离配置（零值时使用默认）
 	StopLossDistance decision.StopLossDistanceConfig
@@ -496,12 +500,12 @@ func (at *AutoTrader) GetPeakHourStatus() map[string]interface{} {
 
 	paused := enabled && inPeak && !override
 	return map[string]interface{}{
-		"enabled":          enabled,
-		"in_peak_hours":    inPeak,
-		"paused":           paused,
-		"override_active":  override,
-		"peak_start":       at.peakHourStart,
-		"peak_end":         at.peakHourEnd,
+		"enabled":         enabled,
+		"in_peak_hours":   inPeak,
+		"paused":          paused,
+		"override_active": override,
+		"peak_start":      at.peakHourStart,
+		"peak_end":        at.peakHourEnd,
 	}
 }
 
@@ -1106,11 +1110,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	// 6. 构建上下文（从运行时配置读取可热更新的参数）
 	rcSnap := at.runtimeCfg.Get()
 	ctx := &decision.Context{
-		CurrentTime:     time.Now().Format("2006-01-02 15:04:05"),
-		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
-		CallCount:       at.callCount,
-		BTCETHLeverage:  rcSnap.BTCETHLeverage,  // 从运行时配置读取
-		AltcoinLeverage: rcSnap.AltcoinLeverage, // 从运行时配置读取
+		CurrentTime:      time.Now().Format("2006-01-02 15:04:05"),
+		RuntimeMinutes:   int(time.Since(at.startTime).Minutes()),
+		CallCount:        at.callCount,
+		BTCETHLeverage:   rcSnap.BTCETHLeverage,   // 从运行时配置读取
+		AltcoinLeverage:  rcSnap.AltcoinLeverage,  // 从运行时配置读取
+		LeverageClip:     rcSnap.LeverageClip,     // 从运行时配置读取
+		MarginValidation: rcSnap.MarginValidation, // 从运行时配置读取
 		Account: decision.AccountInfo{
 			TotalEquity:         totalEquity,
 			AvailableBalance:    availableBalance,

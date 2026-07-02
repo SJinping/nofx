@@ -35,14 +35,14 @@ type PositionInfo struct {
 
 // AccountInfo 账户信息
 type AccountInfo struct {
-	TotalEquity        float64 `json:"total_equity"`         // 账户净值
-	AvailableBalance   float64 `json:"available_balance"`    // 可用余额
-	TotalPnL           float64 `json:"total_pnl"`            // 总盈亏
-	TotalPnLPct        float64 `json:"total_pnl_pct"`        // 总盈亏百分比
-	MarginUsed         float64 `json:"margin_used"`          // 已用保证金
-	MarginUsedPct      float64 `json:"margin_used_pct"`      // 保证金使用率
-	PositionCount      int     `json:"position_count"`       // 持仓数量
-	PeakEquity         float64 `json:"peak_equity"`          // 全局历史最高净值
+	TotalEquity         float64 `json:"total_equity"`           // 账户净值
+	AvailableBalance    float64 `json:"available_balance"`      // 可用余额
+	TotalPnL            float64 `json:"total_pnl"`              // 总盈亏
+	TotalPnLPct         float64 `json:"total_pnl_pct"`          // 总盈亏百分比
+	MarginUsed          float64 `json:"margin_used"`            // 已用保证金
+	MarginUsedPct       float64 `json:"margin_used_pct"`        // 保证金使用率
+	PositionCount       int     `json:"position_count"`         // 持仓数量
+	PeakEquity          float64 `json:"peak_equity"`            // 全局历史最高净值
 	DrawdownFromPeakPct float64 `json:"drawdown_from_peak_pct"` // 当前回撤百分比（负数）
 }
 
@@ -85,6 +85,19 @@ func DefaultStopLossDistanceConfig() StopLossDistanceConfig {
 	}
 }
 
+// LeverageClipConfig 杠杆裁剪配置（decision 层使用，避免依赖 config 包）。
+type LeverageClipConfig struct {
+	Enabled   bool `json:"enabled"`
+	ClipToMax bool `json:"clip_to_max"`
+}
+
+// MarginValidationConfig 开仓前保证金预检配置（decision 层使用，避免依赖 config 包）。
+type MarginValidationConfig struct {
+	Enabled                  bool    `json:"enabled"`
+	AvailableBalanceUsagePct float64 `json:"available_balance_usage_pct"`
+	FeeBufferPct             float64 `json:"fee_buffer_pct"`
+}
+
 // AutoTakeProfitConfig 自动止盈配置
 // 净ROI = 价格变动% × 杠杆 - round-trip成本%
 type AutoTakeProfitConfig struct {
@@ -110,19 +123,21 @@ func DefaultAutoTakeProfitConfig() AutoTakeProfitConfig {
 
 // Context 交易上下文（传递给AI的完整信息）
 type Context struct {
-	CurrentTime     string                  `json:"current_time"`
-	RuntimeMinutes  int                     `json:"runtime_minutes"`
-	CallCount       int                     `json:"call_count"`
-	Account         AccountInfo             `json:"account"`
-	Positions       []PositionInfo          `json:"positions"`
-	CandidateCoins  []CandidateCoin         `json:"candidate_coins"`
-	MarketDataMap   map[string]*market.Data `json:"-"` // 不序列化，但内部使用
-	OITopDataMap    map[string]*OITopData   `json:"-"` // OI Top数据映射
-	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
-	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
-	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
-	PromptStrategy  PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
-	AutoState       *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
+	CurrentTime      string                  `json:"current_time"`
+	RuntimeMinutes   int                     `json:"runtime_minutes"`
+	CallCount        int                     `json:"call_count"`
+	Account          AccountInfo             `json:"account"`
+	Positions        []PositionInfo          `json:"positions"`
+	CandidateCoins   []CandidateCoin         `json:"candidate_coins"`
+	MarketDataMap    map[string]*market.Data `json:"-"` // 不序列化，但内部使用
+	OITopDataMap     map[string]*OITopData   `json:"-"` // OI Top数据映射
+	Performance      interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
+	BTCETHLeverage   int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
+	AltcoinLeverage  int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	LeverageClip     LeverageClipConfig      `json:"-"` // 杠杆裁剪配置
+	MarginValidation MarginValidationConfig  `json:"-"` // 保证金预检配置
+	PromptStrategy   PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
+	AutoState        *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
 
 	// 成本假设（用于风控/自动止盈/校验，不传给LLM）
 	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004
@@ -135,14 +150,14 @@ type Context struct {
 	AutoTakeProfit AutoTakeProfitConfig `json:"-"`
 
 	// 近期系统自动操作记录（注入 prompt，供 LLM 学习止盈/止损反馈）
-	RecentAutoEvents []AutoEventSummary     `json:"-"`
+	RecentAutoEvents []AutoEventSummary `json:"-"`
 	// 近期完整交易结果（注入 prompt，含平仓来源）
-	RecentTrades     []logger.TradeOutcome  `json:"-"`
+	RecentTrades []logger.TradeOutcome `json:"-"`
 
 	// 扫描周期（分钟），用于 prompt 中动态替换写死的 "3分钟"
 	ScanIntervalMin int `json:"-"`
 	// 最低持仓时间（分钟），LLM 平仓前的硬约束（0=不限制）
-	MinHoldMinutes  int `json:"-"`
+	MinHoldMinutes int `json:"-"`
 	// 候选币种 OI 价值过滤门槛（百万USD，0=不过滤）
 	MinOIValueMillions float64 `json:"-"`
 
@@ -156,13 +171,13 @@ type Context struct {
 
 // AutoEventSummary 近期系统自动操作摘要（注入 prompt，供 LLM 学习）
 type AutoEventSummary struct {
-	Time       string // 触发时间 (HH:MM)
-	Symbol     string // 币种
-	Action     string // partial_close / close_long / close_short
-	Source     string // auto_stop_loss / auto_take_profit
-	Reasoning  string // 触发原因
-	ClosePct   float64 // 平仓比例（0 表示全平）
-	Price      float64 // 执行价格
+	Time      string  // 触发时间 (HH:MM)
+	Symbol    string  // 币种
+	Action    string  // partial_close / close_long / close_short
+	Source    string  // auto_stop_loss / auto_take_profit
+	Reasoning string  // 触发原因
+	ClosePct  float64 // 平仓比例（0 表示全平）
+	Price     float64 // 执行价格
 }
 
 // AutoDecisionState 自动决策跨周期状态（用于TP档位只触发一次、冷却等）
@@ -181,12 +196,13 @@ type AutoTPState struct {
 
 // Decision AI的交易决策
 type Decision struct {
-	Symbol          string  `json:"symbol"`
-	Action          string  `json:"action"` // 支持 "update_stop_loss", "partial_close" 等
-	Leverage        int     `json:"leverage,omitempty"`
-	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
-	StopLoss        float64 `json:"stop_loss,omitempty"`
-	TakeProfit      float64 `json:"take_profit,omitempty"`
+	Symbol           string  `json:"symbol"`
+	Action           string  `json:"action"` // 支持 "update_stop_loss", "partial_close" 等
+	Leverage         int     `json:"leverage,omitempty"`
+	OriginalLeverage int     `json:"original_leverage,omitempty"`
+	PositionSizeUSD  float64 `json:"position_size_usd,omitempty"`
+	StopLoss         float64 `json:"stop_loss,omitempty"`
+	TakeProfit       float64 `json:"take_profit,omitempty"`
 
 	NewStopLoss     float64 `json:"new_stop_loss,omitempty"`    // 用于 update_stop_loss
 	NewTakeProfit   float64 `json:"new_take_profit,omitempty"`  // 用于 update_take_profit

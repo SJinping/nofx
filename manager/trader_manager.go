@@ -31,7 +31,7 @@ func NewTraderManager(configFilePath string) *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, autoResume bool, minHoldMinutes int, minOIValueMillions float64) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, leverageClipCfg config.LeverageClipConfig, marginValidationCfg config.MarginValidationConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, autoResume bool, minHoldMinutes int, minOIValueMillions float64) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -82,6 +82,8 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		InitialBalance:           cfg.InitialBalance,
 		BTCETHLeverage:           leverage.BTCETHLeverage,  // 使用配置的杠杆倍数
 		AltcoinLeverage:          leverage.AltcoinLeverage, // 使用配置的杠杆倍数
+		LeverageClip:             convertLeverageClipConfig(leverageClipCfg),
+		MarginValidation:         convertMarginValidationConfig(marginValidationCfg),
 		MaxDailyLoss:             maxDailyLoss,
 		MaxDrawdown:              maxDrawdown,
 		StopTradingTime:          time.Duration(stopTradingMinutes) * time.Minute,
@@ -97,7 +99,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		MinOIValueMillions:       minOIValueMillions,
 		EnableRecording:          enableRecording,
 		AutoResume:               autoResume,
-		PeakHourPause:           convertPeakHourPauseConfig(cfg.PeakHourPause),
+		PeakHourPause:            convertPeakHourPauseConfig(cfg.PeakHourPause),
 	}
 
 	// 创建trader实例
@@ -285,6 +287,35 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 			leverage["altcoin_leverage"] = *patch.AltcoinLeverage
 		}
 		raw["leverage"] = leverage
+	}
+
+	// leverage_clip 是嵌套对象
+	if patch.LeverageClip != nil {
+		lc := patch.LeverageClip
+		lcMap, _ := raw["leverage_clip"].(map[string]interface{})
+		if lcMap == nil {
+			lcMap = make(map[string]interface{})
+		}
+		lcMap["enabled"] = lc.Enabled
+		lcMap["clip_to_max"] = lc.ClipToMax
+		raw["leverage_clip"] = lcMap
+	}
+
+	// margin_validation 是嵌套对象
+	if patch.MarginValidation != nil {
+		mv := patch.MarginValidation
+		mvMap, _ := raw["margin_validation"].(map[string]interface{})
+		if mvMap == nil {
+			mvMap = make(map[string]interface{})
+		}
+		mvMap["enabled"] = mv.Enabled
+		if mv.AvailableBalanceUsagePct > 0 {
+			mvMap["available_balance_usage_pct"] = mv.AvailableBalanceUsagePct
+		}
+		if mv.FeeBufferPct > 0 {
+			mvMap["fee_buffer_pct"] = mv.FeeBufferPct
+		}
+		raw["margin_validation"] = mvMap
 	}
 
 	// stop_loss_distance 是嵌套对象，需要把 decision.StopLossDistanceConfig 转为 config 层的百分比格式
@@ -694,4 +725,30 @@ func convertAutoTakeProfitConfig(cfg config.AutoTakeProfitConfig) decision.AutoT
 	}
 
 	return defaults
+}
+
+func convertLeverageClipConfig(cfg config.LeverageClipConfig) decision.LeverageClipConfig {
+	return decision.LeverageClipConfig{
+		Enabled:   cfg.Enabled,
+		ClipToMax: cfg.ClipToMax,
+	}
+}
+
+func convertMarginValidationConfig(cfg config.MarginValidationConfig) decision.MarginValidationConfig {
+	usagePct := cfg.AvailableBalanceUsagePct
+	if usagePct <= 0 || usagePct > 100 {
+		usagePct = 95.0
+	}
+	feeBufferPct := cfg.FeeBufferPct
+	if feeBufferPct < 0 {
+		feeBufferPct = 0
+	}
+	if feeBufferPct == 0 {
+		feeBufferPct = 0.1
+	}
+	return decision.MarginValidationConfig{
+		Enabled:                  cfg.Enabled,
+		AvailableBalanceUsagePct: usagePct,
+		FeeBufferPct:             feeBufferPct,
+	}
 }

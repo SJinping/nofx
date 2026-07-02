@@ -21,7 +21,10 @@ func parseFullDecisionResponse(aiResponse string, ctx *Context) (*FullDecision, 
 		}, fmt.Errorf("提取决策失败: %w\n\n=== AI思维链分析 ===\n%s", err, cotTrace)
 	}
 
-	// 3. 验证决策
+	// 3. 可选：在验证前裁剪 AI 给出的过高杠杆，确保 validation 和最终执行使用同一杠杆
+	applyLeverageClip(decisions, ctx)
+
+	// 4. 验证决策
 	if err := validateDecisions(decisions, ctx); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,

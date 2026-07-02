@@ -99,13 +99,15 @@ func main() {
 			cfg.MaxDailyLoss,
 			cfg.MaxDrawdown,
 			cfg.StopTradingMinutes,
-			cfg.Leverage,          // 传递杠杆配置
-			cfg.EnableRecording,   // 传递录制开关
-			cfg.BinanceTestnet,    // Binance 主网/测试网
+			cfg.Leverage,           // 传递杠杆配置
+			cfg.LeverageClip,       // 传递杠杆裁剪配置
+			cfg.MarginValidation,   // 传递保证金预检配置
+			cfg.EnableRecording,    // 传递录制开关
+			cfg.BinanceTestnet,     // Binance 主网/测试网
 			cfg.StopLossDistance,   // 止损最小距离配置
-			cfg.AutoTakeProfit,    // 自动止盈配置
-			cfg.AutoResume,        // 接续运行开关
-			cfg.MinHoldMinutes,    // LLM 最低持仓时间
+			cfg.AutoTakeProfit,     // 自动止盈配置
+			cfg.AutoResume,         // 接续运行开关
+			cfg.MinHoldMinutes,     // LLM 最低持仓时间
 			cfg.MinOIValueMillions, // OI 价值过滤门槛
 		)
 		if err != nil {

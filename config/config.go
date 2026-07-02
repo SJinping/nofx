@@ -74,15 +74,29 @@ type TraderConfig struct {
 // 在高峰时段暂停 LLM 调用以节省 API 费用（如 DeepSeek 高峰定价 2x）。
 // 有持仓时仍继续调用 LLM 直到平仓。
 type PeakHourPauseConfig struct {
-	Enabled bool   `json:"enabled"`          // 是否启用高峰暂停
-	Start   string `json:"start,omitempty"`  // 高峰开始时间 "HH:MM"（北京时间，默认 "09:00"）
-	End     string `json:"end,omitempty"`    // 高峰结束时间 "HH:MM"（北京时间，默认 "18:00"）
+	Enabled bool   `json:"enabled"`         // 是否启用高峰暂停
+	Start   string `json:"start,omitempty"` // 高峰开始时间 "HH:MM"（北京时间，默认 "09:00"）
+	End     string `json:"end,omitempty"`   // 高峰结束时间 "HH:MM"（北京时间，默认 "18:00"）
 }
 
 // LeverageConfig 杠杆配置
 type LeverageConfig struct {
 	BTCETHLeverage  int `json:"btc_eth_leverage"` // BTC和ETH的杠杆倍数（主账户建议5-50，子账户≤5）
 	AltcoinLeverage int `json:"altcoin_leverage"` // 山寨币的杠杆倍数（主账户建议5-20，子账户≤5）
+}
+
+// LeverageClipConfig 杠杆裁剪配置。
+// 开启后，AI 给出的杠杆超过系统配置上限时，会在 validation 前裁剪到配置上限。
+type LeverageClipConfig struct {
+	Enabled   bool `json:"enabled,omitempty"`     // 是否启用杠杆裁剪
+	ClipToMax bool `json:"clip_to_max,omitempty"` // 是否裁剪到当前币种配置上限
+}
+
+// MarginValidationConfig 开仓前保证金预检配置。
+type MarginValidationConfig struct {
+	Enabled                  bool    `json:"enabled,omitempty"`                     // 是否启用保证金预检
+	AvailableBalanceUsagePct float64 `json:"available_balance_usage_pct,omitempty"` // 新增保证金最多使用可用余额百分比，默认95
+	FeeBufferPct             float64 `json:"fee_buffer_pct,omitempty"`              // 按名义仓位预留费用/波动缓冲百分比，默认0.1
 }
 
 // StopLossDistanceConfig 止损最小距离配置
@@ -109,23 +123,25 @@ type AutoTakeProfitConfig struct {
 
 // Config 总配置
 type Config struct {
-	Traders            []TraderConfig `json:"traders"`
-	UseDefaultCoins    bool           `json:"use_default_coins"` // 是否使用默认主流币种列表
-	DefaultCoins       []string       `json:"default_coins"`     // 默认主流币种池
-	CoinPoolAPIURL     string         `json:"coin_pool_api_url"`
-	OITopAPIURL        string         `json:"oi_top_api_url"`
+	Traders         []TraderConfig `json:"traders"`
+	UseDefaultCoins bool           `json:"use_default_coins"` // 是否使用默认主流币种列表
+	DefaultCoins    []string       `json:"default_coins"`     // 默认主流币种池
+	CoinPoolAPIURL  string         `json:"coin_pool_api_url"`
+	OITopAPIURL     string         `json:"oi_top_api_url"`
 	// Binance Futures 环境：false=主网(https://fapi.binance.com)，true=测试网(https://testnet.binancefuture.com)
 	// 说明：当前实现按“全局开关”切换，适用于一次运行只选一种环境的场景。
-	BinanceTestnet bool `json:"binance_testnet,omitempty"`
-	APIServerPort      int            `json:"api_server_port"`
-	MaxDailyLoss       float64        `json:"max_daily_loss"`
-	MaxDrawdown        float64        `json:"max_drawdown"`
-	StopTradingMinutes int            `json:"stop_trading_minutes"`
-	Leverage             LeverageConfig         `json:"leverage"`               // 杠杆配置
-	MinRiskReward        float64                `json:"min_risk_reward"`        // 最小风险回报比
-	StopLossDistance     StopLossDistanceConfig `json:"stop_loss_distance"`     // 止损最小距离配置
-	AutoTakeProfit       AutoTakeProfitConfig   `json:"auto_take_profit"`       // 自动止盈配置
-	MinHoldMinutes       int                    `json:"min_hold_minutes"`       // LLM 平仓最低持仓时间（分钟，0=不限制）
+	BinanceTestnet     bool                   `json:"binance_testnet,omitempty"`
+	APIServerPort      int                    `json:"api_server_port"`
+	MaxDailyLoss       float64                `json:"max_daily_loss"`
+	MaxDrawdown        float64                `json:"max_drawdown"`
+	StopTradingMinutes int                    `json:"stop_trading_minutes"`
+	Leverage           LeverageConfig         `json:"leverage"`                    // 杠杆配置
+	LeverageClip       LeverageClipConfig     `json:"leverage_clip,omitempty"`     // 杠杆裁剪配置
+	MarginValidation   MarginValidationConfig `json:"margin_validation,omitempty"` // 保证金预检配置
+	MinRiskReward      float64                `json:"min_risk_reward"`             // 最小风险回报比
+	StopLossDistance   StopLossDistanceConfig `json:"stop_loss_distance"`          // 止损最小距离配置
+	AutoTakeProfit     AutoTakeProfitConfig   `json:"auto_take_profit"`            // 自动止盈配置
+	MinHoldMinutes     int                    `json:"min_hold_minutes"`            // LLM 平仓最低持仓时间（分钟，0=不限制）
 
 	// 候选币种 OI 价值过滤门槛（单位：百万USD，默认30）
 	MinOIValueMillions float64 `json:"min_oi_value_millions,omitempty"`
