@@ -142,6 +142,7 @@ type Context struct {
 	// 成本假设（用于风控/自动止盈/校验，不传给LLM）
 	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004
 	AssumedSlippageRate float64 `json:"-"` // 例如 0.0005
+	AICostPerTradeUSD   float64 `json:"-"` // 每笔交易分摊的 AI 调用成本（USDT）
 
 	// 止损最小距离配置（从config层传入，零值时使用默认）
 	StopLossDistance StopLossDistanceConfig `json:"-"`

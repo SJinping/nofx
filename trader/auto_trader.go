@@ -85,6 +85,9 @@ type AutoTraderConfig struct {
 	AssumedTakerFeeRate float64
 	AssumedSlippageRate float64
 
+	// AI 每日调用成本（USDT），平摊到每笔交易的成本中
+	DailyAICostUSD float64
+
 	// 保证金预检配置
 	MarginValidation decision.MarginValidationConfig
 
@@ -1135,6 +1138,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		RecentTrades:        recentTrades,
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
+		AICostPerTradeUSD:   calcAICostPerTrade(rcSnap.DailyAICostUSD, rcSnap.ScanIntervalMin),
 		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
 		AutoTakeProfit:      rcSnap.AutoTakeProfit,   // 从运行时配置读取
 		ScanIntervalMin:     rcSnap.ScanIntervalMin,  // 用于 prompt 动态时间
@@ -1742,6 +1746,16 @@ func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
 // GetAssumedTakerFeeRate 返回“估算手续费率”（用于订单级别复盘展示的估算，不影响真实下单）
 func (at *AutoTrader) GetAssumedTakerFeeRate() float64 {
 	return at.config.AssumedTakerFeeRate
+}
+
+// calcAICostPerTrade 根据日固定 AI 成本和扫描周期计算每笔交易分摊的 AI 成本（USDT）。
+// 公式：dailyCost / (1440 / scanIntervalMin)
+func calcAICostPerTrade(dailyCostUSD float64, scanIntervalMin int) float64 {
+	if dailyCostUSD <= 0 || scanIntervalMin <= 0 {
+		return 0
+	}
+	callsPerDay := 1440.0 / float64(scanIntervalMin)
+	return dailyCostUSD / callsPerDay
 }
 
 // GetOrders 获取某币种订单历史（带缓存；用于 API 展示）

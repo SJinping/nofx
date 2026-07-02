@@ -92,6 +92,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		PaperTradingSlippageRate: cfg.PaperTradingSlippageRate,
 		AssumedTakerFeeRate:      assumedTaker,
 		AssumedSlippageRate:      assumedSlippage,
+		DailyAICostUSD:           cfg.DailyAICostUSD,
 		MinRiskReward:            cfg.MinRiskReward,
 		StopLossDistance:         convertStopLossDistanceConfig(stopLossDistCfg),
 		AutoTakeProfit:           convertAutoTakeProfitConfig(autoTPCfg),
@@ -414,6 +415,22 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 					case mcp.ProviderCustom:
 						traderMap["custom_model_name"] = *patch.AIModel
 					}
+				}
+			}
+		}
+	}
+
+	// daily_ai_cost_usd 是 per-trader 字段
+	if patch.DailyAICostUSD != nil {
+		if traders, ok := raw["traders"].([]interface{}); ok {
+			for _, t := range traders {
+				traderMap, ok := t.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				id, _ := traderMap["id"].(string)
+				if traderID == "" || id == traderID {
+					traderMap["daily_ai_cost_usd"] = *patch.DailyAICostUSD
 				}
 			}
 		}

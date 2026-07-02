@@ -24,6 +24,7 @@ type RuntimeConfig struct {
 	scanInterval     time.Duration // 扫描间隔
 	minHoldMinutes   int           // LLM 平仓最低持仓时间（分钟，0=不限制）
 	minOIValueMil    float64       // 候选币种 OI 价值门槛（百万USD）
+	dailyAICostUSD   float64       // AI 每日调用成本（USDT）
 	aiClient         *mcp.Client   // 该 trader 的 AI 客户端（用于热更新模型名）
 }
 
@@ -48,6 +49,7 @@ type RuntimeConfigSnapshot struct {
 	ScanIntervalMin  int                             `json:"scan_interval_minutes"`
 	MinHoldMinutes   int                             `json:"min_hold_minutes"`
 	MinOIValueMil    float64                         `json:"min_oi_value_millions"`
+	DailyAICostUSD   float64                         `json:"daily_ai_cost_usd"`
 	AIModel          string                          `json:"ai_model"`
 	PeakHourPause    PeakHourPauseSnapshot           `json:"peak_hour_pause"`
 }
@@ -73,6 +75,7 @@ type RuntimeConfigPatch struct {
 	ScanIntervalMin  *int                             `json:"scan_interval_minutes,omitempty"`
 	MinHoldMinutes   *int                             `json:"min_hold_minutes,omitempty"`
 	MinOIValueMil    *float64                         `json:"min_oi_value_millions,omitempty"`
+	DailyAICostUSD   *float64                         `json:"daily_ai_cost_usd,omitempty"`
 	AIModel          *string                          `json:"ai_model,omitempty"`
 	PeakHourPause    *PeakHourPausePatch              `json:"peak_hour_pause,omitempty"`
 }
@@ -96,6 +99,7 @@ func NewRuntimeConfig(cfg AutoTraderConfig, aiClient *mcp.Client) *RuntimeConfig
 		scanInterval:     cfg.ScanInterval,
 		minHoldMinutes:   cfg.MinHoldMinutes,
 		minOIValueMil:    minOI,
+		dailyAICostUSD:   cfg.DailyAICostUSD,
 		aiClient:         aiClient,
 	}
 }
@@ -123,6 +127,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 		ScanIntervalMin:  int(rc.scanInterval.Minutes()),
 		MinHoldMinutes:   rc.minHoldMinutes,
 		MinOIValueMil:    rc.minOIValueMil,
+		DailyAICostUSD:   rc.dailyAICostUSD,
 		AIModel:          aiModel,
 	}
 }
@@ -177,6 +182,10 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	if patch.MinOIValueMil != nil && *patch.MinOIValueMil >= 0 {
 		log.Printf("🔧 运行时配置更新: MinOIValueMillions %.1f → %.1f", rc.minOIValueMil, *patch.MinOIValueMil)
 		rc.minOIValueMil = *patch.MinOIValueMil
+	}
+	if patch.DailyAICostUSD != nil && *patch.DailyAICostUSD >= 0 {
+		log.Printf("🔧 运行时配置更新: DailyAICostUSD %.4f → %.4f", rc.dailyAICostUSD, *patch.DailyAICostUSD)
+		rc.dailyAICostUSD = *patch.DailyAICostUSD
 	}
 	if patch.ScanIntervalMin != nil && *patch.ScanIntervalMin >= 1 {
 		newDur := time.Duration(*patch.ScanIntervalMin) * time.Minute

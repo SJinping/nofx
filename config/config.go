@@ -63,6 +63,9 @@ type TraderConfig struct {
 	// 最小风险回报比
 	MinRiskReward float64 `json:"min_risk_reward,omitempty"`
 
+	// AI 每日调用成本（USDT），用于将 LLM 费用平摊到每笔交易的成本计算中
+	DailyAICostUSD float64 `json:"daily_ai_cost_usd,omitempty"`
+
 	// 新增：Prompt策略选择（A 或 B）
 	PromptStrategy string `json:"prompt_strategy,omitempty"`
 
