@@ -38,14 +38,14 @@ type TradeStatsCache struct {
 	LastProcessedCycle int                          `json:"last_processed_cycle"`
 	PeakEquity         float64                      `json:"peak_equity"`
 	PeakEquityTime     string                       `json:"peak_equity_time"`
-	SymbolStats        map[string]*SymbolTradeStats `json:"symbol_stats"`
+	SymbolStats        map[string]*SymbolTradeStats `json:"symbols"`
 	OpenLots           map[string][]openTradeLot    `json:"open_lots"`
 }
 
 // NewTradeStatsCache loads the persistent stats cache for a decision log dir.
 func NewTradeStatsCache(logDir string) *TradeStatsCache {
 	cache := &TradeStatsCache{
-		path:        filepath.Join(logDir, "trade_stats_cache.json"),
+		path:        filepath.Join(logDir, "trade_stats.json"),
 		SymbolStats: make(map[string]*SymbolTradeStats),
 		OpenLots:    make(map[string][]openTradeLot),
 	}
@@ -61,7 +61,7 @@ func NewTradeStatsCache(logDir string) *TradeStatsCache {
 		cache.LastProcessedCycle = 0
 		return cache
 	}
-	cache.path = filepath.Join(logDir, "trade_stats_cache.json")
+	cache.path = filepath.Join(logDir, "trade_stats.json")
 	if cache.SymbolStats == nil {
 		cache.SymbolStats = make(map[string]*SymbolTradeStats)
 	}
