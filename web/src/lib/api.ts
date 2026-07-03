@@ -239,6 +239,9 @@ export const api = {
         closed_count: symbols.length - holdingCount,
         total_realized_pnl: totalRealized,
         total_unrealized_pnl: totalUnrealized,
+        total_trades: symbols.reduce((sum, s) => sum + (s.total_trades || 0), 0),
+        total_win_count: symbols.reduce((sum, s) => sum + (s.win_count || 0), 0),
+        total_win_rate: symbols.length > 0 ? symbols.reduce((sum, s) => sum + (s.win_rate || 0), 0) / symbols.length : 0,
       },
     };
   },

@@ -220,8 +220,8 @@ type exchangeOrderStats struct {
 	EstimatedFee float64 `json:"estimated_fee"`
 
 	// Real income from exchange (via /fapi/v1/income; zero if unavailable)
-	RealCommission float64 `json:"real_commission"` // 真实手续费（负数=支出）
-	RealFundingFee float64 `json:"real_funding_fee"` // 真实资金费用（正=收到, 负=支出）
+	RealCommission  float64 `json:"real_commission"`   // 真实手续费（负数=支出）
+	RealFundingFee  float64 `json:"real_funding_fee"`  // 真实资金费用（正=收到, 负=支出）
 	RealRealizedPnL float64 `json:"real_realized_pnl"` // 交易所已实现盈亏
 
 	// Pairing-based realized PnL (order-based estimate)
@@ -252,18 +252,31 @@ type exchangeOrdersResponse struct {
 }
 
 type exchangeTradedSymbolsSummary struct {
-	TotalSymbols       int     `json:"total_symbols"`
-	TotalRealizedPnL   float64 `json:"total_realized_pnl"`
-	TotalEstimatedFee  float64 `json:"total_estimated_fee"`
-	TotalTrades        int     `json:"total_trades"`
-	TotalCommission    float64 `json:"total_commission"`
-	TotalFundingFee    float64 `json:"total_funding_fee"`
-	TotalRealRealized  float64 `json:"total_real_realized_pnl"`
+	TotalSymbols      int     `json:"total_symbols"`
+	TotalRealizedPnL  float64 `json:"total_realized_pnl"`
+	TotalEstimatedFee float64 `json:"total_estimated_fee"`
+	TotalTrades       int     `json:"total_trades"`
+	TotalCommission   float64 `json:"total_commission"`
+	TotalFundingFee   float64 `json:"total_funding_fee"`
+	TotalRealRealized float64 `json:"total_real_realized_pnl"`
 }
 
 type exchangeTradedSymbolsResponse struct {
 	Symbols []exchangeOrderStats         `json:"symbols"`
 	Summary exchangeTradedSymbolsSummary `json:"summary"`
+}
+
+func isValidExchangeSymbol(symbol string) bool {
+	symbol = strings.TrimSpace(strings.ToUpper(symbol))
+	if symbol == "" || !strings.HasSuffix(symbol, "USDT") {
+		return false
+	}
+	for _, r := range symbol {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseTimeParamToMs(s string) (int64, error) {
@@ -474,6 +487,9 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 
 	items := make(map[string]*tradedSymbolSummaryItem)
 	for _, cs := range cachedStats {
+		if !isValidExchangeSymbol(cs.Symbol) {
+			continue
+		}
 		items[cs.Symbol] = &tradedSymbolSummaryItem{
 			Symbol:            cs.Symbol,
 			Status:            tradedSymbolClosed,
@@ -523,7 +539,7 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 	var posDTOs []posDTO
 	_ = json.Unmarshal(rawPosBytes, &posDTOs)
 	for _, p := range posDTOs {
-		if p.Symbol == "" {
+		if !isValidExchangeSymbol(p.Symbol) {
 			continue
 		}
 		// 当前持仓中的币种即使没有历史成交，也应在列表中展示。
@@ -653,7 +669,7 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 	symbols := make([]string, 0, len(rawSymbols))
 	for _, s0 := range rawSymbols {
 		sym := strings.ToUpper(strings.TrimSpace(s0))
-		if sym == "" {
+		if !isValidExchangeSymbol(sym) {
 			continue
 		}
 		if _, ok := symbolSet[sym]; ok {
@@ -662,6 +678,7 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 		symbolSet[sym] = struct{}{}
 		symbols = append(symbols, sym)
 	}
+	sort.Strings(symbols)
 	if len(symbols) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbols is empty after parsing"})
 		return
@@ -688,10 +705,30 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 		endMs = time.Now().UnixMilli()
 	}
 	if startMs == 0 {
-		// default: trader start_time
-		if st, ok := at.GetStatus()["start_time"].(string); ok && st != "" {
-			if ms, e := parseTimeParamToMs(st); e == nil && ms > 0 {
-				startMs = ms
+		// default: earliest known trade time for requested symbols; process start time is only a fallback.
+		requested := make(map[string]struct{}, len(symbols))
+		for _, sym := range symbols {
+			requested[sym] = struct{}{}
+		}
+		for _, st := range at.GetDecisionLogger().GetTradeStatsCache().GetSymbolStats() {
+			if st == nil {
+				continue
+			}
+			if _, ok := requested[st.Symbol]; !ok {
+				continue
+			}
+			for _, ts := range []string{st.FirstTradeTime, st.LastTradeTime} {
+				ms, e := parseTimeParamToMs(ts)
+				if e == nil && ms > 0 && (startMs == 0 || ms < startMs) {
+					startMs = ms
+				}
+			}
+		}
+		if startMs == 0 {
+			if st, ok := at.GetStatus()["start_time"].(string); ok && st != "" {
+				if ms, e := parseTimeParamToMs(st); e == nil && ms > 0 {
+					startMs = ms
+				}
 			}
 		}
 	}
@@ -1652,15 +1689,15 @@ func (s *Server) handleKlines(c *gin.Context) {
 // ===== Market Overview =====
 
 type marketCoinOverview struct {
-	Symbol       string  `json:"symbol"`
-	Price        float64 `json:"price"`
-	Change24h    float64 `json:"change_24h"`     // percent
-	FundingRate  float64 `json:"funding_rate"`
+	Symbol      string  `json:"symbol"`
+	Price       float64 `json:"price"`
+	Change24h   float64 `json:"change_24h"` // percent
+	FundingRate float64 `json:"funding_rate"`
 }
 
 type fearGreedData struct {
-	Value      int    `json:"value"`       // 0-100
-	Label      string `json:"label"`       // "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
+	Value int    `json:"value"` // 0-100
+	Label string `json:"label"` // "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
 }
 
 type marketOverviewResponse struct {
@@ -1717,7 +1754,7 @@ func (s *Server) handleMarketOverview(c *gin.Context) {
 		if body, err := ioutil.ReadAll(resp.Body); err == nil {
 			var result struct {
 				Data []struct {
-					Value              string `json:"value"`
+					Value               string `json:"value"`
 					ValueClassification string `json:"value_classification"`
 				} `json:"data"`
 			}

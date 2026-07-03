@@ -69,6 +69,18 @@ const translations: Record<string, Record<string, string>> = {
 
 type FilterType = 'all' | 'holding' | 'closed';
 
+const isValidExchangeSymbol = (symbol: string) => /^[A-Z0-9]+USDT$/.test(symbol);
+
+const getEarliestTradeTime = (symbols: TradedSymbol[]): string | undefined => {
+  const times = symbols
+    .flatMap((s) => [s.first_trade_time, s.last_trade_time])
+    .filter((v): v is string => !!v)
+    .map((v) => new Date(v).getTime())
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (times.length === 0) return undefined;
+  return new Date(Math.min(...times)).toISOString();
+};
+
 interface TradedSymbolsListProps {
   traderId: string;
   onSymbolClick?: (symbol: string) => void;
@@ -87,17 +99,26 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
     { refreshInterval: 10000 }
   );
 
-  // 订单汇总（按 symbol）：用于覆盖 realized_pnl / trades / win_rate 等统计
-  const baseSymbols = data?.symbols || [];
+  // 交易所订单汇总只作为展开详情/辅助信息，不覆盖本地 realized PnL 主口径。
+  const rawBaseSymbols = data?.symbols || [];
+  const baseSymbols = rawBaseSymbols.filter((s) => isValidExchangeSymbol(s.symbol));
   const baseSummary = data?.summary;
-  const symbolList = baseSymbols.map((s) => s.symbol);
+  const symbolList = Array.from(
+    new Set(baseSymbols.map((s) => s.symbol).filter(isValidExchangeSymbol))
+  ).sort();
+  const exchangeStartTime = getEarliestTradeTime(baseSymbols);
+  const exchangeKey = traderId && symbolList.length > 0
+    ? `exchange-traded-symbols-${traderId}-${exchangeStartTime || 'default'}-${symbolList.join(',')}`
+    : null;
 
   const { data: exchangeAgg } = useSWR(
-    traderId && symbolList.length > 0
-      ? `exchange-traded-symbols-${traderId}-${symbolList.join(',')}`
-      : null,
-    () => api.getExchangeTradedSymbols(traderId, symbolList),
-    { refreshInterval: 30000 }
+    exchangeKey,
+    () => api.getExchangeTradedSymbols(traderId, symbolList, exchangeStartTime),
+    {
+      refreshInterval: 60000,
+      dedupingInterval: 30000,
+      revalidateOnFocus: false,
+    }
   );
 
   const exchangeMap = new Map<string, ExchangeOrderStats>();
@@ -135,27 +156,17 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
     );
   }
 
-  // 合并：用交易所订单汇总覆盖部分字段（不动 unrealized_pnl / current_position）
+  // 合并：交易所订单汇总只附加到 exchange 字段，避免用不同时间窗/不同口径覆盖主 realized PnL。
   const symbols = baseSymbols.map((s) => {
     const ex = exchangeMap.get(s.symbol);
     if (!ex) return s;
     return {
       ...s,
-      realized_pnl: ex.realized_pnl,
-      avg_pnl: ex.avg_pnl,
-      total_trades: ex.trades,
-      win_rate: ex.win_rate,
-      win_count: ex.win_count,
-      loss_count: ex.loss_count,
-      // total_pnl 重新计算（realized from exchange + unrealized from positions）
-      total_pnl: ex.realized_pnl + (s.unrealized_pnl || 0),
-      first_trade_time: ex.first_trade_time || s.first_trade_time,
-      last_trade_time: ex.last_trade_time || s.last_trade_time,
-      // attach exchange stats for expanded view
       exchange: ex,
     } as TradedSymbol & { exchange?: ExchangeOrderStats };
   });
 
+  const holdingCount = baseSymbols.filter((s) => s.status !== 'closed').length;
   const summary = {
     ...(baseSummary || {
       total_symbols: 0,
@@ -163,9 +174,15 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
       closed_count: 0,
       total_realized_pnl: 0,
       total_unrealized_pnl: 0,
+      total_trades: 0,
+      total_win_count: 0,
+      total_win_rate: 0,
     }),
-    // 优先使用交易所订单聚合的 realized（best-effort）
-    total_realized_pnl: exchangeAgg?.summary?.total_realized_pnl ?? (baseSummary?.total_realized_pnl ?? 0),
+    total_symbols: baseSymbols.length,
+    holding_count: holdingCount,
+    closed_count: baseSymbols.length - holdingCount,
+    total_realized_pnl: baseSymbols.reduce((sum, s) => sum + (s.realized_pnl || 0), 0),
+    total_unrealized_pnl: baseSymbols.reduce((sum, s) => sum + (s.unrealized_pnl || 0), 0),
   };
 
   // 应用过滤
