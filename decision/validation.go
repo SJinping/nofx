@@ -279,24 +279,17 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		L := float64(maxInt(d.Leverage, 1))
 		roundTripCostROIPct := 2.0 * (taker + slippage) * L * 100.0
 
-		// AI 调用成本分摊：固定 USDT 金额转为保证金 ROI%
-		aiCostROIPct := 0.0
-		if ctx != nil && ctx.AICostPerTradeUSD > 0 && ctx.Account.TotalEquity > 0 {
-			aiCostROIPct = (ctx.AICostPerTradeUSD / ctx.Account.TotalEquity) * 100.0
-		}
-		totalCostROIPct := roundTripCostROIPct + aiCostROIPct
-
-		netRisk := riskPercent*L + totalCostROIPct
-		netReward := rewardPercent*L - totalCostROIPct
+		netRisk := riskPercent*L + roundTripCostROIPct
+		netReward := rewardPercent*L - roundTripCostROIPct
 		if netReward <= 0 {
-			return fmt.Errorf("扣除成本后预期收益<=0（净收益=%.2f%% 成本=%.2f%% 含AI=%.4f%%），拒绝开仓", netReward, totalCostROIPct, aiCostROIPct)
+			return fmt.Errorf("扣除成本后预期收益<=0（净收益=%.2f%% 成本=%.2f%%），拒绝开仓", netReward, roundTripCostROIPct)
 		}
 		riskRewardRatio := netReward / netRisk
 
 		// 硬约束：净风险回报比必须≥minRiskReward
 		if riskRewardRatio < minRiskReward {
-			return fmt.Errorf("净风险回报比过低(%.2f:1)，必须≥%.2f:1 [净风险:%.2f%% 净收益:%.2f%% 成本:%.2f%%(AI=%.4f%%)] [止损:%.2f 止盈:%.2f 入场:%.2f 杠杆:%dx]",
-				riskRewardRatio, minRiskReward, netRisk, netReward, totalCostROIPct, aiCostROIPct, d.StopLoss, d.TakeProfit, entryPrice, d.Leverage)
+			return fmt.Errorf("净风险回报比过低(%.2f:1)，必须≥%.2f:1 [净风险:%.2f%% 净收益:%.2f%% 成本:%.2f%%] [止损:%.2f 止盈:%.2f 入场:%.2f 杠杆:%dx]",
+				riskRewardRatio, minRiskReward, netRisk, netReward, roundTripCostROIPct, d.StopLoss, d.TakeProfit, entryPrice, d.Leverage)
 		}
 	}
 
@@ -454,12 +447,8 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 
 		// 计算“净ROI%（保证金口径）”
 		L := float64(maxInt(pos.Leverage, 1))
-		roundTripCostROIPct := 2.0 * (taker + slippage) * L * 100.0 // 开+平两个操作，乘以2
-		aiCostROIPct := 0.0
-		if ctx.AICostPerTradeUSD > 0 && ctx.Account.TotalEquity > 0 {
-			aiCostROIPct = (ctx.AICostPerTradeUSD / ctx.Account.TotalEquity) * 100.0
-		}
-		netROIPct := pricePct*L - roundTripCostROIPct - aiCostROIPct
+		roundTripCostROIPct := 2.0 * (taker + slippage) * L * 100.0
+		netROIPct := pricePct*L - roundTripCostROIPct
 		if netROIPct <= 0 {
 			continue
 		}

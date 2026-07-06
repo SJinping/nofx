@@ -56,7 +56,7 @@ func recordError(errType stats.ErrorType, message string, symbol string) {
 	}
 }
 
-var minRiskReward float64 = 2.5
+var minRiskReward float64 = 2.2
 var minPositionSizeUSD float64 = 20.0 // 最小持仓，防止手续费磨损
 
 // SetMinRiskReward 设置最小风险回报比

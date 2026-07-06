@@ -87,12 +87,43 @@ export interface DecisionRecord {
   error_message?: string;
 }
 
-export interface Statistics {
+export interface TradeStats {
   total_cycles: number;
   successful_cycles: number;
   failed_cycles: number;
   total_open_positions: number;
   total_close_positions: number;
+}
+
+export interface LLMCostEntry {
+  time: string;
+  source: string;
+  model: string;
+  cost_usdt: number;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    prompt_cache_hit_tokens: number;
+    prompt_cache_miss_tokens: number;
+    reasoning_tokens: number;
+  };
+}
+
+export interface LLMCostSnapshot {
+  total_cost_usdt: number;
+  total_calls: number;
+  avg_cost_per_call_usdt: number;
+  total_prompt_tokens: number;
+  total_output_tokens: number;
+  total_cache_hit_tokens: number;
+  cache_hit_rate: number;
+  recent_calls?: LLMCostEntry[];
+}
+
+export interface Statistics {
+  trade_stats: TradeStats;
+  llm_cost: LLMCostSnapshot;
 }
 
 // ===== Traded Symbols (Symbol Performance) =====

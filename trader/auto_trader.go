@@ -85,9 +85,6 @@ type AutoTraderConfig struct {
 	AssumedTakerFeeRate float64
 	AssumedSlippageRate float64
 
-	// AI 每日调用成本（USDT），平摊到每笔交易的成本中
-	DailyAICostUSD float64
-
 	// 保证金预检配置
 	MarginValidation decision.MarginValidationConfig
 
@@ -144,6 +141,9 @@ type AutoTrader struct {
 
 	// AI 客户端（每个 trader 独立实例）
 	aiClient *mcp.Client
+
+	// LLM 调用费用追踪器
+	llmCostTracker *LLMCostTracker
 
 	// 高峰时段暂停
 	peakHourEnabled  bool   // 是否启用高峰暂停
@@ -331,6 +331,8 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		peakHourEnabled: config.PeakHourPause != nil && config.PeakHourPause.Enabled,
 		peakHourStart:   peakHourDefault(config.PeakHourPause, true),
 		peakHourEnd:     peakHourDefault(config.PeakHourPause, false),
+		// LLM 调用费用追踪（从 logDir 恢复历史累计）
+		llmCostTracker: NewLLMCostTracker(logDir),
 		// 运行时可热更新配置
 		runtimeCfg:     NewRuntimeConfig(config, aiClient),
 		scanIntervalCh: make(chan time.Duration, 1),
@@ -669,6 +671,17 @@ func (at *AutoTrader) runCycle() error {
 	// 4. 调用AI获取完整决策
 	log.Println("🤖 正在请求AI分析并决策...")
 	engeinDecision, err := decision.GetFullDecision(ctx)
+
+	// 记录 LLM 调用费用（即使决策解析失败，token 已消耗）
+	if engeinDecision != nil && engeinDecision.LLMUsage != nil {
+		at.llmCostTracker.RecordCall("decision", &mcp.CallResult{
+			Model: at.aiClient.GetModel(),
+			Usage: *engeinDecision.LLMUsage,
+		})
+		if engeinDecision.LLMCostUSDT > 0 {
+			log.Printf("💰 本次 LLM 费用: $%.6f USDT | 累计: $%.4f USDT", engeinDecision.LLMCostUSDT, at.llmCostTracker.GetTotalCost())
+		}
+	}
 
 	// 即使有错误，也保存思维链、决策和输入prompt（用于debug）
 	if engeinDecision != nil {
@@ -1138,7 +1151,6 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		RecentTrades:        recentTrades,
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
-		AICostPerTradeUSD:   calcAICostPerTrade(rcSnap.DailyAICostUSD, rcSnap.ScanIntervalMin),
 		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
 		AutoTakeProfit:      rcSnap.AutoTakeProfit,   // 从运行时配置读取
 		ScanIntervalMin:     rcSnap.ScanIntervalMin,  // 用于 prompt 动态时间
@@ -1748,14 +1760,14 @@ func (at *AutoTrader) GetAssumedTakerFeeRate() float64 {
 	return at.config.AssumedTakerFeeRate
 }
 
-// calcAICostPerTrade 根据日固定 AI 成本和扫描周期计算每笔交易分摊的 AI 成本（USDT）。
-// 公式：dailyCost / (1440 / scanIntervalMin)
-func calcAICostPerTrade(dailyCostUSD float64, scanIntervalMin int) float64 {
-	if dailyCostUSD <= 0 || scanIntervalMin <= 0 {
-		return 0
-	}
-	callsPerDay := 1440.0 / float64(scanIntervalMin)
-	return dailyCostUSD / callsPerDay
+// GetLLMCostSnapshot 返回 LLM 调用费用的只读快照
+func (at *AutoTrader) GetLLMCostSnapshot() LLMCostSnapshot {
+	return at.llmCostTracker.Snapshot()
+}
+
+// GetLLMCostTracker 返回 LLM 费用追踪器（供 decision 层回调）
+func (at *AutoTrader) GetLLMCostTracker() *LLMCostTracker {
+	return at.llmCostTracker
 }
 
 // GetOrders 获取某币种订单历史（带缓存；用于 API 展示）

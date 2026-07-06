@@ -397,6 +397,7 @@ function TraderDetailsPage({
   account,
   positions,
   decisions,
+  stats,
   lastUpdate,
   language,
 }: {
@@ -534,6 +535,53 @@ function TraderDetailsPage({
           subtitle={`${t('margin', language)}: ${account?.margin_used_pct?.toFixed(1) || '0.0'}%`}
         />
       </div>
+
+      {/* LLM Cost Summary */}
+      {stats?.llm_cost && stats.llm_cost.total_calls > 0 && (
+        <div className="mb-6 rounded-lg p-4 animate-slide-in" style={{ background: '#1E2329', border: '1px solid #2B3139' }}>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold" style={{ color: '#EAECEF' }}>💰 LLM Cost</span>
+              <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(240, 185, 11, 0.1)', color: '#F0B90B', border: '1px solid rgba(240, 185, 11, 0.15)' }}>
+                {stats.llm_cost.total_calls} calls
+              </span>
+            </div>
+            <div className="flex items-center gap-5 text-xs" style={{ color: '#848E9C' }}>
+              <div>
+                Total: <span style={{ color: '#F6465D', fontWeight: 600 }}>
+                  ${stats.llm_cost.total_cost_usdt < 0.01 ? stats.llm_cost.total_cost_usdt.toFixed(6) : stats.llm_cost.total_cost_usdt.toFixed(4)}
+                </span>
+              </div>
+              <div>
+                Avg/call: <span style={{ color: '#EAECEF' }}>
+                  ${stats.llm_cost.avg_cost_per_call_usdt < 0.001 ? stats.llm_cost.avg_cost_per_call_usdt.toFixed(6) : stats.llm_cost.avg_cost_per_call_usdt.toFixed(4)}
+                </span>
+              </div>
+              <div>
+                Tokens: <span style={{ color: '#EAECEF' }}>
+                  {((stats.llm_cost.total_prompt_tokens + stats.llm_cost.total_output_tokens) / 1000).toFixed(1)}K
+                </span>
+                {' '}({(stats.llm_cost.total_prompt_tokens / 1000).toFixed(1)}K in / {(stats.llm_cost.total_output_tokens / 1000).toFixed(1)}K out)
+              </div>
+              {stats.llm_cost.cache_hit_rate > 0 && (
+                <div>
+                  Cache: <span style={{ color: '#0ECB81' }}>
+                    {(stats.llm_cost.cache_hit_rate * 100).toFixed(1)}%
+                  </span>
+                </div>
+              )}
+              {account && account.total_pnl !== undefined && (
+                <div>
+                  Net P&L: <span style={{ color: (account.total_pnl - stats.llm_cost.total_cost_usdt) >= 0 ? '#0ECB81' : '#F6465D', fontWeight: 600 }}>
+                    {(account.total_pnl - stats.llm_cost.total_cost_usdt) >= 0 ? '+' : ''}
+                    {(account.total_pnl - stats.llm_cost.total_cost_usdt).toFixed(2)} USDT
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 主要内容区：左右分屏 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">

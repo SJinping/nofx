@@ -113,6 +113,9 @@ func (s *Server) setupRoutes() {
 			ex.GET("/orders", s.handleExchangeOrders)
 		}
 
+		// LLM 费用统计
+		api.GET("/llm-cost", s.handleLLMCost)
+
 		// 错误统计
 		api.GET("/error-stats", s.handleErrorStats)
 		api.GET("/error-stats/recent", s.handleRecentErrors)
@@ -1183,13 +1186,13 @@ func (s *Server) handleStatistics(c *gin.Context) {
 		return
 	}
 
-	trader, err := s.traderManager.GetTrader(traderID)
+	t, err := s.traderManager.GetTrader(traderID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
 
-	stats, err := trader.GetDecisionLogger().GetStatistics()
+	stats, err := t.GetDecisionLogger().GetStatistics()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": fmt.Sprintf("获取统计信息失败: %v", err),
@@ -1197,7 +1200,13 @@ func (s *Server) handleStatistics(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, stats)
+	// 将交易统计和 LLM 费用统计合并返回
+	result := gin.H{
+		"trade_stats": stats,
+		"llm_cost":    t.GetLLMCostSnapshot(),
+	}
+
+	c.JSON(http.StatusOK, result)
 }
 
 // handleEquityHistory 收益率历史数据
@@ -1409,6 +1418,23 @@ func (s *Server) handleClosePositions(c *gin.Context) {
 		"success": true,
 		"message": "平仓成功",
 	})
+}
+
+// handleLLMCost LLM 调用费用统计
+func (s *Server) handleLLMCost(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	t, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, t.GetLLMCostSnapshot())
 }
 
 // handleErrorStats 错误统计

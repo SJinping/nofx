@@ -84,11 +84,5 @@ export interface DecisionRecord {
   error_message: string;
 }
 
-// 统计信息
-export interface Statistics {
-  total_cycles: number;
-  successful_cycles: number;
-  failed_cycles: number;
-  total_open_positions: number;
-  total_close_positions: number;
-}
+// 统计信息 — 从 types.ts 重新导出
+export type { Statistics, LLMCostSnapshot } from '../types';

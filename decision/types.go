@@ -3,6 +3,7 @@ package decision
 import (
 	"nofx/logger"
 	"nofx/market"
+	"nofx/mcp"
 	"time"
 )
 
@@ -10,6 +11,7 @@ import (
 // *mcp.Client 实现此接口。
 type AICaller interface {
 	CallWithMessages(systemPrompt, userPrompt string) (string, error)
+	CallWithMessagesDetailed(systemPrompt, userPrompt string) (*mcp.CallResult, error)
 }
 
 // PositionInfo 持仓信息
@@ -142,7 +144,6 @@ type Context struct {
 	// 成本假设（用于风控/自动止盈/校验，不传给LLM）
 	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004
 	AssumedSlippageRate float64 `json:"-"` // 例如 0.0005
-	AICostPerTradeUSD   float64 `json:"-"` // 每笔交易分摊的 AI 调用成本（USDT）
 
 	// 止损最小距离配置（从config层传入，零值时使用默认）
 	StopLossDistance StopLossDistanceConfig `json:"-"`
@@ -219,10 +220,12 @@ type Decision struct {
 
 // FullDecision AI的完整决策（包含思维链）
 type FullDecision struct {
-	UserPrompt string     `json:"user_prompt"` // 发送给AI的输入prompt
-	CoTTrace   string     `json:"cot_trace"`   // 思维链分析（AI输出）
-	Decisions  []Decision `json:"decisions"`   // 具体决策列表
-	Timestamp  time.Time  `json:"timestamp"`
+	UserPrompt  string         `json:"user_prompt"`            // 发送给AI的输入prompt
+	CoTTrace    string         `json:"cot_trace"`              // 思维链分析（AI输出）
+	Decisions   []Decision     `json:"decisions"`              // 具体决策列表
+	Timestamp   time.Time      `json:"timestamp"`
+	LLMCostUSDT float64       `json:"llm_cost_usdt,omitempty"` // 本次 LLM 调用费用（USDT）
+	LLMUsage    *mcp.TokenUsage `json:"llm_usage,omitempty"`    // 本次 LLM token 用量
 }
 
 // PromptStrategy 可插拔策略接口

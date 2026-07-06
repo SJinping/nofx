@@ -33,6 +33,23 @@ type Config struct {
 	MaxTokens  int
 }
 
+// TokenUsage LLM API 返回的 token 用量统计
+type TokenUsage struct {
+	PromptTokens      int `json:"prompt_tokens"`
+	CompletionTokens  int `json:"completion_tokens"`
+	TotalTokens       int `json:"total_tokens"`
+	CacheHitTokens    int `json:"prompt_cache_hit_tokens"`
+	CacheMissTokens   int `json:"prompt_cache_miss_tokens"`
+	ReasoningTokens   int `json:"reasoning_tokens"`
+}
+
+// CallResult LLM 调用结果（内容 + token 用量）
+type CallResult struct {
+	Content string
+	Usage   TokenUsage
+	Model   string
+}
+
 // Client 独立的 AI 客户端实例（线程安全）。
 // 每个 trader 持有自己的 Client，互不干扰。
 type Client struct {
@@ -131,14 +148,23 @@ func (c *Client) GetProvider() Provider {
 	return c.cfg.Provider
 }
 
-// CallWithMessages 使用 system + user prompt 调用AI API
+// CallWithMessages 使用 system + user prompt 调用AI API（兼容旧接口，只返回内容）
 func (c *Client) CallWithMessages(systemPrompt, userPrompt string) (string, error) {
+	result, err := c.CallWithMessagesDetailed(systemPrompt, userPrompt)
+	if err != nil {
+		return "", err
+	}
+	return result.Content, nil
+}
+
+// CallWithMessagesDetailed 使用 system + user prompt 调用AI API，返回完整结果（含 token 用量）
+func (c *Client) CallWithMessagesDetailed(systemPrompt, userPrompt string) (*CallResult, error) {
 	c.mu.RLock()
 	cfg := c.cfg // 取快照
 	c.mu.RUnlock()
 
 	if cfg.APIKey == "" {
-		return "", fmt.Errorf("AI API密钥未设置")
+		return nil, fmt.Errorf("AI API密钥未设置")
 	}
 
 	maxRetries := 1
@@ -159,7 +185,7 @@ func (c *Client) CallWithMessages(systemPrompt, userPrompt string) (string, erro
 
 		lastErr = err
 		if !isRetryableError(err) {
-			return "", err
+			return nil, err
 		}
 
 		if attempt < maxRetries {
@@ -169,11 +195,11 @@ func (c *Client) CallWithMessages(systemPrompt, userPrompt string) (string, erro
 		}
 	}
 
-	return "", fmt.Errorf("重试%d次后仍然失败: %w", maxRetries, lastErr)
+	return nil, fmt.Errorf("重试%d次后仍然失败: %w", maxRetries, lastErr)
 }
 
 // doCall 单次调用AI API（纯函数，无副作用）
-func doCall(cfg Config, systemPrompt, userPrompt string) (string, error) {
+func doCall(cfg Config, systemPrompt, userPrompt string) (*CallResult, error) {
 	messages := []map[string]string{}
 
 	if systemPrompt != "" {
@@ -197,7 +223,7 @@ func doCall(cfg Config, systemPrompt, userPrompt string) (string, error) {
 
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
-		return "", fmt.Errorf("序列化请求失败: %w", err)
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
 	var url string
@@ -208,7 +234,7 @@ func doCall(cfg Config, systemPrompt, userPrompt string) (string, error) {
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("创建请求失败: %w", err)
+		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -232,17 +258,17 @@ func doCall(cfg Config, systemPrompt, userPrompt string) (string, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("发送请求失败: %w", err)
+		return nil, fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("读取响应失败: %w", err)
+		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("API返回错误 (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API返回错误 (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
@@ -251,17 +277,38 @@ func doCall(cfg Config, systemPrompt, userPrompt string) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			PromptTokens    int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens     int `json:"total_tokens"`
+			CacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+			CacheMissTokens int `json:"prompt_cache_miss_tokens"`
+			CompletionTokensDetails struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
+		} `json:"usage"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("解析响应失败: %w", err)
+		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 
 	if len(result.Choices) == 0 {
-		return "", fmt.Errorf("API返回空响应")
+		return nil, fmt.Errorf("API返回空响应")
 	}
 
-	return result.Choices[0].Message.Content, nil
+	return &CallResult{
+		Content: result.Choices[0].Message.Content,
+		Usage: TokenUsage{
+			PromptTokens:     result.Usage.PromptTokens,
+			CompletionTokens: result.Usage.CompletionTokens,
+			TotalTokens:      result.Usage.TotalTokens,
+			CacheHitTokens:   result.Usage.CacheHitTokens,
+			CacheMissTokens:  result.Usage.CacheMissTokens,
+			ReasoningTokens:  result.Usage.CompletionTokensDetails.ReasoningTokens,
+		},
+		Model: cfg.Model,
+	}, nil
 }
 
 // isRetryableError 判断错误是否可重试
@@ -336,6 +383,11 @@ func SetCustomAPI(apiURL, apiKey, modelName string) {
 // CallWithMessagesGlobal 全局调用（供 cmd 工具使用）
 func CallWithMessagesGlobal(systemPrompt, userPrompt string) (string, error) {
 	return defaultClient.CallWithMessages(systemPrompt, userPrompt)
+}
+
+// CallWithMessagesDetailedGlobal 全局调用（返回完整结果含 token 用量）
+func CallWithMessagesDetailedGlobal(systemPrompt, userPrompt string) (*CallResult, error) {
+	return defaultClient.CallWithMessagesDetailed(systemPrompt, userPrompt)
 }
 
 // SetModel 全局设置模型名（兼容）
