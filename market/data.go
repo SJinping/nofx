@@ -80,6 +80,12 @@ func getV2RayInboundPort(protocol string) int {
 	return 0
 }
 
+// NewHTTPClient 创建一个带代理探测的 HTTP client（SOCKS5 > v2ray > 系统代理 > 直连）。
+// 供 market 包内部和 api 层复用，确保所有对 Binance 的请求走统一的网络出口。
+func NewHTTPClient() *http.Client {
+	return newHTTPClient()
+}
+
 func newHTTPClient() *http.Client {
 	// 1. 优先尝试 SOCKS5 代理（ALL_PROXY=socks5h://host:port）
 	if proxyEnv := os.Getenv("ALL_PROXY"); proxyEnv != "" {

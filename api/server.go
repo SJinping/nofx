@@ -1711,7 +1711,7 @@ func (s *Server) handleMarketOverview(c *gin.Context) {
 	baseURL := market.GetFAPIBaseURL()
 
 	coins := make([]marketCoinOverview, 0, len(symbols))
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := market.NewHTTPClient()
 
 	for _, sym := range symbols {
 		co := marketCoinOverview{Symbol: sym}
