@@ -61,6 +61,58 @@ func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data, s
 	return minDist
 }
 
+const minAdjustedPositionSizeUSD = 50.0
+
+func maybeAdjustOpenStopLossToMinDistance(d *Decision, entryPrice, minDist float64) (bool, error) {
+	if d == nil || entryPrice <= 0 || minDist <= 0 {
+		return false, nil
+	}
+	if d.Action != ActionOpenLong && d.Action != ActionOpenShort {
+		return false, nil
+	}
+	if d.PositionSizeUSD <= 0 {
+		return false, nil
+	}
+
+	originalStopLoss := d.StopLoss
+	originalPositionSize := d.PositionSizeUSD
+	originalDist := 0.0
+	adjustedStopLoss := originalStopLoss
+	if d.Action == ActionOpenLong {
+		originalDist = entryPrice - originalStopLoss
+		if originalDist >= minDist {
+			return false, nil
+		}
+		adjustedStopLoss = entryPrice - minDist
+	} else {
+		originalDist = originalStopLoss - entryPrice
+		if originalDist >= minDist {
+			return false, nil
+		}
+		adjustedStopLoss = entryPrice + minDist
+	}
+	if originalDist <= 0 {
+		return false, fmt.Errorf("止损/止盈与入场价不匹配，无法自适应调整止损(entry=%.4f sl=%.4f)", entryPrice, originalStopLoss)
+	}
+
+	adjustedPositionSize := originalPositionSize * originalDist / minDist
+	if adjustedPositionSize < minAdjustedPositionSizeUSD {
+		return false, fmt.Errorf("止损过近且自适应缩仓后仓位过小：symbol=%s 原仓位=%.2f USDT 原距离=%.4f 调整后距离=%.4f 调整后仓位=%.2f USDT，必须≥%.2f USDT",
+			d.Symbol, originalPositionSize, originalDist, minDist, adjustedPositionSize, minAdjustedPositionSizeUSD)
+	}
+
+	d.StopLoss = adjustedStopLoss
+	d.PositionSizeUSD = adjustedPositionSize
+	msg := fmt.Sprintf("止损距离自适应调整：SL %.4f→%.4f，仓位 %.2f→%.2f USDT，保持原始名义风险不变（距离 %.4f→%.4f）",
+		originalStopLoss, d.StopLoss, originalPositionSize, d.PositionSizeUSD, originalDist, minDist)
+	if strings.TrimSpace(d.Reasoning) == "" {
+		d.Reasoning = msg
+	} else {
+		d.Reasoning = strings.TrimSpace(d.Reasoning) + "；" + msg
+	}
+	return true, nil
+}
+
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
 func validateDecisions(decisions []Decision, ctx *Context) error {
 	for i, decision := range decisions {
@@ -195,9 +247,6 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 				return fmt.Errorf("山寨币单币种仓位价值不能超过%.0f USDT（1.5倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
 			}
 		}
-		if err := validateRequiredMargin(d, ctx); err != nil {
-			return err
-		}
 		if d.StopLoss <= 0 || d.TakeProfit <= 0 {
 			return fmt.Errorf("止损和止盈必须大于0")
 		}
@@ -231,21 +280,13 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 			}
 		}
 
-		// ✅ 额外硬约束：开仓止损也不能贴得太近（尤其是山寨币）
-		// 说明：这能显著减少“刚开仓就被3m噪声扫损/滑点触发”的情况。
+		// ✅ 止损太近时自适应拉宽到最小距离，并按方案A缩小仓位以保持AI原始名义风险金额不变。
+		// 之后仍会用调整后的 SL/仓位重新计算净RR、保证金和仓位下限；RR不达标则拒绝。
 		if ctx != nil && ctx.MarketDataMap != nil {
 			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 && entryPrice > 0 {
 				minDist := stopLossMinDistance(d.Symbol, entryPrice, md, &ctx.StopLossDistance)
-				if d.Action == ActionOpenLong {
-					if (entryPrice - d.StopLoss) < minDist {
-						return fmt.Errorf("开多止损过近：symbol=%s entry=%.4f sl=%.4f 距离=%.4f，必须≥%.4f（BTC/ETH更宽松，山寨币更严格）",
-							d.Symbol, entryPrice, d.StopLoss, entryPrice-d.StopLoss, minDist)
-					}
-				} else {
-					if (d.StopLoss - entryPrice) < minDist {
-						return fmt.Errorf("开空止损过近：symbol=%s entry=%.4f sl=%.4f 距离=%.4f，必须≥%.4f（BTC/ETH更宽松，山寨币更严格）",
-							d.Symbol, entryPrice, d.StopLoss, d.StopLoss-entryPrice, minDist)
-					}
+				if _, err := maybeAdjustOpenStopLossToMinDistance(d, entryPrice, minDist); err != nil {
+					return err
 				}
 			}
 		}
@@ -290,6 +331,10 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		if riskRewardRatio < minRiskReward {
 			return fmt.Errorf("净风险回报比过低(%.2f:1)，必须≥%.2f:1 [净风险:%.2f%% 净收益:%.2f%% 成本:%.2f%%] [止损:%.2f 止盈:%.2f 入场:%.2f 杠杆:%dx]",
 				riskRewardRatio, minRiskReward, netRisk, netReward, roundTripCostROIPct, d.StopLoss, d.TakeProfit, entryPrice, d.Leverage)
+		}
+
+		if err := validateRequiredMargin(d, ctx); err != nil {
+			return err
 		}
 	}
 
