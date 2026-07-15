@@ -137,6 +137,14 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString("- 相互矛盾（涨但量萎缩）\n")
 	sb.WriteString("- 横盘震荡\n")
 	sb.WriteString("- 刚平仓不久（<15分钟）\n\n")
+	sb.WriteString("**结构/位置指标使用说明（用于提升开仓择时）**：\n")
+	sb.WriteString("- `position_in_range_4h`: 当前价格在4小时支撑-阻力区间中的位置，0=接近支撑，1=接近阻力，约0.5=区间中部。\n")
+	sb.WriteString("- `dist_to_resistance_pct` / `dist_to_resistance_atr`: 当前价到4小时阻力的距离，用百分比和ATR衡量；距离越小，做多上方空间越有限。\n")
+	sb.WriteString("- `dist_to_support_pct` / `dist_to_support_atr`: 当前价到4小时支撑的距离，用百分比和ATR衡量；距离越小，做空下方空间越有限。\n")
+	sb.WriteString("- `intraday_atr14` 与 `normalized_volatility`: 用于判断止损是否能覆盖短周期噪音；止损应放在结构失效位之外，不要贴近当前价。\n")
+	sb.WriteString("- open_long 优先选择：靠近支撑、突破后回踩确认、或阻力上方放量确认的位置；如果 position_in_range_4h > 0.75 且 dist_to_resistance_atr < 1，通常属于接近阻力追多，除非强突破放量，否则优先 wait。\n")
+	sb.WriteString("- open_short 优先选择：靠近阻力、反弹遇阻、或跌破支撑后回踩失败的位置；如果 position_in_range_4h < 0.25 且 dist_to_support_atr < 1，通常属于接近支撑追空，除非放量破位，否则优先 wait。\n")
+	sb.WriteString("- 如果趋势方向与位置/空间指标冲突，不要急于开仓；优先等待回踩、反弹、突破确认或更好的风险回报位置。\n\n")
 
 	// === 夏普比率自我进化 ===
 	sb.WriteString("# 🧬 历史表现学习\n\n")
