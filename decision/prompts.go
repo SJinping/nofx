@@ -531,6 +531,8 @@ func buildUserPrompt(ctx *Context) string {
 			// 使用FormatMarketData输出完整市场数据
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
 				sb.WriteString(market.Format(marketData))
+				// 注入与 StrategyB 相同的结构/位置指标，帮助 StrategyA 判断入场位置与止损空间。
+				sb.WriteString(extraUserPromptForStrategyB(marketData, ctx.ScanIntervalMin))
 				sb.WriteString("\n")
 			}
 			// 入场论据（供 LLM 对比是否应继续持有）
@@ -560,6 +562,8 @@ func buildUserPrompt(ctx *Context) string {
 		// 使用FormatMarketData输出完整市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
 		sb.WriteString(market.Format(marketData))
+		// 注入与 StrategyB 相同的结构/位置指标，帮助 StrategyA 判断入场位置与止损空间。
+		sb.WriteString(extraUserPromptForStrategyB(marketData, ctx.ScanIntervalMin))
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
