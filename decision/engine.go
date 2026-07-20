@@ -82,6 +82,52 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	return decision, nil
 }
 
+func isStrategyV(ctx *Context) bool {
+	if ctx == nil || ctx.PromptStrategy == nil {
+		return false
+	}
+	return ctx.PromptStrategy.Name() == "V"
+}
+
+func selectShortTermHeavySymbols(ctx *Context, symbolSet map[string]bool, maxCandidateHeavy int) map[string]bool {
+	heavy := make(map[string]bool)
+	if ctx == nil {
+		return heavy
+	}
+
+	// 持仓标的必须给完整短线数据，用于判断持仓是否仍然有效。
+	for _, pos := range ctx.Positions {
+		if symbolSet[pos.Symbol] {
+			heavy[pos.Symbol] = true
+		}
+	}
+
+	// BTC/ETH 是短线市场环境的核心锚点；若本轮已抓取，则给完整上下文。
+	for _, sym := range []string{"BTCUSDT", "ETHUSDT"} {
+		if symbolSet[sym] {
+			heavy[sym] = true
+		}
+	}
+
+	// 只对前 N 个候选使用重数据，控制 token 体积和额外 1h K线 API 调用。
+	if maxCandidateHeavy <= 0 {
+		maxCandidateHeavy = 5
+	}
+	count := 0
+	for _, coin := range ctx.CandidateCoins {
+		if count >= maxCandidateHeavy {
+			break
+		}
+		if !symbolSet[coin.Symbol] {
+			continue
+		}
+		heavy[coin.Symbol] = true
+		count++
+	}
+
+	return heavy
+}
+
 // GetFullDecisionFromText 用于回测，从文本中获取完整决策
 func GetFullDecisionFromText(ctx *Context, systemPrompt, userPrompt string) (*FullDecision, error) {
 
@@ -182,9 +228,27 @@ func fetchMarketDataForContext(ctx *Context) error {
 		positionSymbols[pos.Symbol] = true
 	}
 
+	shortTermMode := isStrategyV(ctx)
+	shortTermHeavySymbols := selectShortTermHeavySymbols(ctx, symbolSet, 5)
+
 	for symbol := range symbolSet {
-		// ✅ 统一使用轻量市场数据（默认10根3m序列），避免 prompt 体积膨胀与 token 成本上升
-		data, err := market.Get(symbol)
+		var data *market.Data
+		var err error
+		if shortTermMode {
+			opt := market.FetchOptions{
+				IntradayOutputPoints: 20,
+			}
+			// StrategyV 的重点短线标的使用更完整的 3m OHLCV + 1h 结构上下文。
+			// 非重点标的仍只扩展到 20 个 3m 指标点，避免 prompt 和 API 调用膨胀。
+			if shortTermHeavySymbols[symbol] {
+				opt.IncludeIntradayOHLCV = true
+				opt.IncludeMidTermContext = true
+			}
+			data, err = market.GetWithOptions(symbol, opt)
+		} else {
+			// ✅ 非 StrategyV 继续使用轻量市场数据（默认10根3m序列），避免影响正在运行的 StrategyA/B。
+			data, err = market.Get(symbol)
+		}
 		if err != nil {
 			// 单个币种失败不影响整体，记录错误
 			log.Printf("⚠️  获取 %s 市场数据失败: %v", symbol, err)

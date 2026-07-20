@@ -785,6 +785,295 @@ func buildUserPromptB(ctx *Context) string {
 	return sb.String()
 }
 
+// buildUserPromptShortTerm 构建 StrategyV 专用 User Prompt。
+// 与 StrategyA/B 的通用提示不同，StrategyV 只把重点标的展开为短线 OHLCV/1h 上下文，
+// 其余候选保留概览，避免短线实验的 prompt 体积和 API 成本失控。
+func buildUserPromptShortTerm(ctx *Context) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("**时间**: %s | **周期**: #%d | **运行**: %d分钟 | **策略**: V 短线/波动交易\n\n",
+		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
+
+	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
+		sb.WriteString(fmt.Sprintf("**BTC市场锚点**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI7: %.2f\n",
+			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
+			btcData.CurrentMACD, btcData.CurrentRSI7))
+		if envLabel := formatBTCEnvironment(ctx); envLabel != "" {
+			sb.WriteString(envLabel)
+		}
+		sb.WriteString("\n")
+	}
+
+	availablePct := 0.0
+	if ctx.Account.TotalEquity > 0 {
+		availablePct = ctx.Account.AvailableBalance / ctx.Account.TotalEquity * 100
+	}
+	sb.WriteString(fmt.Sprintf("**账户**: 净值%.2f | 余额%.2f (%.1f%%) | 盈亏%+.2f%% | 保证金%.1f%% | 持仓%d个\n",
+		ctx.Account.TotalEquity,
+		ctx.Account.AvailableBalance,
+		availablePct,
+		ctx.Account.TotalPnLPct,
+		ctx.Account.MarginUsedPct,
+		ctx.Account.PositionCount))
+	if ctx.Account.PeakEquity > 0 {
+		sb.WriteString(fmt.Sprintf("**全局峰值净值**: %.2f | 当前回撤: %.2f%%\n", ctx.Account.PeakEquity, ctx.Account.DrawdownFromPeakPct))
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("## StrategyV 短线决策要求\n")
+	sb.WriteString("- 主要判断窗口：最近 20 根 3m K线（约60分钟）+ 1h/4h 背景；非重点候选仅提供轻量概览。\n")
+	sb.WriteString("- 先判断 setup_type：trend_pullback | breakout_momentum | range_reversal | exhaustion_reversal | failed_breakout | no_trade。\n")
+	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、net_RR_after_fee_slippage、是否值得再等一根K线。\n")
+	sb.WriteString("- 如果没有清晰触发点，输出 wait；不要因为短线策略就强行交易。\n\n")
+
+	if len(ctx.Positions) > 0 {
+		sb.WriteString("## 当前持仓（重点短线复核）\n")
+		for i, pos := range ctx.Positions {
+			holdingDuration := ""
+			if pos.UpdateTime > 0 {
+				durationMs := time.Now().UnixMilli() - pos.UpdateTime
+				durationMin := durationMs / (1000 * 60)
+				if durationMin < 60 {
+					holdingDuration = fmt.Sprintf(" | 持仓时长%d分钟", durationMin)
+				} else {
+					holdingDuration = fmt.Sprintf(" | 持仓时长%d小时%d分钟", durationMin/60, durationMin%60)
+				}
+			}
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
+				i+1, pos.Symbol, strings.ToUpper(pos.Side), pos.EntryPrice, pos.MarkPrice,
+				pos.UnrealizedPnLPct, pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
+				sb.WriteString(formatShortTermMarketData(marketData, ctx.ScanIntervalMin, true))
+			}
+			sb.WriteString(formatEntryThesisShortTerm(pos))
+		}
+	} else {
+		sb.WriteString("**当前持仓**: 无\n\n")
+	}
+
+	heavySymbols := make(map[string]bool)
+	for sym, data := range ctx.MarketDataMap {
+		if isShortTermHeavyData(data) {
+			heavySymbols[sym] = true
+		}
+	}
+
+	sb.WriteString("## 重点短线候选（完整3m OHLCV + 1h/4h上下文）\n\n")
+	displayedHeavy := 0
+	for _, coin := range ctx.CandidateCoins {
+		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
+		if !hasData || !heavySymbols[coin.Symbol] {
+			continue
+		}
+		displayedHeavy++
+		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedHeavy, coin.Symbol, shortTermSourceTags(coin)))
+		sb.WriteString(formatShortTermMarketData(marketData, ctx.ScanIntervalMin, true))
+	}
+	if displayedHeavy == 0 {
+		sb.WriteString("无重点短线候选数据。\n\n")
+	}
+
+	sb.WriteString("## 其他候选概览（只用于初筛；缺少OHLCV细节时不要强开仓）\n\n")
+	displayedLight := 0
+	for _, coin := range ctx.CandidateCoins {
+		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
+		if !hasData || heavySymbols[coin.Symbol] {
+			continue
+		}
+		displayedLight++
+		sb.WriteString(fmt.Sprintf("%d. %s%s | price %.4f | 1h %+.2f%% | 4h %+.2f%% | MACD %.4f | RSI7 %.1f | %s\n",
+			displayedLight, coin.Symbol, shortTermSourceTags(coin), marketData.CurrentPrice,
+			marketData.PriceChange1h, marketData.PriceChange4h, marketData.CurrentMACD,
+			marketData.CurrentRSI7, formatShortTermSetupSnapshot(marketData)))
+	}
+	if displayedLight == 0 {
+		sb.WriteString("无其他候选。\n")
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString(getPerformance(ctx))
+
+	sb.WriteString("---\n\n")
+	sb.WriteString("现在请按 StrategyV 短线要求输出：先给简短行情解读与 setup 筛选，再输出 JSON 决策数组。\n")
+	return sb.String()
+}
+
+func isShortTermHeavyData(data *market.Data) bool {
+	return data != nil && data.IntradaySeries != nil && len(data.IntradaySeries.Opens) > 0 && len(data.IntradaySeries.Closes) > 0
+}
+
+func shortTermSourceTags(coin CandidateCoin) string {
+	if len(coin.Sources) > 1 {
+		return " (AI500+OI_Top双重信号)"
+	}
+	if len(coin.Sources) == 1 && coin.Sources[0] == "oi_top" {
+		return " (OI_Top持仓增长)"
+	}
+	return ""
+}
+
+func formatShortTermMarketData(data *market.Data, scanIntervalMin int, detailed bool) string {
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = 3
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("current_price = %.4f | 1h %+.2f%% | 4h %+.2f%% | MACD %.4f | RSI7 %.2f\n",
+		data.CurrentPrice, data.PriceChange1h, data.PriceChange4h, data.CurrentMACD, data.CurrentRSI7))
+	sb.WriteString(formatShortTermSetupSnapshot(data) + "\n")
+	sb.WriteString(extraUserPromptForStrategyB(data, scanIntervalMin))
+
+	if detailed {
+		sb.WriteString("短线原始市场数据（用于判断突破/回踩/假突破/衰竭）：\n")
+		sb.WriteString(market.Format(data))
+	} else if data.NofxAI300 != nil || data.NofxHeatmap != nil {
+		sb.WriteString(market.Format(data))
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func formatShortTermSetupSnapshot(data *market.Data) string {
+	if data == nil || data.IntradaySeries == nil {
+		return "setup_snapshot: intraday_series_unavailable"
+	}
+	s := data.IntradaySeries
+	closes := s.Closes
+	if len(closes) == 0 {
+		closes = s.MidPrices
+	}
+	if len(closes) == 0 {
+		return "setup_snapshot: price_series_unavailable"
+	}
+
+	firstClose := closes[0]
+	lastClose := closes[len(closes)-1]
+	changePct := 0.0
+	if firstClose > 0 {
+		changePct = (lastClose - firstClose) / firstClose * 100
+	}
+
+	high, low := maxMinFromSeries(s.Highs, s.Lows, closes)
+	posInRange := 0.0
+	if high > low {
+		posInRange = (lastClose - low) / (high - low)
+		if posInRange < 0 {
+			posInRange = 0
+		}
+		if posInRange > 1 {
+			posInRange = 1
+		}
+	}
+
+	volumeMsg := "volume=n/a"
+	if len(s.Volumes) > 0 {
+		avgVol := avgFloat(s.Volumes)
+		lastVol := s.Volumes[len(s.Volumes)-1]
+		if avgVol > 0 {
+			volumeMsg = fmt.Sprintf("last_volume/avg=%.2fx", lastVol/avgVol)
+		}
+	}
+
+	macdSlope := slopeLabel(s.MACDValues)
+	rsiNow := lastFloat(s.RSI7Values)
+	emaSide := "ema=n/a"
+	if len(s.EMA20Values) > 0 {
+		lastEMA := s.EMA20Values[len(s.EMA20Values)-1]
+		if lastClose >= lastEMA {
+			emaSide = "price_above_ema20"
+		} else {
+			emaSide = "price_below_ema20"
+		}
+	}
+
+	return fmt.Sprintf("setup_snapshot: points=%d | change=%+.2f%% | range=[%.4f, %.4f] | position_in_3m_range=%.2f | %s | macd_slope=%s | rsi7=%.1f | %s | intraday_atr14=%.4f",
+		len(closes), changePct, low, high, posInRange, volumeMsg, macdSlope, rsiNow, emaSide, data.IntradayATR14)
+}
+
+func maxMinFromSeries(highs, lows, fallback []float64) (float64, float64) {
+	if len(highs) > 0 && len(lows) > 0 {
+		high := highs[0]
+		low := lows[0]
+		for _, v := range highs {
+			if v > high {
+				high = v
+			}
+		}
+		for _, v := range lows {
+			if v < low {
+				low = v
+			}
+		}
+		return high, low
+	}
+	if len(fallback) == 0 {
+		return 0, 0
+	}
+	high := fallback[0]
+	low := fallback[0]
+	for _, v := range fallback {
+		if v > high {
+			high = v
+		}
+		if v < low {
+			low = v
+		}
+	}
+	return high, low
+}
+
+func avgFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
+func lastFloat(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	return values[len(values)-1]
+}
+
+func slopeLabel(values []float64) string {
+	if len(values) < 2 {
+		return "n/a"
+	}
+	last := values[len(values)-1]
+	prev := values[len(values)-2]
+	delta := last - prev
+	if delta > 0 {
+		return "rising"
+	}
+	if delta < 0 {
+		return "falling"
+	}
+	return "flat"
+}
+
+func formatEntryThesisShortTerm(pos PositionInfo) string {
+	if pos.EntryReasoning == "" || strings.HasPrefix(pos.EntryReasoning, "(unknown") {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**入场论据** (信心度 %d", pos.EntryConfidence))
+	if pos.EntryStopLoss > 0 {
+		sb.WriteString(fmt.Sprintf(", 止损 %.4f", pos.EntryStopLoss))
+	}
+	if pos.EntryTakeProfit > 0 {
+		sb.WriteString(fmt.Sprintf(", 目标 %.4f", pos.EntryTakeProfit))
+	}
+	sb.WriteString("):\n")
+	sb.WriteString(pos.EntryReasoning)
+	sb.WriteString("\n")
+	sb.WriteString("**StrategyV复核**: 入场 setup 是否仍有效？是否已有 follow-through？若只是短线噪声且止损未触发，优先 hold/移动止损；若突破失败、回踩失效或动能明显衰竭，请说明失效条件再平仓/减仓。\n\n")
+	return sb.String()
+}
+
 // autoRiskControlPrompt 返回系统自动风控机制的描述（注入 System Prompt）
 func autoRiskControlPrompt() string {
 	var sb strings.Builder

@@ -53,7 +53,7 @@ func (StrategyV) BuildSystemPrompt(ctx *Context) string {
 }
 
 func (StrategyV) BuildUserPrompt(ctx *Context) string {
-	return buildUserPromptB(ctx) // 沿用strategyB的user prompt，数据比较多
+	return buildUserPromptShortTerm(ctx)
 }
 
 func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
