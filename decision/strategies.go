@@ -57,12 +57,9 @@ func (StrategyV) BuildUserPrompt(ctx *Context) string {
 }
 
 func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
-	return GenerateAutoDecisions(ctx)
+	return GenerateShortTermAutoDecisions(ctx)
 }
 
 func (StrategyV) ExtraValidate(d *Decision, ctx *Context) error {
-	if err := validateBTCDirectionConstraint(d, ctx); err != nil {
-		return err
-	}
-	return validateMinHoldingTime(d, ctx)
+	return ExtraValidateShortTerm(d, ctx)
 }

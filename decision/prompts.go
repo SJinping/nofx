@@ -416,6 +416,9 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("当前账户净值、浮动盈亏、保证金使用率会在用户消息中给出，你需要基于这些数据评估整体风险承受能力。\n")
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
 	sb.WriteString("- 不孤注一掷：单一标的的风险不应占用账户的绝大部分。\n")
+	sb.WriteString("- StrategyV短线仓位更保守：BTC/ETH 单笔名义仓位通常不超过净值2倍，山寨币不超过净值0.75倍；单笔 risk_usd 不超过净值1%。\n")
+	sb.WriteString("- 当保证金使用率 ≥70% 时，不要新增仓位；当短线持仓浮亏接近 -2.5% 或超过90分钟仍未兑现，应优先退出/降风险。\n")
+	sb.WriteString("- 山寨币短线必须关注流动性/OI，低流动性币种即使形态好也不要开仓。\n")
 	sb.WriteString(fmt.Sprintf("- 每笔交易的风险回报比应 ≥ 1:%.0f（理想 ≥ 1:3）。\n", minRiskReward))
 	sb.WriteString("- 止损价格和止盈价格必须与方向一致，不能出现做多止损高于止盈等明显错误。\n\n")
 
