@@ -23,6 +23,14 @@ import (
 // When using testnet, set to "https://testnet.binancefuture.com".
 var fapiBaseURL = "https://fapi.binance.com"
 
+const (
+	// ShortTermBarIntervalMinutes is the fixed intraday bar interval used by StrategyV.
+	ShortTermBarIntervalMinutes = 3
+
+	// DefaultShortTermOutputPoints is the number of intraday bars exposed to StrategyV.
+	DefaultShortTermOutputPoints = 20
+)
+
 // SetFAPIBaseURL switches market data source between mainnet/testnet.
 // Note: this is a process-wide setting. Use one environment per process.
 func SetFAPIBaseURL(baseURL string) {
@@ -402,6 +410,162 @@ func GetWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 		LongerTermContext: longerTermData,
 		MidTermContext:    midTermData,
 	}, nil
+}
+
+// GetClosedWithOptions 获取 StrategyV 专用市场数据：CurrentPrice 保留最新3m快照，
+// 但指标、短线序列、ATR、1h/4h上下文只使用已闭合K线计算。
+// 普通 Get/GetWithOptions 路径不变，避免影响 StrategyA/B。
+func GetClosedWithOptions(symbol string, opt FetchOptions) (*Data, error) {
+	// 标准化symbol
+	symbol = Normalize(symbol)
+
+	outPts := opt.IntradayOutputPoints
+	if outPts <= 0 {
+		outPts = DefaultShortTermOutputPoints
+	}
+	if outPts < 10 {
+		outPts = 10
+	}
+	if outPts > 40 {
+		outPts = 40
+	}
+
+	need3m := maxInt(80, outPts+60)
+	klines3m, err := GetKlines(symbol, "3m", need3m)
+	if err != nil {
+		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
+	}
+	if len(klines3m) == 0 {
+		return nil, fmt.Errorf("获取3分钟K线失败: %s 返回空数据", symbol)
+	}
+
+	klines4h, err := GetKlines(symbol, "4h", 60)
+	if err != nil {
+		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
+	}
+	if len(klines4h) == 0 {
+		return nil, fmt.Errorf("获取4小时K线失败: %s 返回空数据", symbol)
+	}
+
+	nowMs := time.Now().UnixMilli()
+	closed3m := closedKlinesAt(klines3m, nowMs)
+	closed4h := closedKlinesAt(klines4h, nowMs)
+	if len(closed3m) < maxInt(26, outPts) {
+		return nil, fmt.Errorf("%s 已闭合3分钟K线不足: got=%d need>=%d", symbol, len(closed3m), maxInt(26, outPts))
+	}
+	if len(closed4h) < 50 {
+		return nil, fmt.Errorf("%s 已闭合4小时K线不足: got=%d need>=50", symbol, len(closed4h))
+	}
+
+	// 最新 raw 3m close 作为当前/形成中K线价格快照；不用于指标或setup确认。
+	currentPrice := klines3m[len(klines3m)-1].Close
+	currentEMA20 := calculateEMA(closed3m, 20)
+	currentMACD := calculateMACD(closed3m)
+	currentRSI7 := calculateRSI(closed3m, 7)
+
+	priceChange1h := 0.0
+	if len(closed3m) >= 21 {
+		latestClosed := closed3m[len(closed3m)-1].Close
+		price1hAgo := closed3m[len(closed3m)-21].Close
+		if price1hAgo > 0 {
+			priceChange1h = ((latestClosed - price1hAgo) / price1hAgo) * 100
+		}
+	}
+
+	priceChange4h := 0.0
+	if len(closed4h) >= 2 {
+		latestClosed := closed4h[len(closed4h)-1].Close
+		previousClosed := closed4h[len(closed4h)-2].Close
+		if previousClosed > 0 {
+			priceChange4h = ((latestClosed - previousClosed) / previousClosed) * 100
+		}
+	}
+
+	oiData, err := getOpenInterestData(symbol)
+	if err != nil {
+		oiData = &OIData{Latest: 0, Average: 0}
+	}
+	fundingRate, _ := getFundingRate(symbol)
+
+	intradayData := calculateIntradaySeries(closed3m, outPts, opt.IncludeIntradayOHLCV)
+	intradayATR14 := 0.0
+	if len(closed3m) >= 16 {
+		intradayATR14 = calculateATR(closed3m, 14)
+	}
+
+	longerTermData := calculateLongerTermData(closed4h)
+	volatilityPct := 0.0
+	if longerTermData != nil && longerTermData.ATR14 > 0 && currentPrice > 0 {
+		volatilityPct = longerTermData.ATR14 / currentPrice
+	}
+
+	var midTermData *MidTermData
+	if opt.IncludeMidTermContext {
+		klines1h, fetchErr := GetKlines(symbol, "1h", 80)
+		if fetchErr == nil && len(klines1h) > 0 {
+			closed1h := closedKlinesAt(klines1h, nowMs)
+			if len(closed1h) >= 50 {
+				midTermData = calculateMidTermData(closed1h)
+			}
+		}
+	}
+
+	return &Data{
+		Symbol:            symbol,
+		CurrentPrice:      currentPrice,
+		PriceChange1h:     priceChange1h,
+		PriceChange4h:     priceChange4h,
+		CurrentEMA20:      currentEMA20,
+		CurrentMACD:       currentMACD,
+		CurrentRSI7:       currentRSI7,
+		VolatilityPct:     volatilityPct,
+		OpenInterest:      oiData,
+		FundingRate:       fundingRate,
+		IntradaySeries:    intradayData,
+		IntradayATR14:     intradayATR14,
+		LongerTermContext: longerTermData,
+		MidTermContext:    midTermData,
+	}, nil
+}
+
+// GetRealtimePrice returns Binance Futures latest ticker price.
+func GetRealtimePrice(symbol string) (float64, error) {
+	symbol = Normalize(symbol)
+	url := fmt.Sprintf("%s/fapi/v1/ticker/price?symbol=%s", fapiBaseURL, symbol)
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("获取%s实时价格失败: %w", symbol, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("获取%s实时价格返回状态码%d", symbol, resp.StatusCode)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("读取%s实时价格失败: %w", symbol, err)
+	}
+	var result struct {
+		Price string `json:"price"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, fmt.Errorf("解析%s实时价格失败: %w", symbol, err)
+	}
+	price, err := strconv.ParseFloat(result.Price, 64)
+	if err != nil || price <= 0 {
+		return 0, fmt.Errorf("%s实时价格无效: %q", symbol, result.Price)
+	}
+	return price, nil
+}
+
+func closedKlinesAt(klines []Kline, nowMs int64) []Kline {
+	closed := make([]Kline, 0, len(klines))
+	for _, k := range klines {
+		if k.CloseTime > 0 && k.CloseTime <= nowMs {
+			closed = append(closed, k)
+		}
+	}
+	return closed
 }
 
 // GetKlines 从Binance获取K线数据

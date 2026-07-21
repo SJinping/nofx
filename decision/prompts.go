@@ -123,7 +123,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString("# 🎯 开仓标准（严格）\n\n")
 	sb.WriteString("只在**强信号**时开仓，不确定就观望。\n\n")
 	sb.WriteString("**你拥有的完整数据**：\n")
-	sb.WriteString(fmt.Sprintf("- 📊 **原始序列**：%d分钟价格序列(MidPrices数组) + 4小时K线序列\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- 📊 **原始序列**：%d分钟价格序列(MidPrices数组) + 4小时K线序列\n", market.ShortTermBarIntervalMinutes))
 	sb.WriteString("- 📈 **技术序列**：EMA20序列、MACD序列、RSI7序列、RSI14序列\n")
 	sb.WriteString("- 💰 **资金序列**：成交量序列、持仓量(OI)序列、资金费率\n")
 	sb.WriteString("- 🎯 **筛选标记**：AI500评分 / OI_Top排名（如果有标注）\n\n")
@@ -184,7 +184,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
 	sb.WriteString("   - 突发事件导致波动范式突变\n")
 	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
-	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", market.ShortTermBarIntervalMinutes))
 
 	// === 输出格式 ===
 	sb.WriteString("# 📤 输出格式\n\n")
@@ -312,16 +312,16 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 	sb.WriteString("- **不孤注一掷**：单一标的的风险不应占用账户的绝大部分。\n")
 	sb.WriteString("- **风险回报思维**：每次建议开仓时，确保风险回报比合理（建议 > 1:2，理想 > 1:3）。\n\n")
 	sb.WriteString("## 止损距离与仓位联动，按币种分层（重要）\n\n")
-	sb.WriteString(fmt.Sprintf("山寨币波动显著大于BTC/ETH，止损如果贴得过近，会被%d分钟噪声/滑点频繁扫掉。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("山寨币波动显著大于BTC/ETH，止损如果贴得过近，会被%d分钟噪声/滑点频繁扫掉。\n", market.ShortTermBarIntervalMinutes))
 	sb.WriteString("必须按币种分层设置止损“距离”，并与仓位联动：\n")
-	sb.WriteString(fmt.Sprintf("- **BTC/ETH（主流）**：止损距离建议 ≥ max(0.15%%价格, 0.3×`intraday_atr14 (%dm)`)。\n", scanIntervalMin))
-	sb.WriteString(fmt.Sprintf("- **山寨币（除BTC/ETH）**：止损距离建议 ≥ max(0.35%%价格, 0.6×`intraday_atr14 (%dm)`)。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- **BTC/ETH（主流）**：止损距离建议 ≥ max(0.15%%价格, 0.3×`intraday_atr14 (%dm)`)。\n", market.ShortTermBarIntervalMinutes))
+	sb.WriteString(fmt.Sprintf("- **山寨币（除BTC/ETH）**：止损距离建议 ≥ max(0.35%%价格, 0.6×`intraday_atr14 (%dm)`)。\n", market.ShortTermBarIntervalMinutes))
 	sb.WriteString("当为山寨币给出更宽止损时，必须同步降低 `position_size_usd`，以保持单笔风险可控（不要因为止损变宽而把风险放大）。\n\n")
 	sb.WriteString("- **检查已有持仓**：**核心自问**：入场时的技术理由（如EMA支撑、多头排列）是否已经彻底破坏？如果只是正常的利润回撤，严禁随意执行 `close_long/short`。如果只是想收紧风险，请使用 `update_stop_loss` 而非直接平仓。\n") // 强化
 	sb.WriteString("\n")
 	sb.WriteString("**移动止损（update_stop_loss）纪律**：\n")
 	sb.WriteString("- 移动止损不是为了“马上出场”，而是为了在行情给到空间时保护利润。\n")
-	sb.WriteString(fmt.Sprintf("- 不要把止损贴到当前价附近导致被%d分钟噪声扫掉。新止损应至少保留明显的波动空间（优先参考 `intraday_atr14 (%dm)` / `normalized_volatility`）。\n\n", scanIntervalMin, scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- 不要把止损贴到当前价附近导致被%d分钟噪声扫掉。新止损应至少保留明显的波动空间（优先参考 `intraday_atr14 (%dm)` / `normalized_volatility`）。\n\n", market.ShortTermBarIntervalMinutes, market.ShortTermBarIntervalMinutes))
 
 	// === 市场环境与方向约束 ===
 	sb.WriteString(btcDirectionConstraintPrompt())
@@ -340,7 +340,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
 	sb.WriteString("   - 突发事件导致波动范式突变\n")
 	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
-	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", market.ShortTermBarIntervalMinutes))
 
 	sb.WriteString("# 7️⃣ 输出格式（必须严格遵守）\n\n")
 	sb.WriteString("**第一步: 思维链（纯文本）**\n")
@@ -373,9 +373,23 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 // buildSystemPromptShortTerm 专注短期/波动交易的 System Prompt（策略 V）
 func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
 	if scanIntervalMin <= 0 {
-		scanIntervalMin = 3
+		scanIntervalMin = market.ShortTermBarIntervalMinutes
 	}
+	barIntervalMin := market.ShortTermBarIntervalMinutes
+	barCount := market.DefaultShortTermOutputPoints
+	coverageMin := barCount * barIntervalMin
 	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf(`# ⏲️ StrategyV 数据时间尺度（最高优先级）
+
+- **决策扫描周期**：系统每 %d 分钟调用你一次。
+- **执行K线周期**：固定为 %d 分钟，与扫描周期相互独立。
+- **短线观察窗口**：最近 %d 根已闭合 %d 分钟K线，覆盖约 %d 分钟。
+- **确认规则**：突破、回踩、假突破、衰竭、成交量和技术指标只能使用已闭合K线确认。
+- 当前消息中的 current_price 是本轮实时价格快照，只用于判断可执行性、追价风险和净RR；系统会在执行前重新获取实时价格并再次校验。
+- 不得把“每 %d 分钟扫描一次”理解为使用 %d 分钟K线。
+
+`, scanIntervalMin, barIntervalMin, barCount, barIntervalMin, coverageMin, scanIntervalMin, scanIntervalMin))
 
 	sb.WriteString("你是一个专门做加密货币合约短线/高波动交易的交易决策 AI。\n")
 	sb.WriteString("数据由外部系统提供，你只负责分析并输出交易决策；你不能访问交易所，也不能假设未提供的数据。\n")
@@ -391,7 +405,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("每次决策必须按以下顺序建立交易假设，避免单一指标误导：\n")
 	sb.WriteString("1. **BTC 市场环境**：判断全市场 beta 风险。BTC 4h downtrend 时，山寨币做多需要极高置信度；BTC uptrend 时，逆势做空需要极高置信度。\n")
 	sb.WriteString("2. **1h / 4h 背景**：1h 判断日内趋势或震荡状态；4h 只作为大环境、支撑阻力和方向风险，不直接决定 3m 入场点。\n")
-	sb.WriteString(fmt.Sprintf("3. **最近 20 根 %dm K线执行结构**：判断突破、回踩、区间边缘、假突破、衰竭；入场、止损和是否等待都以该层为主。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("3. **最近 %d 根已闭合 %dm K线执行结构（覆盖约%d分钟）**：判断突破、回踩、区间边缘、假突破、衰竭；入场、止损和是否等待都以该层为主。\n", barCount, barIntervalMin, coverageMin))
 	sb.WriteString("4. **成交量 / OI / AI300 / heatmap 确认**：用于确认或否定 setup，不能单独作为开仓理由。\n")
 	sb.WriteString("5. **净 RR 与风控**：如果止损距离、成本、滑点后净 RR 不足，必须 `wait`，不要用幻想中的远目标硬凑 RR。\n\n")
 
@@ -399,17 +413,17 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("开仓前必须先在 reasoning 中写 `setup_type`，只能使用以下类型之一：\n\n")
 	sb.WriteString("## trend_pullback（趋势回踩顺势）\n")
 	sb.WriteString("- 1h/4h 背景不与交易方向强冲突。\n")
-	sb.WriteString(fmt.Sprintf("- %dm 价格回踩 EMA20、前突破位、局部支撑/阻力后重新转强/转弱。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- %dm 已闭合K线价格回踩 EMA20、前突破位、局部支撑/阻力后重新转强/转弱。\n", barIntervalMin))
 	sb.WriteString("- 回踩过程最好缩量，重新启动时动能或成交量改善。\n")
 	sb.WriteString("- 禁止在垂直拉升后的高位直接追多，或垂直下跌后的低位直接追空。\n\n")
 
 	sb.WriteString("## breakout_momentum（突破动量）\n")
-	sb.WriteString(fmt.Sprintf("- 价格有效突破最近 20 根 %dm 区间上/下沿或关键 1h 位。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- 价格有效突破最近 %d 根已闭合 %dm 区间上/下沿或关键 1h 位。\n", barCount, barIntervalMin))
 	sb.WriteString("- 突破不能只是单根长影假突破；应有收盘站稳、放量、OI/资金流或订单簿确认中的至少一项。\n")
 	sb.WriteString("- 如果价格已远离突破位超过约 1–1.5 × intraday_atr14，通常应等待回踩，而不是追。\n\n")
 
 	sb.WriteString("## range_reversal（区间边缘反转）\n")
-	sb.WriteString(fmt.Sprintf("- 价格接近最近 20 根 %dm 区间上沿/下沿，而不是区间中部。\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- 价格接近最近 %d 根已闭合 %dm 区间上沿/下沿，而不是区间中部。\n", barCount, barIntervalMin))
 	sb.WriteString("- 出现长影、动能减弱、RSI 极值回落/回升、量能衰减等反转证据。\n")
 	sb.WriteString("- 不要在强 1h 单边趋势中轻易逆势做区间反转；若做，仓位更小、目标更近。\n\n")
 
@@ -428,7 +442,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 
 	sb.WriteString("# 4️⃣ 必须 wait 的情况\n\n")
 	sb.WriteString("出现以下任一情况，默认 `wait`，除非你能给出非常清楚的反证：\n")
-	sb.WriteString("- 价格处于最近 20 根 3m 区间中部（position_in_3m_range 约 0.35–0.65），上下空间都不足。\n")
+	sb.WriteString(fmt.Sprintf("- 价格处于最近 %d 根已闭合 %dm 区间中部（position_in_3m_range 约 0.35–0.65），上下空间都不足。\n", barCount, barIntervalMin))
 	sb.WriteString("- 价格刚刚大幅拉升/下跌，已经远离合理止损位，导致净 RR 变差。\n")
 	sb.WriteString("- 只有 RSI/MACD 单一指标，没有价格结构确认。\n")
 	sb.WriteString("- volume、OI、AI300 或 heatmap 与开仓方向明显不一致。\n")
@@ -456,7 +470,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("- 当保证金使用率 ≥70% 时，不要新增仓位；当短线持仓浮亏接近 -2.5% 或超过90分钟仍未兑现，应优先退出/降风险。\n")
 	sb.WriteString(fmt.Sprintf("- 每笔交易的净风险回报比必须 ≥ 1:%.0f（理想 ≥ 1:3）。\n", minRiskReward))
 	sb.WriteString("- stop_loss 必须绑定 setup 的 invalidation_condition，而不是随意给一个百分比。\n")
-	sb.WriteString("- take_profit 应优先参考最近 3m range high/low、1h 支撑阻力、heatmap 大墙与 ATR 空间。\n")
+	sb.WriteString(fmt.Sprintf("- take_profit 应优先参考最近已闭合 %dm range high/low、1h 支撑阻力、heatmap 大墙与 ATR 空间。\n", barIntervalMin))
 	sb.WriteString("- trend_pullback：止损放在回踩低/高点外侧，目标看前高/前低或 1h 关键位。\n")
 	sb.WriteString("- breakout_momentum：止损放在突破位内侧或突破K低/高点外侧；若止损过宽导致 RR 不足则 wait。\n")
 	sb.WriteString("- range_reversal：止损放在区间边界外侧，目标优先看区间中位或另一侧。\n")
@@ -467,7 +481,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("- 若已有盈利但动能减弱或接近阻力/支撑，优先考虑 `partial_close` 或 `update_stop_loss`，不一定全平。\n")
 	sb.WriteString("- 如果入场 setup 仍有效且只是正常回踩，不要因为单根 3m 噪声频繁 close。\n")
 	sb.WriteString("- 如果突破后没有 follow-through、跌回/涨回区间内，或 time_stop 接近且仍未兑现，应主动退出或减仓。\n")
-	sb.WriteString(fmt.Sprintf("- update_stop_loss 不能贴现价太近，应至少参考 intraday_atr14 (%dm) 留出噪声空间。\n\n", scanIntervalMin))
+	sb.WriteString(fmt.Sprintf("- update_stop_loss 不能贴现价太近，应至少参考 intraday_atr14 (%dm) 留出噪声空间。\n\n", barIntervalMin))
 
 	sb.WriteString("# 9️⃣ 基于历史表现的自我调节\n\n")
 	sb.WriteString("每次你会收到最近交易笔数、胜率、夏普比率、连亏等反馈：\n")
@@ -493,11 +507,11 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("**第二步: JSON决策数组（示例如下）**\n\n")
 	sb.WriteString("```json\n[\n")
 	sb.WriteString(fmt.Sprintf(
-		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": 1200, \"stop_loss\": 95000, \"take_profit\": 97000, \"confidence\": 82, \"risk_usd\": 10, \"reasoning\": \"setup_type=breakout_momentum; why_now=20根3m区间上沿放量突破且MACD斜率上升; invalidation_condition=跌回突破位下方; expected_holding_minutes=30; time_stop_minutes=45; net_RR_after_fee_slippage≈2.4; wait_one_more_candle=no\"},\n",
+		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": 1200, \"stop_loss\": 95000, \"take_profit\": 97000, \"confidence\": 82, \"risk_usd\": 10, \"reasoning\": \"setup_type=breakout_momentum; why_now=20根已闭合3m区间上沿放量突破且MACD斜率上升; invalidation_condition=跌回突破位下方; expected_holding_minutes=30; time_stop_minutes=45; net_RR_after_fee_slippage≈2.4; wait_one_more_candle=no\"},\n",
 		btcEthLeverage,
 	))
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"update_stop_loss\", \"new_stop_loss\": 2800, \"reasoning\": \"已有盈利但动能减弱，移动止损保护利润，同时保留intraday_atr14噪声空间\"},\n")
-	sb.WriteString("  {\"action\": \"wait\", \"reasoning\": \"no_trade: 价格在3m区间中部且volume/OI未确认，净RR不足，等待更清晰触发点\"}\n")
+	sb.WriteString("  {\"action\": \"wait\", \"reasoning\": \"no_trade: 价格在已闭合3m区间中部且volume/OI未确认，净RR不足，等待更清晰触发点\"}\n")
 	sb.WriteString("]\n```\n\n")
 
 	sb.WriteString("**字段说明**:\n")
@@ -646,7 +660,7 @@ func extraUserPromptForStrategyB(marketData *market.Data, scanIntervalMin int) s
 	if marketData.IntradayATR14 > 0 {
 		sb.WriteString(fmt.Sprintf(
 			"intraday_atr14 (%dm) = %.4f\n\n",
-			scanIntervalMin, marketData.IntradayATR14,
+			market.ShortTermBarIntervalMinutes, marketData.IntradayATR14,
 		))
 	}
 
@@ -822,6 +836,14 @@ func buildUserPromptB(ctx *Context) string {
 // 其余候选保留概览，避免短线实验的 prompt 体积和 API 成本失控。
 func buildUserPromptShortTerm(ctx *Context) string {
 	var sb strings.Builder
+	barIntervalMin := market.ShortTermBarIntervalMinutes
+	barCount := market.DefaultShortTermOutputPoints
+	coverageMin := barCount * barIntervalMin
+	scanIntervalMin := ctx.ScanIntervalMin
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = barIntervalMin
+	}
+	sb.WriteString(fmt.Sprintf("**StrategyV时间尺度**: 扫描周期%d分钟 | K线周期%d分钟 | 最近%d根均已闭合，覆盖约%d分钟 | current_price为本轮实时价格快照，执行前会二次复核\n\n", scanIntervalMin, barIntervalMin, barCount, coverageMin))
 
 	sb.WriteString(fmt.Sprintf("**时间**: %s | **周期**: #%d | **运行**: %d分钟 | **策略**: V 短线/波动交易\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
@@ -853,7 +875,7 @@ func buildUserPromptShortTerm(ctx *Context) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## StrategyV 短线决策要求\n")
-	sb.WriteString("- 主要判断窗口：最近 20 根 3m K线（约60分钟）+ 1h/4h 背景；非重点候选仅提供轻量概览。\n")
+	sb.WriteString(fmt.Sprintf("- 主要判断窗口：最近 %d 根已闭合 %dm K线（约%d分钟）+ 1h/4h 背景；非重点候选仅提供轻量概览。\n", barCount, barIntervalMin, coverageMin))
 	sb.WriteString("- 先判断 setup_type：trend_pullback | breakout_momentum | range_reversal | exhaustion_reversal | failed_breakout | no_trade。\n")
 	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、net_RR_after_fee_slippage、是否值得再等一根K线。\n")
 	sb.WriteString("- 如果没有清晰触发点，输出 wait；不要因为短线策略就强行交易。\n\n")
@@ -890,7 +912,7 @@ func buildUserPromptShortTerm(ctx *Context) string {
 		}
 	}
 
-	sb.WriteString("## 重点短线候选（完整3m OHLCV + 1h/4h上下文）\n\n")
+	sb.WriteString(fmt.Sprintf("## 重点短线候选（完整已闭合%dm OHLCV + 1h/4h上下文）\n\n", barIntervalMin))
 	displayedHeavy := 0
 	for _, coin := range ctx.CandidateCoins {
 		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
