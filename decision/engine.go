@@ -79,6 +79,17 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	decision.UserPrompt = userPrompt
 	decision.LLMCostUSDT = mcp.CalcCostUSDT(callResult.Model, callResult.Usage)
 	decision.LLMUsage = &callResult.Usage
+
+	// StrategyV only: re-fetch a near-real-time price after the LLM response.
+	// Unsafe opens are downgraded to wait, preserving valid risk-reduction
+	// decisions in the same batch. StrategyA/B return through the unchanged path.
+	if isStrategyV(ctx) {
+		for _, guardErr := range guardShortTermDecisionsAtRealtimePrice(decision.Decisions, ctx) {
+			errType := stats.ClassifyDecisionValidateError(guardErr.Error())
+			recordError(errType, guardErr.Error(), "")
+		}
+	}
+
 	return decision, nil
 }
 
@@ -238,13 +249,13 @@ func fetchMarketDataForContext(ctx *Context) error {
 			opt := market.FetchOptions{
 				IntradayOutputPoints: 20,
 			}
-			// StrategyV 的重点短线标的使用更完整的 3m OHLCV + 1h 结构上下文。
+			// StrategyV 使用已闭合K线计算指标；重点标的额外提供完整 3m OHLCV + 1h 结构上下文。
 			// 非重点标的仍只扩展到 20 个 3m 指标点，避免 prompt 和 API 调用膨胀。
 			if shortTermHeavySymbols[symbol] {
 				opt.IncludeIntradayOHLCV = true
 				opt.IncludeMidTermContext = true
 			}
-			data, err = market.GetWithOptions(symbol, opt)
+			data, err = market.GetClosedWithOptions(symbol, opt)
 		} else {
 			// ✅ 非 StrategyV 继续使用轻量市场数据（默认10根3m序列），避免影响正在运行的 StrategyA/B。
 			data, err = market.Get(symbol)
