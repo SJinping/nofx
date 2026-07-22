@@ -339,12 +339,27 @@ func normalizeSymbol(symbol string) string {
 	// 转为大写
 	symbol = toUpper(symbol)
 
-	// 确保以USDT结尾
+	// 确保以USDT结尾。若 API 已返回其他计价资产（如 AAVEUSDC），
+	// 不要盲目追加 USDT 变成 AAVEUSDCUSDT；保留原符号交给
+	// isValidSymbol 过滤掉非 USDT 永续合约。
 	if !endsWith(symbol, "USDT") {
+		if hasNonUSDTQuoteSuffix(symbol) {
+			return symbol
+		}
 		symbol = symbol + "USDT"
 	}
 
 	return symbol
+}
+
+func hasNonUSDTQuoteSuffix(symbol string) bool {
+	quotes := []string{"USDC", "BUSD", "FDUSD", "TUSD", "USD"}
+	for _, quote := range quotes {
+		if quote != "USDT" && endsWith(symbol, quote) {
+			return true
+		}
+	}
+	return false
 }
 
 // isValidSymbol 检查币种符号是否合法（至少有一个基础币种名 + USDT 后缀）
