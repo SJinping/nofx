@@ -10,6 +10,7 @@ import (
 	"nofx/memory"
 	"nofx/pool"
 	"nofx/stats"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,7 +98,7 @@ type AutoTraderConfig struct {
 	// LLM 平仓前的最低持仓时间（分钟，0=不限制）
 	MinHoldMinutes int
 
-	// 候选币种 OI 价值过滤门槛（百万USD，默认30M）
+	// 候选币种 OI 价值过滤门槛（百万USD，默认50M）
 	MinOIValueMillions float64
 
 	// 接续运行：启动时自动恢复交易（不需要手动点击开始）
@@ -138,6 +139,7 @@ type AutoTrader struct {
 	promptStrategy        decision.PromptStrategy // 当前使用的Prompt策略（默认StrategyA）
 	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
 	autoDecisionState     decision.AutoDecisionState
+	shortTermWatchlist    map[string]*decision.ShortTermWatchItem // StrategyV 专用轻量 watchlist，per-trader 隔离
 
 	// AI 客户端（每个 trader 独立实例）
 	aiClient *mcp.Client
@@ -730,6 +732,8 @@ func (at *AutoTrader) runCycle() error {
 	}
 	log.Println()
 
+	at.updateShortTermWatchlist(engeinDecision.Decisions, ctx)
+
 	// 7. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
 	sortedDecisions := sortDecisionsByPriority(engeinDecision.Decisions)
 
@@ -1156,6 +1160,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		ScanIntervalMin:     rcSnap.ScanIntervalMin,  // 用于 prompt 动态时间
 		MinHoldMinutes:      rcSnap.MinHoldMinutes,   // LLM 最低持仓时间
 		MinOIValueMillions:  rcSnap.MinOIValueMil,    // OI 价值过滤门槛
+		ShortTermWatchlist:  at.snapshotShortTermWatchlist(),
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
 		AutoState:           &at.autoDecisionState,
@@ -1170,6 +1175,151 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 
 	return ctx, nil
+}
+
+func (at *AutoTrader) isStrategyV() bool {
+	return at != nil && at.promptStrategy != nil && at.promptStrategy.Name() == "V"
+}
+
+func (at *AutoTrader) snapshotShortTermWatchlist() []decision.ShortTermWatchItem {
+	if !at.isStrategyV() || len(at.shortTermWatchlist) == 0 {
+		return nil
+	}
+	items := make([]decision.ShortTermWatchItem, 0, len(at.shortTermWatchlist))
+	for _, item := range at.shortTermWatchlist {
+		if item == nil || item.Symbol == "" {
+			continue
+		}
+		// 过期项不注入 prompt；清理由 updateShortTermWatchlist 做。
+		if item.ExpiresAfterCycle > 0 && at.callCount > item.ExpiresAfterCycle {
+			continue
+		}
+		items = append(items, *item)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Priority != items[j].Priority {
+			return items[i].Priority > items[j].Priority
+		}
+		return items[i].FirstSeenCycle > items[j].FirstSeenCycle
+	})
+	if len(items) > 3 {
+		items = items[:3]
+	}
+	return items
+}
+
+func (at *AutoTrader) updateShortTermWatchlist(decisions []decision.Decision, ctx *decision.Context) {
+	if !at.isStrategyV() {
+		return
+	}
+	if at.shortTermWatchlist == nil {
+		at.shortTermWatchlist = make(map[string]*decision.ShortTermWatchItem)
+	}
+	currentCycle := at.callCount
+
+	// 清理过期项和已有持仓项。
+	positionSymbols := make(map[string]bool)
+	if ctx != nil {
+		for _, pos := range ctx.Positions {
+			positionSymbols[pos.Symbol] = true
+		}
+	}
+	for sym, item := range at.shortTermWatchlist {
+		if item == nil || item.Symbol == "" || positionSymbols[sym] || (item.ExpiresAfterCycle > 0 && currentCycle > item.ExpiresAfterCycle) {
+			delete(at.shortTermWatchlist, sym)
+		}
+	}
+
+	for _, d := range decisions {
+		symbol := strings.ToUpper(strings.TrimSpace(d.Symbol))
+		if symbol == "" {
+			continue
+		}
+		action := strings.ToLower(strings.TrimSpace(d.WatchlistAction))
+		if action == "" {
+			continue
+		}
+		switch action {
+		case "remove", "delete", "invalidated", "expired":
+			delete(at.shortTermWatchlist, symbol)
+		case "add", "keep", "update":
+			item := at.shortTermWatchlist[symbol]
+			if item == nil {
+				item = &decision.ShortTermWatchItem{Symbol: symbol, FirstSeenCycle: currentCycle}
+			}
+			item.Symbol = symbol
+			item.LastSeenCycle = currentCycle
+			if item.FirstSeenCycle <= 0 {
+				item.FirstSeenCycle = currentCycle
+			}
+			if item.ExpiresAfterCycle <= currentCycle {
+				item.ExpiresAfterCycle = currentCycle + 3
+			}
+			if d.SideBias != "" {
+				item.SideBias = d.SideBias
+			}
+			if d.SetupType != "" {
+				item.SetupType = d.SetupType
+			}
+			if d.TriggerCondition != "" {
+				item.TriggerCondition = d.TriggerCondition
+			}
+			if d.InvalidationCondition != "" {
+				item.InvalidationCondition = d.InvalidationCondition
+			}
+			if d.TriggerPrice > 0 {
+				item.TriggerPrice = d.TriggerPrice
+			}
+			if d.InvalidationPrice > 0 {
+				item.InvalidationPrice = d.InvalidationPrice
+			}
+			if d.SuggestedStopLoss > 0 {
+				item.SuggestedStopLoss = d.SuggestedStopLoss
+			}
+			if d.SuggestedTakeProfit > 0 {
+				item.SuggestedTakeProfit = d.SuggestedTakeProfit
+			}
+			if d.WatchPriority > 0 {
+				item.Priority = d.WatchPriority
+			}
+			if strings.TrimSpace(d.Reasoning) != "" {
+				item.LastReasoning = strings.TrimSpace(d.Reasoning)
+			}
+			if item.Source == "" {
+				item.Source = "llm_wait"
+			}
+			at.shortTermWatchlist[symbol] = item
+		}
+	}
+
+	// 轻量 watchlist：最多保留 3 个，按 priority 简单裁剪。
+	if len(at.shortTermWatchlist) <= 3 {
+		return
+	}
+	for len(at.shortTermWatchlist) > 3 {
+		removeSym := ""
+		removePriority := int(^uint(0) >> 1)
+		oldest := int(^uint(0) >> 1)
+		for sym, item := range at.shortTermWatchlist {
+			priority := 0
+			firstSeen := 999999
+			if item != nil {
+				priority = item.Priority
+				if item.FirstSeenCycle > 0 {
+					firstSeen = item.FirstSeenCycle
+				}
+			}
+			if priority < removePriority || (priority == removePriority && firstSeen < oldest) {
+				removeSym = sym
+				removePriority = priority
+				oldest = firstSeen
+			}
+		}
+		if removeSym == "" {
+			break
+		}
+		delete(at.shortTermWatchlist, removeSym)
+	}
 }
 
 // shouldPauseForRisk 基于净值序列进行硬风控判断：

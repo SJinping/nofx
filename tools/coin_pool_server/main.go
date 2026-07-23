@@ -172,7 +172,7 @@ type AppConfig struct {
 	CoinTopN         int
 	OITopKByVolume   int
 	MinQuoteVolume   float64
-	MinOIValue       float64 // OI价值过滤阈值（USD），默认15M
+	MinOIValue       float64 // OI价值过滤阈值（USD），默认50M
 	HTTPTimeout      time.Duration
 	MaxWorkers       int
 	MaxRPS           int
@@ -537,7 +537,7 @@ func loadConfig() AppConfig {
 		CoinTopN:         getEnvInt("COIN_TOP_N", 10),
 		OITopKByVolume:   getEnvInt("OI_TOP_K", 200),
 		MinQuoteVolume:   getEnvFloat("MIN_QUOTE_VOLUME", 5_000_000), // 24h成交额过滤（USDT）
-		MinOIValue:       getEnvFloat("MIN_OI_VALUE", 15_000_000),    // OI价值过滤（USD），与 decision/engine.go 一致
+		MinOIValue:       getEnvFloat("MIN_OI_VALUE", 50_000_000),    // OI价值过滤（USD），与 decision/engine.go 一致
 		HTTPTimeout:      getEnvDuration("HTTP_TIMEOUT", 30*time.Second),
 		MaxWorkers:       getEnvInt("MAX_WORKERS", 8),
 		MaxRPS:           getEnvInt("MAX_RPS", 6),

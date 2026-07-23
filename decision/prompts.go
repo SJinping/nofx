@@ -468,7 +468,15 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
 	sb.WriteString("- StrategyV短线仓位更保守：BTC/ETH 单笔名义仓位通常不超过净值2倍，山寨币不超过净值0.75倍；单笔 risk_usd 不超过净值1%。\n")
 	sb.WriteString("- 当保证金使用率 ≥70% 时，不要新增仓位；当短线持仓浮亏接近 -2.5% 或超过90分钟仍未兑现，应优先退出/降风险。\n")
-	sb.WriteString(fmt.Sprintf("- 每笔交易的净风险回报比必须 ≥ 1:%.0f（理想 ≥ 1:3）。\n", minRiskReward))
+	sb.WriteString(fmt.Sprintf("- 每笔交易的净风险回报比必须 ≥ %.2f:1（理想 ≥ 3.00:1）。\n", minRiskReward))
+	sb.WriteString("- 净 RR 必须使用系统同口径公式，不要只算裸价格 RR：\n")
+	sb.WriteString("  - 多单 raw_risk_pct=(entry-stop_loss)/entry*100；raw_reward_pct=(take_profit-entry)/entry*100。\n")
+	sb.WriteString("  - 空单 raw_risk_pct=(stop_loss-entry)/entry*100；raw_reward_pct=(entry-take_profit)/entry*100。\n")
+	sb.WriteString("  - round_trip_cost_roi_pct=2*(taker_fee+slippage)*leverage*100；默认可按 taker_fee=0.0004、slippage=0.0005 估算。\n")
+	sb.WriteString("  - calculated_net_risk_pct=raw_risk_pct*leverage+round_trip_cost_roi_pct。\n")
+	sb.WriteString("  - calculated_net_reward_pct=raw_reward_pct*leverage-round_trip_cost_roi_pct。\n")
+	sb.WriteString("  - calculated_net_rr=calculated_net_reward_pct/calculated_net_risk_pct；若 < 最低要求或净收益 <=0，必须 wait。\n")
+	sb.WriteString("- 开仓 reasoning 必须写明 entry_price_used、raw_risk_pct、raw_reward_pct、round_trip_cost_roi_pct、calculated_net_risk_pct、calculated_net_reward_pct、calculated_net_rr。\n")
 	sb.WriteString("- stop_loss 必须绑定 setup 的 invalidation_condition，而不是随意给一个百分比。\n")
 	sb.WriteString(fmt.Sprintf("- take_profit 应优先参考最近已闭合 %dm range high/low、1h 支撑阻力、heatmap 大墙与 ATR 空间。\n", barIntervalMin))
 	sb.WriteString("- trend_pullback：止损放在回踩低/高点外侧，目标看前高/前低或 1h 关键位。\n")
@@ -517,9 +525,10 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("**字段说明**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
 	sb.WriteString("- 开仓时必填: symbol, leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
-	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, net_RR_after_fee_slippage。\n")
+	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, entry_price_used, raw_risk_pct, raw_reward_pct, round_trip_cost_roi_pct, calculated_net_risk_pct, calculated_net_reward_pct, calculated_net_rr。\n")
 	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`；`partial_close`: 必须提供 `close_percentage` (0-100)。\n")
-	sb.WriteString("- `symbol`如果有值，必须严格从当前持仓列表和候选币种列表中选择，不允许虚构币种。\n")
+	sb.WriteString("- `symbol`如果有值，必须严格从当前持仓列表、候选币种列表和 StrategyV Watchlist 中选择，不允许虚构币种。\n")
+	sb.WriteString("- StrategyV wait 可以附带轻量 watchlist 更新字段：`watchlist_action`=add|keep|remove，及 `setup_type`, `side_bias`, `trigger_condition`, `invalidation_condition`, `trigger_price`, `invalidation_price`, `suggested_stop_loss`, `suggested_take_profit`, `watch_priority`(1-100，越高越优先)。只保留最多3个、3个cycle内可能触发的高质量setup。\n")
 	sb.WriteString("- 如果没有足够好的机会，请坦然输出 wait。\n\n")
 
 	sb.WriteString(autoRiskControlPrompt())
@@ -874,10 +883,14 @@ func buildUserPromptShortTerm(ctx *Context) string {
 	}
 	sb.WriteString("\n")
 
+	if watchlistText := formatShortTermWatchlist(ctx); watchlistText != "" {
+		sb.WriteString(watchlistText)
+	}
+
 	sb.WriteString("## StrategyV 短线决策要求\n")
 	sb.WriteString(fmt.Sprintf("- 主要判断窗口：最近 %d 根已闭合 %dm K线（约%d分钟）+ 1h/4h 背景；非重点候选仅提供轻量概览。\n", barCount, barIntervalMin, coverageMin))
 	sb.WriteString("- 先判断 setup_type：trend_pullback | breakout_momentum | range_reversal | exhaustion_reversal | failed_breakout | no_trade。\n")
-	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、net_RR_after_fee_slippage、是否值得再等一根K线。\n")
+	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、entry_price_used、raw_risk_pct、raw_reward_pct、round_trip_cost_roi_pct、calculated_net_risk_pct、calculated_net_reward_pct、calculated_net_rr、是否值得再等一根K线。\n")
 	sb.WriteString("- 如果没有清晰触发点，输出 wait；不要因为短线策略就强行交易。\n\n")
 
 	if len(ctx.Positions) > 0 {
@@ -914,7 +927,21 @@ func buildUserPromptShortTerm(ctx *Context) string {
 
 	sb.WriteString(fmt.Sprintf("## 重点短线候选（完整已闭合%dm OHLCV + 1h/4h上下文）\n\n", barIntervalMin))
 	displayedHeavy := 0
+	displayedHeavySymbols := make(map[string]bool)
+	for _, item := range ctx.ShortTermWatchlist {
+		marketData, hasData := ctx.MarketDataMap[item.Symbol]
+		if !hasData || !heavySymbols[item.Symbol] {
+			continue
+		}
+		displayedHeavy++
+		displayedHeavySymbols[item.Symbol] = true
+		sb.WriteString(fmt.Sprintf("### %d. %s (watchlist: %s/%s)\n\n", displayedHeavy, item.Symbol, fallbackText(item.SideBias, "n/a"), fallbackText(item.SetupType, "n/a")))
+		sb.WriteString(formatShortTermMarketData(marketData, ctx.ScanIntervalMin, true))
+	}
 	for _, coin := range ctx.CandidateCoins {
+		if displayedHeavySymbols[coin.Symbol] {
+			continue
+		}
 		marketData, hasData := ctx.MarketDataMap[coin.Symbol]
 		if !hasData || !heavySymbols[coin.Symbol] {
 			continue
@@ -950,6 +977,51 @@ func buildUserPromptShortTerm(ctx *Context) string {
 	sb.WriteString("---\n\n")
 	sb.WriteString("现在请按 StrategyV 短线要求输出：先给简短行情解读与 setup 筛选，再输出 JSON 决策数组。\n")
 	return sb.String()
+}
+
+func formatShortTermWatchlist(ctx *Context) string {
+	if ctx == nil || len(ctx.ShortTermWatchlist) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("## StrategyV Watchlist（上一轮待确认setup，优先复查，最多3个）\n\n")
+	for i, item := range ctx.ShortTermWatchlist {
+		age := 0
+		if item.FirstSeenCycle > 0 && ctx.CallCount >= item.FirstSeenCycle {
+			age = ctx.CallCount - item.FirstSeenCycle
+		}
+		expireIn := 0
+		if item.ExpiresAfterCycle > 0 {
+			expireIn = item.ExpiresAfterCycle - ctx.CallCount
+			if expireIn < 0 {
+				expireIn = 0
+			}
+		}
+		sb.WriteString(fmt.Sprintf("%d. %s | bias=%s | setup=%s | priority=%d | age=%d cycles | expires_in=%d cycles\n",
+			i+1, item.Symbol, fallbackText(item.SideBias, "n/a"), fallbackText(item.SetupType, "n/a"), item.Priority, age, expireIn))
+		if item.TriggerCondition != "" {
+			sb.WriteString(fmt.Sprintf("   trigger: %s\n", item.TriggerCondition))
+		}
+		if item.InvalidationCondition != "" {
+			sb.WriteString(fmt.Sprintf("   invalidation: %s\n", item.InvalidationCondition))
+		}
+		if item.TriggerPrice > 0 || item.InvalidationPrice > 0 || item.SuggestedStopLoss > 0 || item.SuggestedTakeProfit > 0 {
+			sb.WriteString(fmt.Sprintf("   prices: trigger=%.4f invalidation=%.4f suggested_sl=%.4f suggested_tp=%.4f\n",
+				item.TriggerPrice, item.InvalidationPrice, item.SuggestedStopLoss, item.SuggestedTakeProfit))
+		}
+		if item.LastReasoning != "" {
+			sb.WriteString(fmt.Sprintf("   last_reason: %s\n", item.LastReasoning))
+		}
+	}
+	sb.WriteString("请先复查 watchlist：若触发且净RR合格可开仓；若未触发但仍有效，输出 wait 并 watchlist_action=keep；若失效/过期，输出 wait 并 watchlist_action=remove。不要为了保留watchlist而开仓。\n\n")
+	return sb.String()
+}
+
+func fallbackText(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func isShortTermHeavyData(data *market.Data) bool {

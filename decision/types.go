@@ -54,6 +54,27 @@ type CandidateCoin struct {
 	Sources []string `json:"sources"` // 来源: "ai500" 和/或 "oi_top"
 }
 
+// ShortTermWatchItem 是 StrategyV 专用的轻量 watchlist 项。
+// 它保存“待确认 setup”的结构化状态，而不是只保存上一轮 symbol。
+// 状态由每个 trader.AutoTrader 实例独立持有，避免影响 StrategyA/B 或其他 trader。
+type ShortTermWatchItem struct {
+	Symbol                string  `json:"symbol"`
+	SideBias              string  `json:"side_bias,omitempty"` // long / short / neutral
+	SetupType             string  `json:"setup_type,omitempty"`
+	FirstSeenCycle        int     `json:"first_seen_cycle,omitempty"`
+	LastSeenCycle         int     `json:"last_seen_cycle,omitempty"`
+	ExpiresAfterCycle     int     `json:"expires_after_cycle,omitempty"`
+	TriggerCondition      string  `json:"trigger_condition,omitempty"`
+	InvalidationCondition string  `json:"invalidation_condition,omitempty"`
+	TriggerPrice          float64 `json:"trigger_price,omitempty"`
+	InvalidationPrice     float64 `json:"invalidation_price,omitempty"`
+	SuggestedStopLoss     float64 `json:"suggested_stop_loss,omitempty"`
+	SuggestedTakeProfit   float64 `json:"suggested_take_profit,omitempty"`
+	LastReasoning         string  `json:"last_reasoning,omitempty"`
+	Priority              int     `json:"priority,omitempty"`
+	Source                string  `json:"source,omitempty"` // llm_wait / rejected_open_rr / heavy_candidate / position_review
+}
+
 // OITopData 持仓量增长Top数据（用于AI决策参考）
 type OITopData struct {
 	Rank              int     // OI Top排名
@@ -163,6 +184,9 @@ type Context struct {
 	// 候选币种 OI 价值过滤门槛（百万USD，0=不过滤）
 	MinOIValueMillions float64 `json:"-"`
 
+	// StrategyV 专用轻量 watchlist（per-trader 状态注入，不影响 A/B）
+	ShortTermWatchlist []ShortTermWatchItem `json:"-"`
+
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
 	TraderID        string `json:"-"` // TraderID (用于区分目录)
@@ -214,18 +238,31 @@ type Decision struct {
 	RiskUSD    float64 `json:"risk_usd,omitempty"`
 	Reasoning  string  `json:"reasoning"`
 
+	// StrategyV watchlist update fields.
+	// For wait decisions, the LLM may set watchlist_action=add|keep|remove.
+	WatchlistAction       string  `json:"watchlist_action,omitempty"`
+	SetupType             string  `json:"setup_type,omitempty"`
+	SideBias              string  `json:"side_bias,omitempty"`
+	TriggerCondition      string  `json:"trigger_condition,omitempty"`
+	InvalidationCondition string  `json:"invalidation_condition,omitempty"`
+	TriggerPrice          float64 `json:"trigger_price,omitempty"`
+	InvalidationPrice     float64 `json:"invalidation_price,omitempty"`
+	SuggestedStopLoss     float64 `json:"suggested_stop_loss,omitempty"`
+	SuggestedTakeProfit   float64 `json:"suggested_take_profit,omitempty"`
+	WatchPriority         int     `json:"watch_priority,omitempty"`
+
 	// 决策来源标记: "llm" = LLM生成, "auto_stop_loss" = 自动止损, "auto_take_profit" = 自动止盈
 	DecisionSource string `json:"decision_source,omitempty"`
 }
 
 // FullDecision AI的完整决策（包含思维链）
 type FullDecision struct {
-	UserPrompt  string         `json:"user_prompt"`            // 发送给AI的输入prompt
-	CoTTrace    string         `json:"cot_trace"`              // 思维链分析（AI输出）
-	Decisions   []Decision     `json:"decisions"`              // 具体决策列表
-	Timestamp   time.Time      `json:"timestamp"`
-	LLMCostUSDT float64       `json:"llm_cost_usdt,omitempty"` // 本次 LLM 调用费用（USDT）
-	LLMUsage    *mcp.TokenUsage `json:"llm_usage,omitempty"`    // 本次 LLM token 用量
+	UserPrompt  string          `json:"user_prompt"` // 发送给AI的输入prompt
+	CoTTrace    string          `json:"cot_trace"`   // 思维链分析（AI输出）
+	Decisions   []Decision      `json:"decisions"`   // 具体决策列表
+	Timestamp   time.Time       `json:"timestamp"`
+	LLMCostUSDT float64         `json:"llm_cost_usdt,omitempty"` // 本次 LLM 调用费用（USDT）
+	LLMUsage    *mcp.TokenUsage `json:"llm_usage,omitempty"`     // 本次 LLM token 用量
 }
 
 // PromptStrategy 可插拔策略接口

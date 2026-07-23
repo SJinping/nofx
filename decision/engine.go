@@ -113,6 +113,13 @@ func selectShortTermHeavySymbols(ctx *Context, symbolSet map[string]bool, maxCan
 		}
 	}
 
+	// Watchlist 标的是上一轮待确认 setup，必须给完整短线数据。
+	for _, item := range ctx.ShortTermWatchlist {
+		if symbolSet[item.Symbol] {
+			heavy[item.Symbol] = true
+		}
+	}
+
 	// BTC/ETH 是短线市场环境的核心锚点；若本轮已抓取，则给完整上下文。
 	for _, sym := range []string{"BTCUSDT", "ETHUSDT"} {
 		if symbolSet[sym] {
@@ -230,6 +237,15 @@ func fetchMarketDataForContext(ctx *Context) error {
 			break
 		}
 		symbolSet[coin.Symbol] = true
+	}
+
+	// StrategyV watchlist 标的强制进入本轮数据集，避免待确认 setup 因候选池排序变化丢失。
+	if isStrategyV(ctx) {
+		for _, item := range ctx.ShortTermWatchlist {
+			if item.Symbol != "" {
+				symbolSet[item.Symbol] = true
+			}
+		}
 	}
 
 	// 获取市场数据

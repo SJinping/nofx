@@ -84,7 +84,7 @@ type RuntimeConfigPatch struct {
 func NewRuntimeConfig(cfg AutoTraderConfig, aiClient *mcp.Client) *RuntimeConfig {
 	minOI := cfg.MinOIValueMillions
 	if minOI <= 0 {
-		minOI = 30 // 默认 30M USD
+		minOI = 50 // 默认 50M USD
 	}
 	return &RuntimeConfig{
 		btcETHLeverage:   cfg.BTCETHLeverage,

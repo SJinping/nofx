@@ -17,7 +17,7 @@ const (
 	shortTermMaxRiskPctPerTrade      = 1.0
 	shortTermMajorMaxNotionalEquity  = 2.0
 	shortTermAltMaxNotionalEquity    = 0.75
-	shortTermDefaultMinOIValueM      = 10.0
+	shortTermDefaultMinOIValueM      = 50.0
 	shortTermHardStopLossPct         = -2.5
 	shortTermTimeStopMinutes         = 90.0
 	shortTermMaxChaseMoveATR         = 0.5
