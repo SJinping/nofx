@@ -497,6 +497,9 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 	result["orderId"] = order.OrderID
 	result["symbol"] = order.Symbol
 	result["status"] = order.Status
+	result["avgPrice"] = order.AvgPrice
+	result["executedQty"] = order.ExecutedQuantity
+	result["cumQuote"] = order.CumQuote
 	return result, nil
 }
 
@@ -551,6 +554,9 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 	result["orderId"] = order.OrderID
 	result["symbol"] = order.Symbol
 	result["status"] = order.Status
+	result["avgPrice"] = order.AvgPrice
+	result["executedQty"] = order.ExecutedQuantity
+	result["cumQuote"] = order.CumQuote
 	return result, nil
 }
 

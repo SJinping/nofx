@@ -1549,33 +1549,42 @@ func (at *AutoTrader) executeOpenShortWithRecord(ctx *decision.Context, decision
 func (at *AutoTrader) executeCloseLongWithRecord(ctx *decision.Context, decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 平多仓: %s", decision.Symbol)
 
-	// 获取当前价格
-	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	targetPosition, quantity, err := at.getLivePositionForExit(decision.Symbol, "long")
 	if err != nil {
 		return err
 	}
-	actionRecord.Price = currentPrice
+	actionRecord.Quantity = quantity
+	currentPrice := at.bestEffortExitPrice(decision.Symbol, targetPosition)
+	if currentPrice > 0 {
+		actionRecord.Price = currentPrice
+	}
 
-	// 平仓
-	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = 全部平仓
+	// 平仓：使用已确认的真实仓位数量，避免 ticker 失败或二次查仓阻断退出
+	order, err := at.trader.CloseLong(decision.Symbol, quantity)
 	if err != nil {
 		return err
 	}
 
-	// 记录订单ID
+	// 记录订单ID与成交价
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+	}
+	if fillPrice := orderFillPrice(order); fillPrice > 0 {
+		currentPrice = fillPrice
+		actionRecord.Price = fillPrice
 	}
 
 	log.Printf("  ✓ 平仓成功")
 
 	// ✅ 写入TradeRecord并触发复盘总结agent（异步）
-	if at.tradeMemory != nil {
+	if at.tradeMemory != nil && currentPrice > 0 {
 		reason := "ai_close"
 		if strings.TrimSpace(decision.DecisionSource) != "" {
 			reason = decision.DecisionSource
 		}
 		_, _ = at.tradeMemory.OnCloseSuccess(ctx, decision, currentPrice, reason)
+	} else if at.tradeMemory != nil {
+		log.Printf("  ⚠ 平仓成交价不可用，跳过TradeRecord写入: %s", decision.Symbol)
 	}
 
 	// 自动止盈的全平：清理状态，防止残留
@@ -1590,33 +1599,42 @@ func (at *AutoTrader) executeCloseLongWithRecord(ctx *decision.Context, decision
 func (at *AutoTrader) executeCloseShortWithRecord(ctx *decision.Context, decision *decision.Decision, actionRecord *logger.DecisionAction) error {
 	log.Printf("  🔄 平空仓: %s", decision.Symbol)
 
-	// 获取当前价格
-	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	targetPosition, quantity, err := at.getLivePositionForExit(decision.Symbol, "short")
 	if err != nil {
 		return err
 	}
-	actionRecord.Price = currentPrice
+	actionRecord.Quantity = quantity
+	currentPrice := at.bestEffortExitPrice(decision.Symbol, targetPosition)
+	if currentPrice > 0 {
+		actionRecord.Price = currentPrice
+	}
 
-	// 平仓
-	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = 全部平仓
+	// 平仓：使用已确认的真实仓位数量，避免 ticker 失败或二次查仓阻断退出
+	order, err := at.trader.CloseShort(decision.Symbol, quantity)
 	if err != nil {
 		return err
 	}
 
-	// 记录订单ID
+	// 记录订单ID与成交价
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+	}
+	if fillPrice := orderFillPrice(order); fillPrice > 0 {
+		currentPrice = fillPrice
+		actionRecord.Price = fillPrice
 	}
 
 	log.Printf("  ✓ 平仓成功")
 
 	// ✅ 写入TradeRecord并触发复盘总结agent（异步）
-	if at.tradeMemory != nil {
+	if at.tradeMemory != nil && currentPrice > 0 {
 		reason := "ai_close"
 		if strings.TrimSpace(decision.DecisionSource) != "" {
 			reason = decision.DecisionSource
 		}
 		_, _ = at.tradeMemory.OnCloseSuccess(ctx, decision, currentPrice, reason)
+	} else if at.tradeMemory != nil {
+		log.Printf("  ⚠ 平仓成交价不可用，跳过TradeRecord写入: %s", decision.Symbol)
 	}
 
 	// 自动止盈的全平：清理状态，防止残留
@@ -1625,6 +1643,91 @@ func (at *AutoTrader) executeCloseShortWithRecord(ctx *decision.Context, decisio
 		delete(at.autoDecisionState.TP, posKey)
 	}
 	return nil
+}
+
+// getLivePositionForExit 获取交易所实时持仓作为退出动作的硬前置。
+func (at *AutoTrader) getLivePositionForExit(symbol, expectedSide string) (map[string]interface{}, float64, error) {
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return nil, 0, fmt.Errorf("获取持仓失败，跳过平仓以避免基于未知仓位下单: %w", err)
+	}
+
+	for _, pos := range positions {
+		posSymbol, _ := pos["symbol"].(string)
+		posSide, _ := pos["side"].(string)
+		if posSymbol != symbol || strings.ToLower(posSide) != strings.ToLower(expectedSide) {
+			continue
+		}
+
+		quantity := absFloatFromMap(pos, "positionAmt")
+		if quantity <= 0 {
+			return nil, 0, fmt.Errorf("%s %s 持仓数量为0，跳过平仓", symbol, expectedSide)
+		}
+		return pos, quantity, nil
+	}
+
+	return nil, 0, fmt.Errorf("未在交易所实时持仓中找到 %s 的%s仓，跳过平仓", symbol, expectedSide)
+}
+
+// bestEffortExitPrice 获取退出动作的参考价格。ticker 失败时只降级记录，不阻断市价退出。
+func (at *AutoTrader) bestEffortExitPrice(symbol string, position map[string]interface{}) float64 {
+	currentPrice, err := at.trader.GetMarketPrice(symbol)
+	if err == nil && currentPrice > 0 {
+		return currentPrice
+	}
+	log.Printf("  ⚠ 获取 %s ticker 失败，继续按交易所实时持仓执行市价退出: %v", symbol, err)
+
+	for _, key := range []string{"markPrice", "entryPrice"} {
+		if price := floatFromInterface(position[key]); price > 0 {
+			log.Printf("  ℹ️ 使用持仓字段 %s=%.8f 作为退出记录参考价", key, price)
+			return price
+		}
+	}
+	return 0
+}
+
+func absFloatFromMap(m map[string]interface{}, key string) float64 {
+	v := floatFromInterface(m[key])
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func floatFromInterface(v interface{}) float64 {
+	switch x := v.(type) {
+	case float64:
+		return x
+	case float32:
+		return float64(x)
+	case int:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case json.Number:
+		f, _ := x.Float64()
+		return f
+	case string:
+		f, _ := strconv.ParseFloat(strings.TrimSpace(x), 64)
+		return f
+	default:
+		return 0
+	}
+}
+
+func orderFillPrice(order map[string]interface{}) float64 {
+	if order == nil {
+		return 0
+	}
+	if avg := floatFromInterface(order["avgPrice"]); avg > 0 {
+		return avg
+	}
+	executedQty := floatFromInterface(order["executedQty"])
+	cumQuote := floatFromInterface(order["cumQuote"])
+	if executedQty > 0 && cumQuote > 0 {
+		return cumQuote / executedQty
+	}
+	return 0
 }
 
 // executeUpdateStopLossWithRecord 执行更新止损并记录详细信息
@@ -1822,12 +1925,10 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 	// 计算要平仓的数量
 	closeQuantity := quantity * (dec.ClosePercentage / 100.0)
 
-	// 获取当前价格
-	currentPrice, err := at.trader.GetMarketPrice(dec.Symbol)
-	if err != nil {
-		return err
+	currentPrice := at.bestEffortExitPrice(dec.Symbol, targetPosition)
+	if currentPrice > 0 {
+		actionRecord.Price = currentPrice
 	}
-	actionRecord.Price = currentPrice
 	actionRecord.Quantity = closeQuantity
 
 	// 执行部分平仓
@@ -1844,9 +1945,12 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 		return err
 	}
 
-	// 记录订单ID
+	// 记录订单ID与成交价
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
+	}
+	if fillPrice := orderFillPrice(order); fillPrice > 0 {
+		actionRecord.Price = fillPrice
 	}
 
 	log.Printf("  ✓ 部分平仓成功，平仓数量: %.4f (%.0f%%)", closeQuantity, dec.ClosePercentage)
