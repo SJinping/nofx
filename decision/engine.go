@@ -53,6 +53,10 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 		}, nil
 	}
 
+	if shouldSkipLLMNoMarketData(ctx) {
+		return buildNoMarketDataSkipDecision(ctx, strategy.Name()), nil
+	}
+
 	// 4. 否则构建System/User Prompt，让LLM决策
 	systemPrompt := strategy.BuildSystemPrompt(ctx)
 	userPrompt := strategy.BuildUserPrompt(ctx)
@@ -91,6 +95,45 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	}
 
 	return decision, nil
+}
+
+func shouldSkipLLMNoMarketData(ctx *Context) bool {
+	if ctx == nil {
+		return false
+	}
+	if len(ctx.Positions) > 0 {
+		return false
+	}
+	if len(ctx.CandidateCoins) > 0 {
+		return false
+	}
+	if len(ctx.MarketDataMap) > 0 {
+		return false
+	}
+	if isStrategyV(ctx) && len(ctx.ShortTermWatchlist) > 0 {
+		return false
+	}
+	return true
+}
+
+func buildNoMarketDataSkipDecision(ctx *Context, strategyName string) *FullDecision {
+	watchlistCount := 0
+	if ctx != nil {
+		watchlistCount = len(ctx.ShortTermWatchlist)
+	}
+	trace := fmt.Sprintf("system_skip:no_market_data\nstrategy=%s\nreason=empty_context\npositions=0\ncandidate_coins=0\nmarket_data_symbols=0\nwatchlist=%d\naction=wait\nllm_called=false", strategyName, watchlistCount)
+	return &FullDecision{
+		UserPrompt: "(system_skip:no_market_data)",
+		CoTTrace:   trace,
+		Decisions: []Decision{
+			{
+				Action:         ActionWait,
+				Reasoning:      fmt.Sprintf("system_skip:no_market_data; empty_context; positions=0 candidate_coins=0 market_data_symbols=0 watchlist=%d; no_trade; wait next cycle", watchlistCount),
+				DecisionSource: "system_skip_no_market_data",
+			},
+		},
+		Timestamp: time.Now(),
+	}
 }
 
 func isStrategyV(ctx *Context) bool {
