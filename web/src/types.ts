@@ -259,6 +259,62 @@ export interface TraderInfo {
   ai_model: string;
 }
 
+// ===== Manual LLM Advisor =====
+export type AdvisorIntent = 'analyze_symbol' | 'evaluate_long' | 'evaluate_short' | 'validate_plan';
+
+export interface ManagementCandidate {
+  trader_id: string;
+  trader_name: string;
+  ai_model: string;
+  exchange: string;
+  is_running: boolean;
+  is_paused: boolean;
+  can_manage_positions: boolean;
+}
+
+export interface ManagementCandidatesResponse {
+  candidates: ManagementCandidate[];
+  default_trader_id?: string;
+  requires_choice: boolean;
+  reason: string;
+}
+
+export interface AdvisorUserPlan {
+  side?: string;
+  entry_price?: number;
+  stop_loss?: number;
+  take_profit?: number;
+  position_size_usd?: number;
+  leverage?: number;
+}
+
+export interface AdvisorAnalyzeRequest {
+  advisor_trader_id?: string;
+  management_trader_id?: string;
+  symbol: string;
+  question: string;
+  intent: AdvisorIntent;
+  horizon?: string;
+  user_plan?: AdvisorUserPlan;
+}
+
+export interface AdvisorAnalyzeResponse {
+  advisor_id: string;
+  status: string;
+  message: string;
+  symbol: string;
+  advisor_trader_id: string;
+  management_trader_id?: string;
+  created_at: string;
+  market_snapshot_time: string;
+  prompt_preview: {
+    system_prompt: string;
+    user_prompt: string;
+  };
+  recommendation: Record<string, any>;
+  next_todo: string[];
+}
+
 export interface CompetitionTraderData {
   trader_id: string;
   trader_name: string;

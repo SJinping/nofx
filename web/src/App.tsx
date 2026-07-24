@@ -7,6 +7,7 @@ import { LogViewer } from './pages/LogViewer';
 import AILearning from './components/AILearning';
 import { TradedSymbolsList } from './components/TradedSymbolsList';
 import { PriceChartModal } from './components/PriceChartModal';
+import { ManualAdvisorPanel } from './components/ManualAdvisorPanel';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { t, type Language } from './i18n/translations';
 import type {
@@ -509,6 +510,9 @@ function TraderDetailsPage({
           </div>
         </div>
       )}
+
+      {/* Manual LLM Advisor scaffold */}
+      <ManualAdvisorPanel selectedTrader={selectedTrader} />
 
       {/* Account Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">

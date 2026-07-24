@@ -120,6 +120,14 @@ func (s *Server) setupRoutes() {
 		api.GET("/error-stats", s.handleErrorStats)
 		api.GET("/error-stats/recent", s.handleRecentErrors)
 
+		// Manual LLM Advisor（人工开仓前咨询 + 后续管理归属选择）
+		// Scaffold only: analysis endpoint builds context/prompt previews and never places orders.
+		advisor := api.Group("/advisor")
+		{
+			advisor.GET("/management-candidates", s.handleAdvisorManagementCandidates)
+			advisor.POST("/analyze", s.handleAdvisorAnalyze)
+		}
+
 		// 平仓操作（POST请求）
 		api.POST("/close-all-positions", s.handleCloseAllPositions)
 		api.POST("/close-positions", s.handleClosePositions)

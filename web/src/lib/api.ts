@@ -12,6 +12,9 @@ import type {
   ExchangeTradedSymbolsResponse,
   KlineData,
   MarketOverviewResponse,
+  AdvisorAnalyzeRequest,
+  AdvisorAnalyzeResponse,
+  ManagementCandidatesResponse,
 } from '../types';
 
 const API_BASE = '/api';
@@ -294,6 +297,27 @@ export const api = {
     params.set('limit', String(limit));
     const res = await fetch(`${API_BASE}/klines?${params.toString()}`);
     if (!res.ok) throw new Error('获取K线数据失败');
+    return res.json();
+  },
+
+  // Manual LLM Advisor: scaffolding endpoints. Analyze currently returns
+  // assignment/context/prompt preview only; it must not place orders.
+  async getAdvisorManagementCandidates(): Promise<ManagementCandidatesResponse> {
+    const res = await fetch(`${API_BASE}/advisor/management-candidates`);
+    if (!res.ok) throw new Error('获取Advisor管理策略候选失败');
+    return res.json();
+  },
+
+  async analyzeWithAdvisor(payload: AdvisorAnalyzeRequest): Promise<AdvisorAnalyzeResponse> {
+    const res = await fetch(`${API_BASE}/advisor/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || 'Advisor分析失败');
+    }
     return res.json();
   },
 
