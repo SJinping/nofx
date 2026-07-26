@@ -375,6 +375,12 @@ func fetchMarketDataForContext(ctx *Context) error {
 		}
 	}
 
+	// 宏观数据（best-effort，仅策略A/B使用，失败不影响主流程）
+	if !shortTermMode {
+		ctx.FearGreedIndex = market.FetchFearGreedIndex()
+		ctx.BTCDailySummary = market.GetBTCDailySummary()
+	}
+
 	return nil
 }
 

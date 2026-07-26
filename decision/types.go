@@ -187,6 +187,10 @@ type Context struct {
 	// StrategyV 专用轻量 watchlist（per-trader 状态注入，不影响 A/B）
 	ShortTermWatchlist []ShortTermWatchItem `json:"-"`
 
+	// 宏观市场数据（best-effort，nil = 获取失败）
+	FearGreedIndex  *market.FearGreedData `json:"-"`
+	BTCDailySummary *market.DailySummary  `json:"-"`
+
 	// 录制回放专用字段
 	EnableRecording bool   `json:"-"` // 是否开启录制
 	TraderID        string `json:"-"` // TraderID (用于区分目录)

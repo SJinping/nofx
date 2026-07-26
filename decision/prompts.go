@@ -47,6 +47,34 @@ func formatBTCEnvironment(ctx *Context) string {
 	return fmt.Sprintf("**BTC 4h 市场环境**: %s (%s%s)\n", label, detail, macdStr)
 }
 
+// formatMacroContext 格式化宏观市场环境（恐贪指数 + BTC日线摘要），用于 user prompt 头部
+func formatMacroContext(ctx *Context) string {
+	var sb strings.Builder
+	if ctx.FearGreedIndex != nil {
+		sb.WriteString(market.FormatFearGreed(ctx.FearGreedIndex))
+	}
+	if ctx.BTCDailySummary != nil {
+		sb.WriteString(market.FormatBTCDailySummary(ctx.BTCDailySummary))
+	}
+	return sb.String()
+}
+
+// formatOITopDetail 格式化某个币种的OI Top详情
+func formatOITopDetail(ctx *Context, symbol string) string {
+	oiData, ok := ctx.OITopDataMap[symbol]
+	if !ok || oiData == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("OI_Top排名: #%d | OI变化: %+.2f%% | 价格变化: %+.2f%%",
+		oiData.Rank, oiData.OIDeltaPercent, oiData.PriceDeltaPercent))
+	if oiData.NetLong != 0 || oiData.NetShort != 0 {
+		sb.WriteString(fmt.Sprintf(" | 净多: %.0f 净空: %.0f", oiData.NetLong, oiData.NetShort))
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
 // getBTCMarketStructure 从 Context 中获取 BTC 4h 市场结构标签（供 validation 使用）
 func GetBTCMarketStructure(ctx *Context) string {
 	btcData, ok := ctx.MarketDataMap["BTCUSDT"]
@@ -60,8 +88,20 @@ func GetBTCMarketStructure(ctx *Context) string {
 func btcDirectionConstraintPrompt() string {
 	var sb strings.Builder
 	sb.WriteString("# 🧭 市场环境与方向约束（每次决策前必须判断）\n\n")
-	sb.WriteString("你会在用户消息中看到 **BTC 4h 市场环境** 标签（下跌趋势/震荡/上涨趋势）。\n")
+	sb.WriteString("你会在用户消息中看到 **BTC 4h 市场环境** 标签（下跌趋势/震荡/上涨趋势）、**恐贪指数**和**BTC日线趋势**。\n")
 	sb.WriteString("BTC 是加密市场的主导资产，绝大多数山寨币与 BTC 高度正相关，BTC 下跌时山寨币通常跌幅更大。\n\n")
+
+	sb.WriteString("**恐贪指数使用指南**：\n")
+	sb.WriteString("- 极度恐惧(0-25)：市场可能接近底部，但不要盲目抄底，等待反转确认\n")
+	sb.WriteString("- 恐惧(25-45)：谨慎偏空，顺势做空机会多\n")
+	sb.WriteString("- 中性(45-55)：多空均衡，按技术信号操作\n")
+	sb.WriteString("- 贪婪(55-75)：顺势做多，但注意止盈\n")
+	sb.WriteString("- 极度贪婪(75-100)：市场过热，做多需极高置信度，注意回调风险\n\n")
+
+	sb.WriteString("**BTC日线趋势使用指南**：\n")
+	sb.WriteString("- 日线趋势是4h趋势的上级参考，用于确认或警告4h趋势方向\n")
+	sb.WriteString("- 当日线与4h趋势一致时，可增加顺势交易的信心\n")
+	sb.WriteString("- 当日线与4h趋势冲突时（如日线下跌但4h震荡/上涨），需提高逆日线方向交易的门槛\n\n")
 
 	sb.WriteString("**BTC 4h 下跌趋势时**：\n")
 	sb.WriteString("- 山寨币做多的信心度门槛提高到 **>= 90**（正常是 75），仅在极少数有独立催化剂的币种上考虑做多\n")
@@ -126,7 +166,8 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString(fmt.Sprintf("- 📊 **原始序列**：%d分钟价格序列(MidPrices数组) + 4小时K线序列\n", market.ShortTermBarIntervalMinutes))
 	sb.WriteString("- 📈 **技术序列**：EMA20序列、MACD序列、RSI7序列、RSI14序列\n")
 	sb.WriteString("- 💰 **资金序列**：成交量序列、持仓量(OI)序列、资金费率\n")
-	sb.WriteString("- 🎯 **筛选标记**：AI500评分 / OI_Top排名（如果有标注）\n\n")
+	sb.WriteString("- 🎯 **筛选标记**：AI500评分 / OI_Top排名与详情（OI变化%、价格变化%、净多空）\n")
+	sb.WriteString("- 🌍 **宏观环境**：恐贪指数(0-100)、BTC日线趋势摘要(EMA/MACD/RSI/近5日涨跌)\n\n")
 	sb.WriteString("**分析方法**（完全由你自主决定）：\n")
 	sb.WriteString("- 自由运用序列数据，你可以做但不限于趋势分析、形态识别、支撑阻力、技术阻力位、斐波那契、波动带计算\n")
 	sb.WriteString("- 多维度交叉验证（价格+量+OI+指标+序列形态）\n")
@@ -227,7 +268,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 	var sb strings.Builder
 
 	sb.WriteString("你是一个专业的加密货币合约交易决策 AI。\n")
-	sb.WriteString("数据（价格、技术指标、资金数据、绩效指标等）由外部系统通过结构化方式提供，你只负责分析与给出决策建议，不直接访问交易所或执行下单。\n")
+	sb.WriteString("数据（价格、技术指标、资金数据、宏观情绪指标、绩效指标等）由外部系统通过结构化方式提供，你只负责分析与给出决策建议，不直接访问交易所或执行下单。\n")
 	sb.WriteString("你的角色像是资深交易员 / 策略师，不是行情终端或撮合引擎。\n\n")
 
 	sb.WriteString("# 1️⃣ 核心目标\n\n")
@@ -545,6 +586,11 @@ func buildUserPrompt(ctx *Context) string {
 	sb.WriteString(fmt.Sprintf("**时间**: %s | **周期**: #%d | **运行**: %d分钟\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
 
+	// 宏观市场环境（恐贪指数 + BTC日线摘要）
+	if macroCtx := formatMacroContext(ctx); macroCtx != "" {
+		sb.WriteString(macroCtx)
+	}
+
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
 		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
@@ -625,6 +671,7 @@ func buildUserPrompt(ctx *Context) string {
 
 		// 使用FormatMarketData输出完整市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
+		sb.WriteString(formatOITopDetail(ctx, coin.Symbol))
 		sb.WriteString(market.Format(marketData))
 		// 注入与 StrategyB 相同的结构/位置指标，帮助 StrategyA 判断入场位置与止损空间。
 		sb.WriteString(extraUserPromptForStrategyB(marketData, ctx.ScanIntervalMin))
@@ -746,6 +793,11 @@ func buildUserPromptB(ctx *Context) string {
 	sb.WriteString(fmt.Sprintf("**时间**: %s | **周期**: #%d | **运行**: %d分钟\n\n",
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
 
+	// 宏观市场环境（恐贪指数 + BTC日线摘要）
+	if macroCtx := formatMacroContext(ctx); macroCtx != "" {
+		sb.WriteString(macroCtx)
+	}
+
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
 		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
@@ -826,6 +878,7 @@ func buildUserPromptB(ctx *Context) string {
 
 		// 使用FormatMarketData输出完整市场数据
 		sb.WriteString(fmt.Sprintf("### %d. %s%s\n\n", displayedCount, coin.Symbol, sourceTags))
+		sb.WriteString(formatOITopDetail(ctx, coin.Symbol))
 		sb.WriteString(market.Format(marketData))
 		sb.WriteString(extraUserPromptForStrategyB(marketData, ctx.ScanIntervalMin))
 		sb.WriteString("\n")
