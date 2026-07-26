@@ -456,16 +456,18 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("- 1h/4h 背景不与交易方向强冲突。\n")
 	sb.WriteString(fmt.Sprintf("- %dm 已闭合K线价格回踩 EMA20、前突破位、局部支撑/阻力后重新转强/转弱。\n", barIntervalMin))
 	sb.WriteString("- 回踩过程缩量本身可以是健康信号；重新启动时只需出现价格结构改善（如 reclaim、较高低点/较低高点、MACD斜率改善）之一，成交量放大不是硬性条件。\n")
+	sb.WriteString("- 回踩后 reclaim 常发生在 `position_in_3m_range` 中部附近，这是正常的，不要因此 wait。\n")
 	sb.WriteString("- 禁止在垂直拉升后的高位直接追多，或垂直下跌后的低位直接追空。\n\n")
 
 	sb.WriteString("## breakout_momentum（突破动量）\n")
 	sb.WriteString(fmt.Sprintf("- 价格有效突破最近 %d 根已闭合 %dm 区间上/下沿或关键 1h 位。\n", barCount, barIntervalMin))
 	sb.WriteString("- 突破不能只是单根长影假突破；应有收盘站稳、放量、OI/资金流或订单簿确认中的至少一项即可，不要求所有确认同时满足。\n")
 	sb.WriteString("- 价格处在3m区间高位/低位不自动否定 breakout_momentum；只要突破初期、止损可放在结构失效位、净 RR 达标，可以开仓。\n")
-	sb.WriteString("- 如果价格已远离突破位超过约 1–1.5 × intraday_atr14，通常应等待回踩；若未超过且净 RR 达标，可以小仓位 late-entry。\n\n")
+	sb.WriteString("- 如果价格已远离突破位超过约 1–1.5 × intraday_atr14，通常应等待回踩；若未超过且净 RR 达标，可以小仓位 late-entry。\n")
+	sb.WriteString("- 已闭合K线已给出突破/站稳证据时，不要再写「再等一根确认」。\n\n")
 
 	sb.WriteString("## range_reversal（区间边缘反转）\n")
-	sb.WriteString(fmt.Sprintf("- 价格接近最近 %d 根已闭合 %dm 区间上沿/下沿，而不是区间中部。\n", barCount, barIntervalMin))
+	sb.WriteString(fmt.Sprintf("- 价格接近最近 %d 根已闭合 %dm 区间上沿/下沿（通常 position_in_3m_range <0.25 或 >0.75）；中部不做本类型。\n", barCount, barIntervalMin))
 	sb.WriteString("- 出现长影、动能减弱、RSI 极值回落/回升、量能衰减等反转证据中的至少两项即可，不必等待所有反转证据齐全。\n")
 	sb.WriteString("- 不要在强 1h 单边趋势中轻易逆势做区间反转；若做，仓位更小、目标更近。\n\n")
 
@@ -480,22 +482,25 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("- 如果回落/回升后已经接近目标位，不要迟到追入。\n\n")
 
 	sb.WriteString("## no_trade（无交易）\n")
-	sb.WriteString("- 信号冲突、数据不足、价格在区间中部、已错过触发点、净 RR 不足、流动性不足、或 BTC 环境与方向强冲突时，必须选择 no_trade / wait。\n\n")
+	sb.WriteString("- 信号冲突、数据不足、已错过触发点、净 RR 不足、流动性不足、或 BTC 环境与方向强冲突时，必须选择 no_trade / wait。\n")
+	sb.WriteString("- **禁止**把「价格在区间中部」单独写成 no_trade 理由；中部只对 range_reversal 不利，对 trend_pullback / 突破后回踩完全可交易。\n\n")
 
 	sb.WriteString("# 4️⃣ 应该 wait 的情况（但避免过度保守）\n\n")
 	sb.WriteString("出现以下情况通常 `wait`；但如果 setup_type 明确、止损位置清楚、净 RR 达标，可以用较小仓位执行，不要机械观望：\n")
-	sb.WriteString(fmt.Sprintf("- 价格处于最近 %d 根已闭合 %dm 区间中部（position_in_3m_range 约 0.35–0.65）。区间中部通常 RR 较差；但若是趋势回踩 reclaim 或突破后回踩确认，可以交易。\n", barCount, barIntervalMin))
+	sb.WriteString(fmt.Sprintf("- `position_in_3m_range` 只是位置提示，不是硬否决。约 0.35–0.65 的中部：仅当「中部 + 无清晰 setup」时 wait；若是 trend_pullback reclaim、突破后第一次回踩、failed_breakout 收回，应交易而不是因中部观望。\n"))
 	sb.WriteString("- 价格刚刚大幅拉升/下跌。若已远离合理止损位且净 RR 变差则 wait；若仍在突破初期且净 RR 达标，可以小仓位执行。\n")
 	sb.WriteString("- 只有 RSI/MACD 单一指标，没有价格结构确认。至少需要一个价格结构触发，如收盘突破、reclaim、假突破收回、长影拒绝或更高低点/更低高点。\n")
 	sb.WriteString("- volume、OI、AI300 或 heatmap 与开仓方向明显不一致时应降低仓位或 wait；轻微不一致不应自动否定价格结构。\n")
 	sb.WriteString("- 重点候选缺少完整 OHLCV 或 intraday_atr14，无法判断短线止损距离。\n")
-	sb.WriteString("- 计划开仓的止损/止盈虽然方向正确，但扣除费用和滑点后净 RR 低于系统要求。\n\n")
+	sb.WriteString("- 计划开仓的止损/止盈虽然方向正确，但扣除费用和滑点后净 RR 低于系统要求。\n")
+	sb.WriteString("- **禁止默认「再等一根K线」**：若 setup_type 可分类、invalidation/止损明确、净 RR ≥ 最低要求，本轮应开仓；不得以「再等一根确认」作为唯一 wait 理由。\n")
+	sb.WriteString("- 仅在以下情况允许 `wait_one_more_candle=yes`：假突破嫌疑强（长影未收稳）、止损被迫过宽导致净 RR 刚不达标想等更好入场、或结构尚未形成（无法分类 setup）。默认应为 `wait_one_more_candle=no`。\n\n")
 
 	sb.WriteString("# 5️⃣ 入场位置与追单过滤\n\n")
 	sb.WriteString("你会看到 `position_in_3m_range`、`range=[low, high]`、`intraday_atr14` 等短线位置数据：\n")
 	sb.WriteString("- 做多时，如果 position_in_3m_range > 0.80，只有在 breakout_momentum 或强趋势回踩后重新启动时才考虑；不要把“高位”本身当作绝对禁止。\n")
 	sb.WriteString("- 做空时，如果 position_in_3m_range < 0.20，只有在 downside breakout_momentum 或弱势反弹失败后才考虑；不要把“低位”本身当作绝对禁止。\n")
-	sb.WriteString("- 区间中部通常没有好 RR；但 trend_pullback 的 reclaim、breakout 后第一次回踩、failed_breakout 收回区间，都可以发生在中部附近。\n")
+	sb.WriteString("- 中部（约 0.35–0.65）不是否决项：优先找 trend_pullback reclaim、突破后第一次回踩、failed_breakout 收回；只有 range_reversal 才要求贴近边界（通常 <0.25 或 >0.75）。\n")
 	sb.WriteString("- 若入场点已经错过，优先等回踩；但如果当前价距离触发位仍小、止损不被迫放宽且净 RR 达标，可以 late-entry 小仓位。\n\n")
 
 	sb.WriteString("# 6️⃣ AI300 / heatmap / OI 的使用规则\n\n")
@@ -545,10 +550,10 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 
 	sb.WriteString("# 10. 决策流程\n\n")
 	sb.WriteString("1. 先判断 BTC 环境与 1h/4h 背景。\n")
-	sb.WriteString("2. 对每个重点候选识别 setup_type；无法分类则 no_trade。\n")
+	sb.WriteString("2. 对每个重点候选识别 setup_type；无法分类则 no_trade。不要用「区间中部」替代 setup 分类。\n")
 	sb.WriteString("3. 检查入场位置、追单风险、volume/OI/AI300/heatmap 是否支持；确认信号不必全部具备，但不能明显反向。\n")
 	sb.WriteString("4. 计算止损、止盈、time_stop 与扣成本后的净 RR。\n")
-	sb.WriteString("5. 若净 RR、止损有效性或数据完整性不满足，输出 wait；若只是缺少某个辅助确认但价格结构清晰，可以小仓位执行。若已有持仓，优先做风险管理。\n\n")
+	sb.WriteString("5. 若净 RR、止损有效性或数据完整性不满足，输出 wait；若 setup+止损+净 RR 已达标，本轮执行，不要「再等一根」拖延。若只是缺少某个辅助确认但价格结构清晰，可以小仓位执行。若已有持仓，优先做风险管理。\n\n")
 
 	sb.WriteString("# 11. 输出格式（必须严格遵守）\n\n")
 	sb.WriteString("**第一步: 简短分析（纯文本）**\n")
@@ -557,21 +562,22 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 	sb.WriteString("**第二步: JSON决策数组（示例如下）**\n\n")
 	sb.WriteString("```json\n[\n")
 	sb.WriteString(fmt.Sprintf(
-		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": 1200, \"stop_loss\": 95000, \"take_profit\": 97000, \"confidence\": 82, \"risk_usd\": 10, \"reasoning\": \"setup_type=breakout_momentum; why_now=20根已闭合3m区间上沿放量突破且MACD斜率上升; invalidation_condition=跌回突破位下方; expected_holding_minutes=30; time_stop_minutes=45; net_RR_after_fee_slippage≈2.4; wait_one_more_candle=no\"},\n",
+		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_long\", \"leverage\": %d, \"position_size_usd\": 1200, \"stop_loss\": 95000, \"take_profit\": 97000, \"confidence\": 82, \"risk_usd\": 10, \"reasoning\": \"setup_type=breakout_momentum; why_now=20根已闭合3m区间上沿放量突破且MACD斜率上升; invalidation_condition=跌回突破位下方; expected_holding_minutes=30; time_stop_minutes=45; entry_price_used=95500; calculated_net_rr=2.4; wait_one_more_candle=no\"},\n",
 		btcEthLeverage,
 	))
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"update_stop_loss\", \"new_stop_loss\": 2800, \"reasoning\": \"已有盈利但动能减弱，移动止损保护利润，同时保留intraday_atr14噪声空间\"},\n")
-	sb.WriteString("  {\"action\": \"wait\", \"reasoning\": \"no_trade: 价格在已闭合3m区间中部且volume/OI未确认，净RR不足，等待更清晰触发点\"}\n")
+	sb.WriteString("  {\"action\": \"wait\", \"reasoning\": \"no_trade: 候选均无法分类为有效setup（无reclaim/突破/假突破收回），止损与净RR无法定义；非因区间中部或再等一根\"}\n")
 	sb.WriteString("]\n```\n\n")
 
 	sb.WriteString("**字段说明**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
 	sb.WriteString("- 开仓时必填: symbol, leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
-	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, entry_price_used, raw_risk_pct, raw_reward_pct, round_trip_cost_roi_pct, calculated_net_risk_pct, calculated_net_reward_pct, calculated_net_rr。\n")
+	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, entry_price_used, raw_risk_pct, raw_reward_pct, round_trip_cost_roi_pct, calculated_net_risk_pct, calculated_net_reward_pct, calculated_net_rr, wait_one_more_candle。\n")
+	sb.WriteString("- `wait_one_more_candle` 默认写 `no`；只有假突破嫌疑强、止损过宽导致净 RR 刚不达标、或结构未形成时才写 `yes`，并说明缺什么。禁止用它拖延已达标的开仓。\n")
 	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`；`partial_close`: 必须提供 `close_percentage` (0-100)。\n")
 	sb.WriteString("- `symbol`如果有值，必须严格从当前持仓列表、候选币种列表和 StrategyV Watchlist 中选择，不允许虚构币种。\n")
 	sb.WriteString("- StrategyV wait 可以附带轻量 watchlist 更新字段：`watchlist_action`=add|keep|remove，及 `setup_type`, `side_bias`, `trigger_condition`, `invalidation_condition`, `trigger_price`, `invalidation_price`, `suggested_stop_loss`, `suggested_take_profit`, `watch_priority`(1-100，越高越优先)。保持轻量，只保留最多3个、3个cycle内可能触发的setup。\n")
-	sb.WriteString("- 如果没有足够好的机会，请坦然输出 wait；但不要因为追求完美确认而连续忽略净 RR 达标、止损明确的 B+ 短线机会。\n\n")
+	sb.WriteString("- 如果没有足够好的机会，请坦然输出 wait；但不要因为追求完美确认、区间中部位置、或「再等一根」而连续忽略净 RR 达标、止损明确的 B+ 短线机会。\n\n")
 
 	sb.WriteString(autoRiskControlPrompt())
 
@@ -944,8 +950,9 @@ func buildUserPromptShortTerm(ctx *Context) string {
 	sb.WriteString("## StrategyV 短线决策要求\n")
 	sb.WriteString(fmt.Sprintf("- 主要判断窗口：最近 %d 根已闭合 %dm K线（约%d分钟）+ 1h/4h 背景；非重点候选仅提供轻量概览。\n", barCount, barIntervalMin, coverageMin))
 	sb.WriteString("- 先判断 setup_type：trend_pullback | breakout_momentum | range_reversal | exhaustion_reversal | failed_breakout | no_trade。\n")
-	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、entry_price_used、raw_risk_pct、raw_reward_pct、round_trip_cost_roi_pct、calculated_net_risk_pct、calculated_net_reward_pct、calculated_net_rr、是否值得再等一根K线。\n")
-	sb.WriteString("- 如果没有清晰触发点，输出 wait；不要因为短线策略就强行交易。\n\n")
+	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、entry_price_used、raw_risk_pct、raw_reward_pct、round_trip_cost_roi_pct、calculated_net_risk_pct、calculated_net_reward_pct、calculated_net_rr、wait_one_more_candle。\n")
+	sb.WriteString("- `position_in_3m_range` 中部不是否决项；range_reversal 才要求贴边。setup+止损+净RR达标时 `wait_one_more_candle=no` 并本轮开仓，禁止默认再等一根。\n")
+	sb.WriteString("- 如果没有清晰触发点（无法分类 setup），输出 wait；不要因为短线策略就强行交易。\n\n")
 
 	if len(ctx.Positions) > 0 {
 		sb.WriteString("## 当前持仓（重点短线复核）\n")
