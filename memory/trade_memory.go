@@ -254,7 +254,8 @@ func (tm *TradeMemory) GateOpenDecision(ctx *decision.Context, dec *decision.Dec
 	// higher-quality setups whose confidence and net RR justify a larger probe.
 	needsReview := false
 	if (count >= 4 && avg < 0) || symLossStreak >= 2 {
-		netRR := estimateGateNetRiskReward(ctx, dec)
+		rr := decision.EstimateDecisionNetRiskReward(ctx, dec)
+		netRR := rr.NetRiskRewardRatio
 		multiplier, tier := gateSoftSizeMultiplier(avg, count, symLossStreak, dec.Confidence, netRR)
 		res.Decision = GateModify
 		res.SizeMultiplier = multiplier
@@ -347,62 +348,6 @@ func gateSoftSizeMultiplier(avg float64, count, symLossStreak, confidence int, n
 	}
 
 	return multiplier, tier
-}
-
-func estimateGateNetRiskReward(ctx *decision.Context, dec *decision.Decision) float64 {
-	if ctx == nil || dec == nil || dec.StopLoss <= 0 || dec.TakeProfit <= 0 {
-		return 0
-	}
-
-	entryPrice := 0.0
-	sym := strings.ToUpper(strings.TrimSpace(dec.Symbol))
-	if ctx.MarketDataMap != nil {
-		if md := ctx.MarketDataMap[sym]; md != nil && md.CurrentPrice > 0 {
-			entryPrice = md.CurrentPrice
-		}
-	}
-	if entryPrice <= 0 {
-		if dec.Action == decision.ActionOpenLong {
-			entryPrice = dec.StopLoss + (dec.TakeProfit-dec.StopLoss)*0.2
-		} else {
-			entryPrice = dec.StopLoss - (dec.StopLoss-dec.TakeProfit)*0.2
-		}
-	}
-	if entryPrice <= 0 {
-		return 0
-	}
-
-	var riskPercent, rewardPercent float64
-	if dec.Action == decision.ActionOpenLong {
-		riskPercent = (entryPrice - dec.StopLoss) / entryPrice * 100
-		rewardPercent = (dec.TakeProfit - entryPrice) / entryPrice * 100
-	} else {
-		riskPercent = (dec.StopLoss - entryPrice) / entryPrice * 100
-		rewardPercent = (entryPrice - dec.TakeProfit) / entryPrice * 100
-	}
-	if riskPercent <= 0 || rewardPercent <= 0 {
-		return 0
-	}
-
-	taker := 0.0004
-	slippage := 0.0005
-	if ctx.AssumedTakerFeeRate >= 0 {
-		taker = ctx.AssumedTakerFeeRate
-	}
-	if ctx.AssumedSlippageRate >= 0 {
-		slippage = ctx.AssumedSlippageRate
-	}
-	leverage := float64(dec.Leverage)
-	if leverage <= 0 {
-		leverage = 1
-	}
-	cost := 2.0 * (taker + slippage) * leverage * 100.0
-	netRisk := riskPercent*leverage + cost
-	netReward := rewardPercent*leverage - cost
-	if netRisk <= 0 || netReward <= 0 {
-		return 0
-	}
-	return netReward / netRisk
 }
 
 func (tm *TradeMemory) searchSimilarLocked(vec []float64, side string, topK int) []SimilarMatch {
