@@ -329,17 +329,17 @@ export function EquityChart({ traderId }: EquityChartProps) {
   return (
     <div className="binance-card p-5 animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div className="min-w-0">
           <h3 className="text-lg font-bold mb-2" style={{ color: '#EAECEF' }}>{t('accountEquityCurve', language)}</h3>
-          <div className="flex items-baseline gap-4">
-            <span className="text-3xl font-bold mono" style={{ color: '#EAECEF' }}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <span className="text-3xl font-bold mono leading-none" style={{ color: '#EAECEF' }}>
               {account?.total_equity.toFixed(2) || '0.00'}
-              <span className="text-lg ml-1" style={{ color: '#848E9C' }}>USDT</span>
+              <span className="text-sm ml-1.5 font-semibold align-baseline" style={{ color: '#848E9C' }}>USDT</span>
             </span>
             <div className="flex items-center gap-2">
               <span
-                className="text-lg font-bold mono px-3 py-1 rounded"
+                className="inline-flex items-center gap-1 text-sm font-bold mono px-2 py-0.5 rounded leading-none"
                 style={{
                   color: isProfit ? '#0ECB81' : '#F6465D',
                   background: isProfit ? 'rgba(14, 203, 129, 0.1)' : 'rgba(246, 70, 93, 0.1)',
@@ -349,44 +349,44 @@ export function EquityChart({ traderId }: EquityChartProps) {
                 {isProfit ? '▲' : '▼'} {isProfit ? '+' : ''}
                 {currentValue.raw_pnl_pct}%
               </span>
-              <span className="text-sm mono" style={{ color: '#848E9C' }}>
+              <span className="text-sm mono leading-none" style={{ color: '#848E9C' }}>
                 ({isProfit ? '+' : ''}{currentValue.raw_pnl.toFixed(2)} USDT)
               </span>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <button
             onClick={() => setIsFullscreenOpen(true)}
-            className="px-4 py-2 rounded text-sm font-bold transition-all"
+            className="px-3 py-1.5 rounded text-sm font-bold transition-all whitespace-nowrap leading-none"
             style={{ background: 'rgba(240, 185, 11, 0.1)', color: '#F0B90B', border: '1px solid rgba(240, 185, 11, 0.25)' }}
           >
             ⛶ {language === 'zh' ? '全屏查看' : 'Fullscreen'}
           </button>
 
           {/* Display Mode Toggle */}
-          <div className="flex gap-1 rounded p-1" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
-          <button
-            onClick={() => setDisplayMode('dollar')}
-            className="px-4 py-2 rounded text-sm font-bold transition-all"
-            style={displayMode === 'dollar'
-              ? { background: '#F0B90B', color: '#000', boxShadow: '0 2px 8px rgba(240, 185, 11, 0.4)' }
-              : { background: 'transparent', color: '#848E9C' }
-            }
-          >
-            💵 USDT
-          </button>
-          <button
-            onClick={() => setDisplayMode('percent')}
-            className="px-4 py-2 rounded text-sm font-bold transition-all"
-            style={displayMode === 'percent'
-              ? { background: '#F0B90B', color: '#000', boxShadow: '0 2px 8px rgba(240, 185, 11, 0.4)' }
-              : { background: 'transparent', color: '#848E9C' }
-            }
-          >
-            📊 %
-          </button>
+          <div className="flex rounded p-0.5" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
+            <button
+              onClick={() => setDisplayMode('dollar')}
+              className="min-w-[4.25rem] px-3 py-1.5 rounded text-sm font-bold transition-all whitespace-nowrap leading-none text-center"
+              style={displayMode === 'dollar'
+                ? { background: '#F0B90B', color: '#000', boxShadow: '0 2px 8px rgba(240, 185, 11, 0.4)' }
+                : { background: 'transparent', color: '#848E9C' }
+              }
+            >
+              USDT
+            </button>
+            <button
+              onClick={() => setDisplayMode('percent')}
+              className="min-w-[4.25rem] px-3 py-1.5 rounded text-sm font-bold transition-all whitespace-nowrap leading-none text-center"
+              style={displayMode === 'percent'
+                ? { background: '#F0B90B', color: '#000', boxShadow: '0 2px 8px rgba(240, 185, 11, 0.4)' }
+                : { background: 'transparent', color: '#848E9C' }
+              }
+            >
+              %
+            </button>
           </div>
         </div>
       </div>
