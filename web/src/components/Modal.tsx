@@ -6,9 +6,10 @@ interface ModalProps {
   onClose: () => void;
   title?: string;
   children: React.ReactNode;
+  size?: 'default' | 'fullscreen';
 }
 
-export function Modal({ isOpen, onClose, title, children }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, size = 'default' }: ModalProps) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -29,6 +30,8 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
 
   if (!isOpen) return null;
 
+  const isFullscreen = size === 'fullscreen';
+
   return createPortal(
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center"
@@ -41,9 +44,10 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
           background: '#1E2329',
           border: '1px solid #2B3139',
           boxShadow: '0 25px 50px rgba(0, 0, 0, 0.5)',
-          width: '80vw',
-          maxWidth: '1200px',
-          maxHeight: '85vh',
+          width: isFullscreen ? '95vw' : '80vw',
+          maxWidth: isFullscreen ? 'none' : '1200px',
+          height: isFullscreen ? '90vh' : undefined,
+          maxHeight: isFullscreen ? '90vh' : '85vh',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -77,7 +81,13 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
         </div>
 
         {/* Body */}
-        <div className="p-6 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 65px)' }}>
+        <div
+          className={isFullscreen ? 'p-4 overflow-hidden' : 'p-6 overflow-y-auto'}
+          style={{
+            maxHeight: isFullscreen ? 'calc(90vh - 65px)' : 'calc(85vh - 65px)',
+            height: isFullscreen ? 'calc(90vh - 65px)' : undefined,
+          }}
+        >
           {children}
         </div>
       </div>

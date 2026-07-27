@@ -15,6 +15,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
 import type { DecisionRecord, DecisionAction } from '../types';
 import { RangeSlider } from './RangeSlider';
+import { EquityChartModal } from './EquityChartModal';
 
 interface EquityPoint {
   timestamp: string;
@@ -31,6 +32,7 @@ interface EquityChartProps {
 export function EquityChart({ traderId }: EquityChartProps) {
   const { language } = useLanguage();
   const [displayMode, setDisplayMode] = useState<'dollar' | 'percent'>('dollar');
+  const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
   
   // 滑块状态 - 必须在组件顶部声明
   const [rangeStart, setRangeStart] = useState(0);
@@ -38,7 +40,7 @@ export function EquityChart({ traderId }: EquityChartProps) {
 
   const { data: history, error } = useSWR<EquityPoint[]>(
     traderId ? `equity-history-${traderId}` : 'equity-history',
-    () => api.getEquityHistory(traderId),
+    () => api.getEquityHistory(traderId, 2000),
     {
       refreshInterval: 10000, // 每10秒刷新
     }
@@ -354,8 +356,17 @@ export function EquityChart({ traderId }: EquityChartProps) {
           </div>
         </div>
 
-        {/* Display Mode Toggle */}
-        <div className="flex gap-1 rounded p-1" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsFullscreenOpen(true)}
+            className="px-4 py-2 rounded text-sm font-bold transition-all"
+            style={{ background: 'rgba(240, 185, 11, 0.1)', color: '#F0B90B', border: '1px solid rgba(240, 185, 11, 0.25)' }}
+          >
+            ⛶ {language === 'zh' ? '全屏查看' : 'Fullscreen'}
+          </button>
+
+          {/* Display Mode Toggle */}
+          <div className="flex gap-1 rounded p-1" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
           <button
             onClick={() => setDisplayMode('dollar')}
             className="px-4 py-2 rounded text-sm font-bold transition-all"
@@ -376,6 +387,7 @@ export function EquityChart({ traderId }: EquityChartProps) {
           >
             📊 %
           </button>
+          </div>
         </div>
       </div>
 
@@ -484,6 +496,12 @@ export function EquityChart({ traderId }: EquityChartProps) {
           </div>
         </div>
       </div>
+      <EquityChartModal
+        traderId={traderId}
+        isOpen={isFullscreenOpen}
+        onClose={() => setIsFullscreenOpen(false)}
+        initialDisplayMode={displayMode}
+      />
     </div>
   );
 }

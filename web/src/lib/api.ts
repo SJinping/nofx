@@ -105,9 +105,13 @@ export const api = {
   },
 
   // 获取收益率历史数据（支持trader_id）
-  async getEquityHistory(traderId?: string): Promise<any[]> {
-    const url = traderId
-      ? `${API_BASE}/equity-history?trader_id=${traderId}`
+  async getEquityHistory(traderId?: string, limit?: number): Promise<any[]> {
+    const params = new URLSearchParams();
+    if (traderId) params.set('trader_id', traderId);
+    if (limit) params.set('limit', String(limit));
+    const query = params.toString();
+    const url = query
+      ? `${API_BASE}/equity-history?${query}`
       : `${API_BASE}/equity-history`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('获取历史数据失败');

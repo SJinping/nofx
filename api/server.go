@@ -24,6 +24,7 @@ type Server struct {
 	router        *gin.Engine
 	traderManager *manager.TraderManager
 	port          int
+	equityCache   *EquityHistoryCache
 }
 
 // NewServer 创建API服务器
@@ -40,6 +41,7 @@ func NewServer(traderManager *manager.TraderManager, port int) *Server {
 		router:        router,
 		traderManager: traderManager,
 		port:          port,
+		equityCache:   NewEquityHistoryCache(maxEquityHistoryLimit, 30*time.Second),
 	}
 
 	// 设置路由
@@ -1223,27 +1225,7 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		return
 	}
 
-	// 获取尽可能多的历史数据（几天的数据）
-	// 每3分钟一个周期：10000条 = 约20天的数据
-	records, err := trader.GetDecisionLogger().GetLatestRecords(10000)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("获取历史数据失败: %v", err),
-		})
-		return
-	}
-
-	// 构建收益率历史数据点
-	type EquityPoint struct {
-		Timestamp        string  `json:"timestamp"`
-		TotalEquity      float64 `json:"total_equity"`      // 账户净值（wallet + unrealized）
-		AvailableBalance float64 `json:"available_balance"` // 可用余额
-		TotalPnL         float64 `json:"total_pnl"`         // 总盈亏（相对初始余额）
-		TotalPnLPct      float64 `json:"total_pnl_pct"`     // 总盈亏百分比
-		PositionCount    int     `json:"position_count"`    // 持仓数量
-		MarginUsedPct    float64 `json:"margin_used_pct"`   // 保证金使用率
-		CycleNumber      int     `json:"cycle_number"`
-	}
+	query := parseEquityHistoryQuery(c)
 
 	// 从AutoTrader获取初始余额（用于计算盈亏百分比）
 	initialBalance := 0.0
@@ -1253,51 +1235,51 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		}
 	}
 
-	// 如果无法从status获取，且有历史记录，则从第一条记录获取
-	if initialBalance == 0 && len(records) > 0 {
-		// 第一条记录的equity作为初始余额
-		initialBalance = records[0].AccountState.TotalBalance
-	}
-
-	// 如果还是无法获取，返回错误
-	if initialBalance == 0 {
+	points, err := s.equityCache.Get(traderID, trader.GetDecisionLogger().GetLatestRecords, initialBalance, query.Limit)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "无法获取初始余额",
+			"error": fmt.Sprintf("获取历史数据失败: %v", err),
 		})
 		return
 	}
 
-	var history []EquityPoint
-	for _, record := range records {
-		// ⚠️ 过滤掉失败的记录或账户状态异常的记录（避免网络超时导致曲线大幅波动）
-		if !record.Success || record.AccountState.TotalBalance <= 0 {
-			continue
+	history := applyEquityHistoryQuery(points, query)
+	c.JSON(http.StatusOK, history)
+}
+
+func parseEquityHistoryQuery(c *gin.Context) EquityHistoryQuery {
+	limit := defaultEquityHistoryLimit
+	if raw := c.Query("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			limit = parsed
 		}
-
-		// TotalBalance字段实际存储的是TotalEquity
-		totalEquity := record.AccountState.TotalBalance
-		// TotalUnrealizedProfit字段实际存储的是TotalPnL（相对初始余额）
-		totalPnL := record.AccountState.TotalUnrealizedProfit
-
-		// 计算盈亏百分比
-		totalPnLPct := 0.0
-		if initialBalance > 0 {
-			totalPnLPct = (totalPnL / initialBalance) * 100
-		}
-
-		history = append(history, EquityPoint{
-			Timestamp:        record.Timestamp.Format("2006-01-02 15:04:05"),
-			TotalEquity:      totalEquity,
-			AvailableBalance: record.AccountState.AvailableBalance,
-			TotalPnL:         totalPnL,
-			TotalPnLPct:      totalPnLPct,
-			PositionCount:    record.AccountState.PositionCount,
-			MarginUsedPct:    record.AccountState.MarginUsedPct,
-			CycleNumber:      record.CycleNumber,
-		})
+	}
+	if limit <= 0 {
+		limit = maxEquityHistoryLimit
+	}
+	if limit > maxEquityHistoryLimit {
+		limit = maxEquityHistoryLimit
 	}
 
-	c.JSON(http.StatusOK, history)
+	fromCycle := 0
+	if raw := c.Query("from_cycle"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			fromCycle = parsed
+		}
+	}
+
+	toCycle := 0
+	if raw := c.Query("to_cycle"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			toCycle = parsed
+		}
+	}
+
+	return EquityHistoryQuery{
+		Limit:     limit,
+		FromCycle: fromCycle,
+		ToCycle:   toCycle,
+	}
 }
 
 // handlePerformance AI历史表现分析（用于展示AI学习和反思）
