@@ -14,8 +14,8 @@ import (
 )
 
 type TradeMemory struct {
-	traderID string
-	baseDir  string
+	traderID   string
+	baseDir    string
 	tradesPath string
 
 	mu       sync.Mutex
@@ -51,11 +51,11 @@ func NewTradeMemory(traderID string) (*TradeMemory, error) {
 	sort.Slice(h, func(i, j int) bool { return h[i].CloseTime.After(h[j].CloseTime) })
 
 	tm := &TradeMemory{
-		traderID: traderID,
-		baseDir:  base,
-		tradesPath: tradesPath,
-		episodes: make(map[string]*TradeEpisode),
-		history:  h,
+		traderID:      traderID,
+		baseDir:       base,
+		tradesPath:    tradesPath,
+		episodes:      make(map[string]*TradeEpisode),
+		history:       h,
 		analysisCache: make(map[string]*TradeAnalysis),
 	}
 
@@ -92,19 +92,19 @@ func (tm *TradeMemory) UpdateEpisodesFromPositions(traderID string, positions []
 		if !ok || ep == nil {
 			// placeholder episode
 			ep = &TradeEpisode{
-				TradeID:          fmt.Sprintf("%s_%s_%d", traderID, k, now.UnixMilli()),
-				TraderID:         traderID,
-				Symbol:           strings.ToUpper(strings.TrimSpace(p.Symbol)),
-				Side:             strings.ToLower(strings.TrimSpace(p.Side)),
-				OpenTime:         time.UnixMilli(p.UpdateTime),
-				EntryPrice:       p.EntryPrice,
-				Quantity:         p.Quantity,
-				Leverage:         p.Leverage,
-				PositionSizeUSD:  p.EntryPrice * p.Quantity,
-				SignalVector:     nil,
-				Rolling:          RollingMetrics{},
-				EntryReasoning:   "(unknown - preexisting position)",
-				EntryConfidence:  0,
+				TradeID:         fmt.Sprintf("%s_%s_%d", traderID, k, now.UnixMilli()),
+				TraderID:        traderID,
+				Symbol:          strings.ToUpper(strings.TrimSpace(p.Symbol)),
+				Side:            strings.ToLower(strings.TrimSpace(p.Side)),
+				OpenTime:        time.UnixMilli(p.UpdateTime),
+				EntryPrice:      p.EntryPrice,
+				Quantity:        p.Quantity,
+				Leverage:        p.Leverage,
+				PositionSizeUSD: p.EntryPrice * p.Quantity,
+				SignalVector:    nil,
+				Rolling:         RollingMetrics{},
+				EntryReasoning:  "(unknown - preexisting position)",
+				EntryConfidence: 0,
 			}
 			tm.episodes[k] = ep
 		}
@@ -112,8 +112,8 @@ func (tm *TradeMemory) UpdateEpisodesFromPositions(traderID string, positions []
 		mark := p.MarkPrice
 		if mark <= 0 {
 			mark = p.EntryPrice
-	}
-	tm.updateRollingLocked(ep, mark, now)
+		}
+		tm.updateRollingLocked(ep, mark, now)
 	}
 }
 
@@ -249,12 +249,17 @@ func (tm *TradeMemory) GateOpenDecision(ctx *decision.Context, dec *decision.Dec
 		return res, nil
 	}
 
-	// Soft modify: similar average negative OR symbol loss streak.
+	// Soft modify: tiered size reduction instead of a flat 0.6 multiplier.
+	// Keep serious historical loss signals defensive, but avoid over-shrinking
+	// higher-quality setups whose confidence and net RR justify a larger probe.
 	needsReview := false
 	if (count >= 4 && avg < 0) || symLossStreak >= 2 {
+		netRR := estimateGateNetRiskReward(ctx, dec)
+		multiplier, tier := gateSoftSizeMultiplier(avg, count, symLossStreak, dec.Confidence, netRR)
 		res.Decision = GateModify
-		res.SizeMultiplier = 0.6
-		res.Reason = fmt.Sprintf("rule_gate_modify: avg_pnl=%.2f%% sym_loss_streak=%d", avg, symLossStreak)
+		res.SizeMultiplier = multiplier
+		res.Reason = fmt.Sprintf("rule_gate_modify:%s avg_pnl=%.2f%% similar_count=%d sym_loss_streak=%d confidence=%d net_rr=%.2f multiplier=%.2f",
+			tier, avg, count, symLossStreak, dec.Confidence, netRR, multiplier)
 		needsReview = true
 	}
 
@@ -304,6 +309,100 @@ func (tm *TradeMemory) GateOpenDecision(ctx *decision.Context, dec *decision.Dec
 	}
 
 	return res, nil
+}
+
+func gateSoftSizeMultiplier(avg float64, count, symLossStreak, confidence int, netRR float64) (float64, string) {
+	multiplier := 1.0
+	tier := "base"
+
+	// Base reduction tier from historical negative feedback.
+	switch {
+	case symLossStreak >= 3 || (count >= 4 && avg <= -0.3):
+		multiplier = 0.6
+		tier = "serious"
+	case symLossStreak == 2 || (count >= 4 && avg <= -0.1):
+		multiplier = 0.75
+		tier = "moderate"
+	case count >= 4 && avg < 0:
+		multiplier = 0.85
+		tier = "mild"
+	}
+
+	// Quality uplift: do not override serious same-symbol streaks or deeply
+	// negative similar-trade history, but allow strong current setups to avoid
+	// the old one-size-fits-all 0.6 shrink.
+	if symLossStreak < 3 && avg > -0.3 {
+		switch {
+		case confidence >= 85 && netRR >= 3.0:
+			if multiplier < 0.9 {
+				multiplier = 0.9
+			}
+			tier += "+quality_high"
+		case confidence >= 80 && netRR >= 2.5:
+			if multiplier < 0.8 {
+				multiplier = 0.8
+			}
+			tier += "+quality_mid"
+		}
+	}
+
+	return multiplier, tier
+}
+
+func estimateGateNetRiskReward(ctx *decision.Context, dec *decision.Decision) float64 {
+	if ctx == nil || dec == nil || dec.StopLoss <= 0 || dec.TakeProfit <= 0 {
+		return 0
+	}
+
+	entryPrice := 0.0
+	sym := strings.ToUpper(strings.TrimSpace(dec.Symbol))
+	if ctx.MarketDataMap != nil {
+		if md := ctx.MarketDataMap[sym]; md != nil && md.CurrentPrice > 0 {
+			entryPrice = md.CurrentPrice
+		}
+	}
+	if entryPrice <= 0 {
+		if dec.Action == decision.ActionOpenLong {
+			entryPrice = dec.StopLoss + (dec.TakeProfit-dec.StopLoss)*0.2
+		} else {
+			entryPrice = dec.StopLoss - (dec.StopLoss-dec.TakeProfit)*0.2
+		}
+	}
+	if entryPrice <= 0 {
+		return 0
+	}
+
+	var riskPercent, rewardPercent float64
+	if dec.Action == decision.ActionOpenLong {
+		riskPercent = (entryPrice - dec.StopLoss) / entryPrice * 100
+		rewardPercent = (dec.TakeProfit - entryPrice) / entryPrice * 100
+	} else {
+		riskPercent = (dec.StopLoss - entryPrice) / entryPrice * 100
+		rewardPercent = (entryPrice - dec.TakeProfit) / entryPrice * 100
+	}
+	if riskPercent <= 0 || rewardPercent <= 0 {
+		return 0
+	}
+
+	taker := 0.0004
+	slippage := 0.0005
+	if ctx.AssumedTakerFeeRate >= 0 {
+		taker = ctx.AssumedTakerFeeRate
+	}
+	if ctx.AssumedSlippageRate >= 0 {
+		slippage = ctx.AssumedSlippageRate
+	}
+	leverage := float64(dec.Leverage)
+	if leverage <= 0 {
+		leverage = 1
+	}
+	cost := 2.0 * (taker + slippage) * leverage * 100.0
+	netRisk := riskPercent*leverage + cost
+	netReward := rewardPercent*leverage - cost
+	if netRisk <= 0 || netReward <= 0 {
+		return 0
+	}
+	return netReward / netRisk
 }
 
 func (tm *TradeMemory) searchSimilarLocked(vec []float64, side string, topK int) []SimilarMatch {
@@ -429,21 +528,21 @@ func (tm *TradeMemory) OnOpenSuccess(ctx *decision.Context, dec *decision.Decisi
 	defer tm.mu.Unlock()
 
 	tm.episodes[k] = &TradeEpisode{
-		TradeID:          fmt.Sprintf("%s_%s_%d", tm.traderID, k, time.Now().UnixMilli()),
-		TraderID:         tm.traderID,
-		Symbol:           sym,
-		Side:             side,
-		OpenTime:         time.Now(),
-		EntryPrice:       entryPrice,
-		Quantity:         quantity,
-		Leverage:         dec.Leverage,
-		PositionSizeUSD:  dec.PositionSizeUSD,
-		StopLoss:         dec.StopLoss,
-		TakeProfit:       dec.TakeProfit,
-		EntryReasoning:   strings.TrimSpace(dec.Reasoning),
-		EntryConfidence:  dec.Confidence,
-		SignalVector:     vec,
-		Rolling:          RollingMetrics{},
+		TradeID:         fmt.Sprintf("%s_%s_%d", tm.traderID, k, time.Now().UnixMilli()),
+		TraderID:        tm.traderID,
+		Symbol:          sym,
+		Side:            side,
+		OpenTime:        time.Now(),
+		EntryPrice:      entryPrice,
+		Quantity:        quantity,
+		Leverage:        dec.Leverage,
+		PositionSizeUSD: dec.PositionSizeUSD,
+		StopLoss:        dec.StopLoss,
+		TakeProfit:      dec.TakeProfit,
+		EntryReasoning:  strings.TrimSpace(dec.Reasoning),
+		EntryConfidence: dec.Confidence,
+		SignalVector:    vec,
+		Rolling:         RollingMetrics{},
 	}
 }
 
@@ -510,29 +609,29 @@ func (tm *TradeMemory) OnCloseSuccess(ctx *decision.Context, dec *decision.Decis
 	}
 
 	tr := &TradeRecord{
-		TradeID:          ep.TradeID,
-		TraderID:         tm.traderID,
-		Symbol:           sym,
-		Side:             side,
-		OpenTime:         ep.OpenTime,
-		CloseTime:        closeTime,
-		DurationS:        durationS,
-		EntryPrice:       ep.EntryPrice,
-		ExitPrice:        exitPrice,
-		Quantity:         ep.Quantity,
-		Leverage:         ep.Leverage,
-		PositionSizeUSD:  ep.PositionSizeUSD,
-		PnL:              pnl,
-		PnLPct:           pnlPct,
-		MaxFavorablePct:  ep.Rolling.MaxFavorablePct,
-		MaxAdversePct:    ep.Rolling.MaxAdversePct,
-		StopLoss:         ep.StopLoss,
-		TakeProfit:       ep.TakeProfit,
-		ExitReason:       strings.TrimSpace(exitReason),
-		EntryReasoning:   ep.EntryReasoning,
-		ExitReasoning:    strings.TrimSpace(dec.Reasoning),
-		EntryConfidence:  ep.EntryConfidence,
-		SignalVector:     ep.SignalVector,
+		TradeID:         ep.TradeID,
+		TraderID:        tm.traderID,
+		Symbol:          sym,
+		Side:            side,
+		OpenTime:        ep.OpenTime,
+		CloseTime:       closeTime,
+		DurationS:       durationS,
+		EntryPrice:      ep.EntryPrice,
+		ExitPrice:       exitPrice,
+		Quantity:        ep.Quantity,
+		Leverage:        ep.Leverage,
+		PositionSizeUSD: ep.PositionSizeUSD,
+		PnL:             pnl,
+		PnLPct:          pnlPct,
+		MaxFavorablePct: ep.Rolling.MaxFavorablePct,
+		MaxAdversePct:   ep.Rolling.MaxAdversePct,
+		StopLoss:        ep.StopLoss,
+		TakeProfit:      ep.TakeProfit,
+		ExitReason:      strings.TrimSpace(exitReason),
+		EntryReasoning:  ep.EntryReasoning,
+		ExitReasoning:   strings.TrimSpace(dec.Reasoning),
+		EntryConfidence: ep.EntryConfidence,
+		SignalVector:    ep.SignalVector,
 	}
 
 	// Persist the trade record.
@@ -577,8 +676,13 @@ func (tm *TradeMemory) ManualClose(symbol, side string, exitPrice float64) (*Tra
 		return nil, nil
 	}
 	dec := &decision.Decision{
-		Symbol:   sym,
-		Action:   func() string { if side == "long" { return decision.ActionCloseLong }; return decision.ActionCloseShort }(),
+		Symbol: sym,
+		Action: func() string {
+			if side == "long" {
+				return decision.ActionCloseLong
+			}
+			return decision.ActionCloseShort
+		}(),
 		Reasoning: "manual_close",
 	}
 	return tm.OnCloseSuccess(nil, dec, exitPrice, "manual_close")
@@ -591,10 +695,9 @@ func (tm *TradeMemory) EnsureStorage() {
 	// ensure trades path can be created
 	if _, err := os.Stat(tm.tradesPath); err != nil && os.IsNotExist(err) {
 		_ = appendJSONL(tm.tradesPath, map[string]any{
-			"_": "trade_memory_initialized",
+			"_":  "trade_memory_initialized",
 			"ts": time.Now().Format(time.RFC3339),
 		})
 		// remove the init line to keep file clean? keep it; loader will ignore unknown shape.
 	}
 }
-

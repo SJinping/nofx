@@ -113,11 +113,11 @@ type StopLossDistanceConfig struct {
 
 // AutoTakeProfitConfig 自动止盈配置
 type AutoTakeProfitConfig struct {
-	Stage0Threshold    float64 `json:"stage0_threshold,omitempty"`     // Stage0 触发净ROI%（默认1.0）
-	Stage0ClosePct     float64 `json:"stage0_close_pct,omitempty"`     // Stage0 平仓比例%（默认50）
-	Stage1Threshold    float64 `json:"stage1_threshold,omitempty"`     // Stage1 触发净ROI%（默认2.0）
-	Stage1ClosePct     float64 `json:"stage1_close_pct,omitempty"`     // Stage1 平仓比例%（默认30）
-	FullCloseThreshold float64 `json:"full_close_threshold,omitempty"` // 全部平仓净ROI%（默认4.0）
+	Stage0Threshold    float64 `json:"stage0_threshold,omitempty"`     // Stage0 触发净ROI%（默认10.0）
+	Stage0ClosePct     float64 `json:"stage0_close_pct,omitempty"`     // Stage0 平仓比例%（默认35）
+	Stage1Threshold    float64 `json:"stage1_threshold,omitempty"`     // Stage1 触发净ROI%（默认15.0）
+	Stage1ClosePct     float64 `json:"stage1_close_pct,omitempty"`     // Stage1 平仓比例%（默认35）
+	FullCloseThreshold float64 `json:"full_close_threshold,omitempty"` // 全部平仓净ROI%（默认22.0）
 	CooldownMinutes    int     `json:"cooldown_minutes,omitempty"`     // 冷却时间（分钟，默认15）
 }
 

@@ -135,11 +135,11 @@ type AutoTakeProfitConfig struct {
 // DefaultAutoTakeProfitConfig 返回默认的自动止盈配置
 func DefaultAutoTakeProfitConfig() AutoTakeProfitConfig {
 	return AutoTakeProfitConfig{
-		Stage0Threshold:    1.0,
-		Stage0ClosePct:     50.0,
-		Stage1Threshold:    2.0,
-		Stage1ClosePct:     30.0,
-		FullCloseThreshold: 4.0,
+		Stage0Threshold:    10.0,
+		Stage0ClosePct:     35.0,
+		Stage1Threshold:    15.0,
+		Stage1ClosePct:     35.0,
+		FullCloseThreshold: 22.0,
 		CooldownMinutes:    30,
 	}
 }

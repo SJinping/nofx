@@ -145,7 +145,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
 	sb.WriteString(fmt.Sprintf("1. **风险回报比**: 必须 ≥ 1:%.0f(冒1%%风险，赚%.0f%%+收益) \n", minRiskReward, minRiskReward))
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
-	sb.WriteString("3. **单币最大仓位**: 山寨币不超过当前账户净值的 1.5 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n")
+	sb.WriteString("3. **单币最大仓位**: 山寨币不超过当前账户净值的 2 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n")
 	sb.WriteString("   当前账户净值会在用户消息中给出，你需要基于该数值自行判断仓位是否超限。\n")
 	sb.WriteString("4. **保证金**: 总使用率 ≤ 90%\n\n")
 
