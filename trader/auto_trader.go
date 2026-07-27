@@ -67,9 +67,10 @@ type AutoTraderConfig struct {
 	InitialBalance float64 // 初始金额（用于计算盈亏，需手动设置）
 
 	// 杠杆配置
-	BTCETHLeverage  int // BTC和ETH的杠杆倍数
-	AltcoinLeverage int // 山寨币的杠杆倍数
-	LeverageClip    decision.LeverageClipConfig
+	BTCETHLeverage                   int     // BTC和ETH的杠杆倍数
+	AltcoinLeverage                  int     // 山寨币的杠杆倍数
+	AltcoinMaxPositionEquityMultiple float64 // 山寨币单币名义仓位上限：账户净值倍数
+	LeverageClip                     decision.LeverageClipConfig
 
 	// 风险控制（仅作为提示，AI可自主决定）
 	MaxDailyLoss    float64       // 最大日亏损百分比（提示）
@@ -1130,13 +1131,14 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	// 6. 构建上下文（从运行时配置读取可热更新的参数）
 	rcSnap := at.runtimeCfg.Get()
 	ctx := &decision.Context{
-		CurrentTime:      time.Now().Format("2006-01-02 15:04:05"),
-		RuntimeMinutes:   int(time.Since(at.startTime).Minutes()),
-		CallCount:        at.callCount,
-		BTCETHLeverage:   rcSnap.BTCETHLeverage,   // 从运行时配置读取
-		AltcoinLeverage:  rcSnap.AltcoinLeverage,  // 从运行时配置读取
-		LeverageClip:     rcSnap.LeverageClip,     // 从运行时配置读取
-		MarginValidation: rcSnap.MarginValidation, // 从运行时配置读取
+		CurrentTime:                      time.Now().Format("2006-01-02 15:04:05"),
+		RuntimeMinutes:                   int(time.Since(at.startTime).Minutes()),
+		CallCount:                        at.callCount,
+		BTCETHLeverage:                   rcSnap.BTCETHLeverage,                   // 从运行时配置读取
+		AltcoinLeverage:                  rcSnap.AltcoinLeverage,                  // 从运行时配置读取
+		AltcoinMaxPositionEquityMultiple: rcSnap.AltcoinMaxPositionEquityMultiple, // 从运行时配置读取
+		LeverageClip:                     rcSnap.LeverageClip,                     // 从运行时配置读取
+		MarginValidation:                 rcSnap.MarginValidation,                 // 从运行时配置读取
 		Account: decision.AccountInfo{
 			TotalEquity:         totalEquity,
 			AvailableBalance:    availableBalance,

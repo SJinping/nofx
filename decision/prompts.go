@@ -120,7 +120,10 @@ func btcDirectionConstraintPrompt() string {
 
 // buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
 // 注意风险回报比要与minRiskReward保持一致
-func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
+func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int) string {
+	if altcoinMaxPositionEquityMultiple <= 0 {
+		altcoinMaxPositionEquityMultiple = 2.0
+	}
 	if scanIntervalMin <= 0 {
 		scanIntervalMin = 3
 	}
@@ -145,7 +148,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
 	sb.WriteString(fmt.Sprintf("1. **风险回报比**: 必须 ≥ 1:%.0f(冒1%%风险，赚%.0f%%+收益) \n", minRiskReward, minRiskReward))
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
-	sb.WriteString("3. **单币最大仓位**: 山寨币不超过当前账户净值的 2 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n")
+	sb.WriteString(fmt.Sprintf("3. **单币最大仓位**: 山寨币不超过当前账户净值的 %.2g 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString("   当前账户净值会在用户消息中给出，你需要基于该数值自行判断仓位是否超限。\n")
 	sb.WriteString("4. **保证金**: 总使用率 ≤ 90%\n\n")
 
@@ -261,7 +264,10 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalM
 }
 
 // buildSystemPromptB B策略的System Prompt
-func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
+func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int) string {
+	if altcoinMaxPositionEquityMultiple <= 0 {
+		altcoinMaxPositionEquityMultiple = 2.0
+	}
 	if scanIntervalMin <= 0 {
 		scanIntervalMin = 3
 	}
@@ -350,6 +356,7 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 	sb.WriteString("# 5️⃣ 风险与仓位\n\n")
 	sb.WriteString("当前账户净值、实时盈亏、保证金使用率会在用户消息中给出，你需要基于这些数值评估回撤和风险。\n")
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
+	sb.WriteString(fmt.Sprintf("单币最大仓位: 山寨币不超过当前账户净值 %.2g 倍，BTC/ETH 不超过当前账户净值 10 倍。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString("- **不孤注一掷**：单一标的的风险不应占用账户的绝大部分。\n")
 	sb.WriteString("- **风险回报思维**：每次建议开仓时，确保风险回报比合理（建议 > 1:2，理想 > 1:3）。\n\n")
 	sb.WriteString("## 止损距离与仓位联动，按币种分层（重要）\n\n")
@@ -412,7 +419,10 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage, scanInterval
 }
 
 // buildSystemPromptShortTerm 专注短期/波动交易的 System Prompt（策略 V）
-func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scanIntervalMin int) string {
+func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int) string {
+	if altcoinMaxPositionEquityMultiple <= 0 {
+		altcoinMaxPositionEquityMultiple = 2.0
+	}
 	if scanIntervalMin <= 0 {
 		scanIntervalMin = market.ShortTermBarIntervalMinutes
 	}
@@ -512,7 +522,8 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage, scan
 
 	sb.WriteString("# 7️⃣ 止损、止盈与仓位\n\n")
 	sb.WriteString(fmt.Sprintf("最大杠杆限制: BTC/ETH %dx, 山寨币 %dx\n", btcEthLeverage, altcoinLeverage))
-	sb.WriteString("- StrategyV短线仓位更保守：BTC/ETH 单笔名义仓位通常不超过净值2倍，山寨币不超过净值0.75倍；单笔 risk_usd 不超过净值1%。\n")
+	sb.WriteString(fmt.Sprintf("单币最大仓位: 山寨币不超过当前账户净值 %.2g 倍，BTC/ETH 不超过当前账户净值 2 倍。\n", altcoinMaxPositionEquityMultiple))
+	sb.WriteString(fmt.Sprintf("- StrategyV短线仓位上限：BTC/ETH 单笔名义仓位通常不超过净值2倍，山寨币不超过配置的净值 %.2g 倍；单笔 risk_usd 不超过净值1%%。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString("- 当保证金使用率 ≥70% 时，不要新增仓位；当短线持仓浮亏接近 -2.5% 或超过90分钟仍未兑现，应优先退出/降风险。\n")
 	sb.WriteString(fmt.Sprintf("- 每笔交易的净风险回报比必须 ≥ %.2f:1；达到最低要求且 setup 清晰即可执行，paper 阶段不要把“理想 3:1”当成硬门槛。\n", minRiskReward))
 	sb.WriteString("- 净 RR 必须使用系统同口径公式，不要只算裸价格 RR：\n")

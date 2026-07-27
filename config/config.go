@@ -81,8 +81,9 @@ type PeakHourPauseConfig struct {
 
 // LeverageConfig 杠杆配置
 type LeverageConfig struct {
-	BTCETHLeverage  int `json:"btc_eth_leverage"` // BTC和ETH的杠杆倍数（主账户建议5-50，子账户≤5）
-	AltcoinLeverage int `json:"altcoin_leverage"` // 山寨币的杠杆倍数（主账户建议5-20，子账户≤5）
+	BTCETHLeverage                   int     `json:"btc_eth_leverage"`                               // BTC和ETH的杠杆倍数（主账户建议5-50，子账户≤5）
+	AltcoinLeverage                  int     `json:"altcoin_leverage"`                               // 山寨币的杠杆倍数（主账户建议5-20，子账户≤5）
+	AltcoinMaxPositionEquityMultiple float64 `json:"altcoin_max_position_equity_multiple,omitempty"` // 山寨币单币名义仓位上限：账户净值倍数（默认2.0）
 }
 
 // LeverageClipConfig 杠杆裁剪配置。
@@ -390,6 +391,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Leverage.AltcoinLeverage > 5 {
 		fmt.Printf("⚠️  警告: 山寨币杠杆设置为%dx，如果使用子账户可能会失败（子账户限制≤5x）\n", c.Leverage.AltcoinLeverage)
+	}
+	if c.Leverage.AltcoinMaxPositionEquityMultiple <= 0 {
+		c.Leverage.AltcoinMaxPositionEquityMultiple = 2.0
 	}
 
 	return nil

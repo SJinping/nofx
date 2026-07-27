@@ -57,49 +57,50 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 
 	// 构建AutoTraderConfig
 	traderConfig := trader.AutoTraderConfig{
-		ID:                       cfg.ID,
-		Name:                     cfg.Name,
-		AIModel:                  cfg.AIModel,
-		Exchange:                 cfg.Exchange,
-		BinanceTestnet:           binanceTestnet,
-		BinanceAPIKey:            cfg.BinanceAPIKey,
-		BinanceSecretKey:         cfg.BinanceSecretKey,
-		HyperliquidPrivateKey:    cfg.HyperliquidPrivateKey,
-		HyperliquidTestnet:       cfg.HyperliquidTestnet,
-		AsterUser:                cfg.AsterUser,
-		AsterSigner:              cfg.AsterSigner,
-		AsterPrivateKey:          cfg.AsterPrivateKey,
-		CoinPoolAPIURL:           coinPoolURL,
-		UseQwen:                  cfg.AIModel == "qwen",
-		DeepSeekKey:              cfg.DeepSeekKey,
-		QwenKey:                  cfg.QwenKey,
-		DeepSeekModel:            cfg.DeepSeekModel,
-		QwenModel:                cfg.QwenModel,
-		CustomAPIURL:             cfg.CustomAPIURL,
-		CustomAPIKey:             cfg.CustomAPIKey,
-		CustomModelName:          cfg.CustomModelName,
-		ScanInterval:             cfg.GetScanInterval(),
-		InitialBalance:           cfg.InitialBalance,
-		BTCETHLeverage:           leverage.BTCETHLeverage,  // 使用配置的杠杆倍数
-		AltcoinLeverage:          leverage.AltcoinLeverage, // 使用配置的杠杆倍数
-		LeverageClip:             convertLeverageClipConfig(leverageClipCfg),
-		MarginValidation:         convertMarginValidationConfig(marginValidationCfg),
-		MaxDailyLoss:             maxDailyLoss,
-		MaxDrawdown:              maxDrawdown,
-		StopTradingTime:          time.Duration(stopTradingMinutes) * time.Minute,
-		PaperTradingMode:         cfg.PaperTradingMode,
-		PaperTradingTakerFeeRate: cfg.PaperTradingTakerFeeRate,
-		PaperTradingSlippageRate: cfg.PaperTradingSlippageRate,
-		AssumedTakerFeeRate:      assumedTaker,
-		AssumedSlippageRate:      assumedSlippage,
-		MinRiskReward:            cfg.MinRiskReward,
-		StopLossDistance:         convertStopLossDistanceConfig(stopLossDistCfg),
-		AutoTakeProfit:           convertAutoTakeProfitConfig(autoTPCfg),
-		MinHoldMinutes:           minHoldMinutes,
-		MinOIValueMillions:       minOIValueMillions,
-		EnableRecording:          enableRecording,
-		AutoResume:               autoResume,
-		PeakHourPause:            convertPeakHourPauseConfig(cfg.PeakHourPause),
+		ID:                               cfg.ID,
+		Name:                             cfg.Name,
+		AIModel:                          cfg.AIModel,
+		Exchange:                         cfg.Exchange,
+		BinanceTestnet:                   binanceTestnet,
+		BinanceAPIKey:                    cfg.BinanceAPIKey,
+		BinanceSecretKey:                 cfg.BinanceSecretKey,
+		HyperliquidPrivateKey:            cfg.HyperliquidPrivateKey,
+		HyperliquidTestnet:               cfg.HyperliquidTestnet,
+		AsterUser:                        cfg.AsterUser,
+		AsterSigner:                      cfg.AsterSigner,
+		AsterPrivateKey:                  cfg.AsterPrivateKey,
+		CoinPoolAPIURL:                   coinPoolURL,
+		UseQwen:                          cfg.AIModel == "qwen",
+		DeepSeekKey:                      cfg.DeepSeekKey,
+		QwenKey:                          cfg.QwenKey,
+		DeepSeekModel:                    cfg.DeepSeekModel,
+		QwenModel:                        cfg.QwenModel,
+		CustomAPIURL:                     cfg.CustomAPIURL,
+		CustomAPIKey:                     cfg.CustomAPIKey,
+		CustomModelName:                  cfg.CustomModelName,
+		ScanInterval:                     cfg.GetScanInterval(),
+		InitialBalance:                   cfg.InitialBalance,
+		BTCETHLeverage:                   leverage.BTCETHLeverage,                   // 使用配置的杠杆倍数
+		AltcoinLeverage:                  leverage.AltcoinLeverage,                  // 使用配置的杠杆倍数
+		AltcoinMaxPositionEquityMultiple: leverage.AltcoinMaxPositionEquityMultiple, // 使用配置的山寨币仓位上限
+		LeverageClip:                     convertLeverageClipConfig(leverageClipCfg),
+		MarginValidation:                 convertMarginValidationConfig(marginValidationCfg),
+		MaxDailyLoss:                     maxDailyLoss,
+		MaxDrawdown:                      maxDrawdown,
+		StopTradingTime:                  time.Duration(stopTradingMinutes) * time.Minute,
+		PaperTradingMode:                 cfg.PaperTradingMode,
+		PaperTradingTakerFeeRate:         cfg.PaperTradingTakerFeeRate,
+		PaperTradingSlippageRate:         cfg.PaperTradingSlippageRate,
+		AssumedTakerFeeRate:              assumedTaker,
+		AssumedSlippageRate:              assumedSlippage,
+		MinRiskReward:                    cfg.MinRiskReward,
+		StopLossDistance:                 convertStopLossDistanceConfig(stopLossDistCfg),
+		AutoTakeProfit:                   convertAutoTakeProfitConfig(autoTPCfg),
+		MinHoldMinutes:                   minHoldMinutes,
+		MinOIValueMillions:               minOIValueMillions,
+		EnableRecording:                  enableRecording,
+		AutoResume:                       autoResume,
+		PeakHourPause:                    convertPeakHourPauseConfig(cfg.PeakHourPause),
 	}
 
 	// 创建trader实例
@@ -275,7 +276,7 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 	}
 
 	// leverage 是嵌套对象
-	if patch.BTCETHLeverage != nil || patch.AltcoinLeverage != nil {
+	if patch.BTCETHLeverage != nil || patch.AltcoinLeverage != nil || patch.AltcoinMaxPositionEquityMultiple != nil {
 		leverage, _ := raw["leverage"].(map[string]interface{})
 		if leverage == nil {
 			leverage = make(map[string]interface{})
@@ -285,6 +286,9 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		}
 		if patch.AltcoinLeverage != nil {
 			leverage["altcoin_leverage"] = *patch.AltcoinLeverage
+		}
+		if patch.AltcoinMaxPositionEquityMultiple != nil {
+			leverage["altcoin_max_position_equity_multiple"] = *patch.AltcoinMaxPositionEquityMultiple
 		}
 		raw["leverage"] = leverage
 	}

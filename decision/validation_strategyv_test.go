@@ -22,11 +22,13 @@ func testStrategyVRiskContext(strategy PromptStrategy) *Context {
 				},
 			},
 		},
-		BTCETHLeverage:      5,
-		AltcoinLeverage:     5,
-		AssumedTakerFeeRate: 0,
-		AssumedSlippageRate: 0,
-		PromptStrategy:      strategy,
+		BTCETHLeverage:                   5,
+		AltcoinLeverage:                  5,
+		AltcoinMaxPositionEquityMultiple: 2.0,
+		MinOIValueMillions:               15,
+		AssumedTakerFeeRate:              0,
+		AssumedSlippageRate:              0,
+		PromptStrategy:                   strategy,
 	}
 }
 
@@ -58,8 +60,9 @@ func TestStrategyVRiskCapDoesNotAffectStrategyA(t *testing.T) {
 	}
 
 	ctxV := testStrategyVRiskContext(StrategyV{})
+	ctxV.AltcoinMaxPositionEquityMultiple = 0.75
 	err := validateDecisions([]Decision{d}, ctxV)
-	if err == nil || !strings.Contains(err.Error(), "StrategyV短线单笔名义仓位过大") {
+	if err == nil || !strings.Contains(err.Error(), "山寨币单币种仓位价值不能超过750") {
 		t.Fatalf("expected StrategyV notional cap rejection, got %v", err)
 	}
 }

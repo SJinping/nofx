@@ -146,21 +146,22 @@ func DefaultAutoTakeProfitConfig() AutoTakeProfitConfig {
 
 // Context 交易上下文（传递给AI的完整信息）
 type Context struct {
-	CurrentTime      string                  `json:"current_time"`
-	RuntimeMinutes   int                     `json:"runtime_minutes"`
-	CallCount        int                     `json:"call_count"`
-	Account          AccountInfo             `json:"account"`
-	Positions        []PositionInfo          `json:"positions"`
-	CandidateCoins   []CandidateCoin         `json:"candidate_coins"`
-	MarketDataMap    map[string]*market.Data `json:"-"` // 不序列化，但内部使用
-	OITopDataMap     map[string]*OITopData   `json:"-"` // OI Top数据映射
-	Performance      interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
-	BTCETHLeverage   int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
-	AltcoinLeverage  int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
-	LeverageClip     LeverageClipConfig      `json:"-"` // 杠杆裁剪配置
-	MarginValidation MarginValidationConfig  `json:"-"` // 保证金预检配置
-	PromptStrategy   PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
-	AutoState        *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
+	CurrentTime                      string                  `json:"current_time"`
+	RuntimeMinutes                   int                     `json:"runtime_minutes"`
+	CallCount                        int                     `json:"call_count"`
+	Account                          AccountInfo             `json:"account"`
+	Positions                        []PositionInfo          `json:"positions"`
+	CandidateCoins                   []CandidateCoin         `json:"candidate_coins"`
+	MarketDataMap                    map[string]*market.Data `json:"-"` // 不序列化，但内部使用
+	OITopDataMap                     map[string]*OITopData   `json:"-"` // OI Top数据映射
+	Performance                      interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
+	BTCETHLeverage                   int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
+	AltcoinLeverage                  int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	AltcoinMaxPositionEquityMultiple float64                 `json:"-"` // 山寨币单币名义仓位上限：账户净值倍数（从配置读取）
+	LeverageClip                     LeverageClipConfig      `json:"-"` // 杠杆裁剪配置
+	MarginValidation                 MarginValidationConfig  `json:"-"` // 保证金预检配置
+	PromptStrategy                   PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
+	AutoState                        *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
 
 	// 成本假设（用于风控/自动止盈/校验，不传给LLM）
 	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004

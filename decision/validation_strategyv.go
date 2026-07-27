@@ -16,7 +16,6 @@ const (
 	shortTermMaxMarginForNewPosition = 70.0
 	shortTermMaxRiskPctPerTrade      = 1.0
 	shortTermMajorMaxNotionalEquity  = 2.0
-	shortTermAltMaxNotionalEquity    = 0.75
 	shortTermDefaultMinOIValueM      = 50.0
 	shortTermHardStopLossPct         = -2.5
 	shortTermTimeStopMinutes         = 90.0
@@ -118,8 +117,12 @@ func validateShortTermOpenRisk(d *Decision, ctx *Context) error {
 
 	equity := ctx.Account.TotalEquity
 	if equity > 0 {
+		altcoinMaxPositionEquityMultiple := 2.0
+		if ctx.AltcoinMaxPositionEquityMultiple > 0 {
+			altcoinMaxPositionEquityMultiple = ctx.AltcoinMaxPositionEquityMultiple
+		}
 		isMajor := isShortTermMajorSymbol(d.Symbol)
-		maxNotional := equity * shortTermAltMaxNotionalEquity
+		maxNotional := equity * altcoinMaxPositionEquityMultiple
 		if isMajor {
 			maxNotional = equity * shortTermMajorMaxNotionalEquity
 		}
