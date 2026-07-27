@@ -49,11 +49,11 @@ type StrategyV struct{}
 func (StrategyV) Name() string { return "V" }
 
 func (StrategyV) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPromptShortTerm(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.ScanIntervalMin)
+	return buildSystemPromptShortTermClosed(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.ScanIntervalMin)
 }
 
 func (StrategyV) BuildUserPrompt(ctx *Context) string {
-	return buildUserPromptShortTerm(ctx)
+	return buildUserPromptShortTermClosed(ctx)
 }
 
 func (StrategyV) GenerateAutoDecisions(ctx *Context) []Decision {
