@@ -5,6 +5,8 @@ import (
 	"math"
 	"nofx/logger"
 	"nofx/market"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,12 +25,26 @@ const (
 	shortTermMaxAbsoluteMoveATR      = 1.0
 	shortTermMinChaseMovePct         = 0.001
 	shortTermMinAbsoluteMovePct      = 0.002
+
+	shortTermMajorMinStopPct       = 0.0012
+	shortTermMajorMinStopATR       = 0.30
+	shortTermAltMinStopPct         = 0.0020
+	shortTermAltMinStopATR         = 0.40
+	shortTermMajorMaxStopPct       = 0.0060
+	shortTermMajorMaxStopATR       = 1.50
+	shortTermAltMaxStopPct         = 0.0100
+	shortTermAltMaxStopATR         = 1.80
+	shortTermMaxStopAdjustmentRate = 1.33
 )
+
+var shortTermStopAdjustmentPattern = regexp.MustCompile(`距离 ([0-9]+(?:\.[0-9]+)?)→([0-9]+(?:\.[0-9]+)?)`)
 
 // GenerateShortTermAutoDecisions 是 StrategyV 专用的自动风控层。
 // 它先复用原有自动风控/自动止盈；只有原系统未触发时，才追加短线策略特有的
 // 更紧止损、时间止损和高保证金降风险规则。该函数只由 StrategyV 调用，不改变 A/B。
 func GenerateShortTermAutoDecisions(ctx *Context) []Decision {
+	applyShortTermStopLossDistanceConfig(ctx)
+
 	if decisions := GenerateAutoDecisions(ctx); len(decisions) > 0 {
 		return decisions
 	}
@@ -78,6 +94,23 @@ func GenerateShortTermAutoDecisions(ctx *Context) []Decision {
 	}
 
 	return decisions
+}
+
+// applyShortTermStopLossDistanceConfig installs a StrategyV-only stop floor.
+// It deliberately excludes the 4h volatility floor because StrategyV trades a
+// 5-90 minute horizon. StrategyA/B keep their existing configuration untouched.
+func applyShortTermStopLossDistanceConfig(ctx *Context) {
+	if ctx == nil {
+		return
+	}
+	ctx.StopLossDistance = StopLossDistanceConfig{
+		MajorMinPct:  shortTermMajorMinStopPct,
+		MajorATRMult: shortTermMajorMinStopATR,
+		MajorVolMult: 0,
+		AltMinPct:    shortTermAltMinStopPct,
+		AltATRMult:   shortTermAltMinStopATR,
+		AltVolMult:   0,
+	}
 }
 
 // ExtraValidateShortTerm 是 StrategyV 的策略级风控校验。
@@ -144,6 +177,10 @@ func validateShortTermOpenRisk(d *Decision, ctx *Context) error {
 		return fmt.Errorf("StrategyV短线开仓缺少有效3m波动/序列数据，禁止开仓：%s", d.Symbol)
 	}
 
+	if err := validateShortTermStopGeometry(d, md); err != nil {
+		return err
+	}
+
 	if !isShortTermMajorSymbol(d.Symbol) && md.OpenInterest != nil && md.CurrentPrice > 0 {
 		minOIM := ctx.MinOIValueMillions
 		if minOIM <= 0 {
@@ -157,6 +194,48 @@ func validateShortTermOpenRisk(d *Decision, ctx *Context) error {
 
 	if !shortTermReasoningHasSetup(d.Reasoning) {
 		return fmt.Errorf("StrategyV短线开仓reasoning必须说明setup_type/why_now/time_stop/invalidation等短线要素，当前reasoning过于粗略")
+	}
+
+	return nil
+}
+
+func validateShortTermStopGeometry(d *Decision, md *market.Data) error {
+	if d == nil || md == nil || md.CurrentPrice <= 0 || md.IntradayATR14 <= 0 {
+		return nil
+	}
+
+	entryPrice := md.CurrentPrice
+	stopDist := 0.0
+	if d.Action == ActionOpenLong {
+		stopDist = entryPrice - d.StopLoss
+	} else {
+		stopDist = d.StopLoss - entryPrice
+	}
+	if stopDist <= 0 {
+		return fmt.Errorf("StrategyV止损与入场价不匹配：entry=%.4f stop=%.4f", entryPrice, d.StopLoss)
+	}
+
+	maxPct := shortTermAltMaxStopPct
+	maxATR := shortTermAltMaxStopATR
+	if isShortTermMajorSymbol(d.Symbol) {
+		maxPct = shortTermMajorMaxStopPct
+		maxATR = shortTermMajorMaxStopATR
+	}
+	maxStopDist := math.Max(entryPrice*maxPct, md.IntradayATR14*maxATR)
+	if stopDist > maxStopDist {
+		return fmt.Errorf("StrategyV短线止损过宽：distance=%.4f > max=%.4f（max(%.2f%%, %.2f×3m ATR)），拒绝把短线setup改造成更长周期交易", stopDist, maxStopDist, maxPct*100, maxATR)
+	}
+
+	matches := shortTermStopAdjustmentPattern.FindStringSubmatch(d.Reasoning)
+	if len(matches) == 3 {
+		originalDist, err1 := strconv.ParseFloat(matches[1], 64)
+		adjustedDist, err2 := strconv.ParseFloat(matches[2], 64)
+		if err1 == nil && err2 == nil && originalDist > 0 {
+			adjustmentRate := adjustedDist / originalDist
+			if adjustmentRate > shortTermMaxStopAdjustmentRate+1e-9 {
+				return fmt.Errorf("StrategyV止损需要拉宽 %.2f 倍，超过允许上限 %.2f 倍；结构失效位过近，应等待更好入场而不是改写setup", adjustmentRate, shortTermMaxStopAdjustmentRate)
+			}
+		}
 	}
 
 	return nil
