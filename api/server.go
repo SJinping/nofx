@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -282,6 +283,36 @@ func isValidExchangeSymbol(symbol string) bool {
 		}
 	}
 	return true
+}
+
+var exchangeInvalidSymbolCache = struct {
+	sync.RWMutex
+	symbols map[string]struct{}
+}{symbols: make(map[string]struct{})}
+
+func isCachedInvalidExchangeSymbol(symbol string) bool {
+	exchangeInvalidSymbolCache.RLock()
+	defer exchangeInvalidSymbolCache.RUnlock()
+	_, ok := exchangeInvalidSymbolCache.symbols[strings.ToUpper(strings.TrimSpace(symbol))]
+	return ok
+}
+
+func markInvalidExchangeSymbol(symbol string) {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	if symbol == "" {
+		return
+	}
+	exchangeInvalidSymbolCache.Lock()
+	defer exchangeInvalidSymbolCache.Unlock()
+	exchangeInvalidSymbolCache.symbols[symbol] = struct{}{}
+}
+
+func isExchangeInvalidSymbolError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "code=-1121") && strings.Contains(msg, "invalid symbol")
 }
 
 func parseTimeParamToMs(s string) (int64, error) {
@@ -777,8 +808,16 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 	}
 
 	for _, sym := range symbols {
+		if isCachedInvalidExchangeSymbol(sym) {
+			continue
+		}
 		orders, e := at.GetOrders(sym, startMs, endMs, limit)
 		if e != nil {
+			if isExchangeInvalidSymbolError(e) {
+				markInvalidExchangeSymbol(sym)
+				log.Printf("⚠️ exchange traded-symbols: skip invalid/delisted symbol and cache it: trader=%s symbol=%s err=%v", traderID, sym, e)
+				continue
+			}
 			log.Printf("⚠️ exchange traded-symbols: ListOrders failed: trader=%s symbol=%s err=%v", traderID, sym, e)
 			continue
 		}
