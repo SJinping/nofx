@@ -438,14 +438,51 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 }
 
 // ===== 自动止盈（带状态&冷却，避免每周期重复触发）=====
-// 规则（按“浮动盈亏百分比”触发，且对同一持仓分阶段只触发一次）：
-// - Stage 0 且 pnl>=1%：部分平仓 50%（Stage->1）
-// - Stage 1 且 pnl>=2%：部分平仓 30%（累计约80%，Stage->2）
-// - pnl>=4%：全部平仓（无论Stage，直接退出）
+// 规则（按“净ROI% = 价格变动% × 杠杆 - round-trip成本%”触发）：
+// - FullCloseThreshold：全部平仓（无论Stage，直接退出）
+// - Stage0Threshold 且 Stage=0：按 Stage0ClosePct 部分平仓（Stage->1）
+// - Stage1Threshold 且 Stage=1：按 Stage1ClosePct 部分平仓（Stage->2）
 //
-// 冷却：同一持仓两次自动止盈动作之间至少间隔 15 分钟。
+// BTC/ETH 可通过 auto_take_profit.major 使用单独阈值；major 未设置字段继承顶层配置。
+// 冷却：同一持仓两次自动止盈动作之间至少间隔 CooldownMinutes。
 // 说明：
 // - 仅基于 pos.UnrealizedPnLPct（该字段对多/空都为“盈利为正”口径）。
+func autoTakeProfitConfigForSymbol(symbol string, cfg AutoTakeProfitConfig) AutoTakeProfitConfig {
+	if cfg.Stage0Threshold <= 0 {
+		major := cfg.Major
+		cfg = DefaultAutoTakeProfitConfig()
+		cfg.Major = major
+	}
+	if isMajorSymbol(symbol) && cfg.Major != nil {
+		major := mergeDecisionAutoTakeProfitConfig(cfg, *cfg.Major)
+		major.Major = nil
+		return major
+	}
+	return cfg
+}
+
+func mergeDecisionAutoTakeProfitConfig(base AutoTakeProfitConfig, override AutoTakeProfitConfig) AutoTakeProfitConfig {
+	if override.Stage0Threshold > 0 {
+		base.Stage0Threshold = override.Stage0Threshold
+	}
+	if override.Stage0ClosePct > 0 {
+		base.Stage0ClosePct = override.Stage0ClosePct
+	}
+	if override.Stage1Threshold > 0 {
+		base.Stage1Threshold = override.Stage1Threshold
+	}
+	if override.Stage1ClosePct > 0 {
+		base.Stage1ClosePct = override.Stage1ClosePct
+	}
+	if override.FullCloseThreshold > 0 {
+		base.FullCloseThreshold = override.FullCloseThreshold
+	}
+	if override.CooldownMinutes > 0 {
+		base.CooldownMinutes = override.CooldownMinutes
+	}
+	return base
+}
+
 func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 	var decisions []Decision
 
@@ -453,14 +490,6 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 	if ctx == nil || ctx.AutoState == nil || ctx.AutoState.TP == nil {
 		return nil
 	}
-
-	// 从配置读取止盈参数，零值使用默认
-	tpCfg := ctx.AutoTakeProfit
-	if tpCfg.Stage0Threshold <= 0 {
-		tpCfg = DefaultAutoTakeProfitConfig()
-	}
-
-	cooldownMs := int64(tpCfg.CooldownMinutes) * 60 * 1000
 
 	// 成本假设：用于把“价格涨跌%”换算成“净ROI%（保证金口径）”
 	taker := 0.0004
@@ -478,6 +507,9 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		if pricePct <= 0 {
 			continue
 		}
+
+		tpCfg := autoTakeProfitConfigForSymbol(pos.Symbol, ctx.AutoTakeProfit)
+		cooldownMs := int64(tpCfg.CooldownMinutes) * 60 * 1000
 
 		posKey := pos.Symbol + "_" + strings.ToLower(pos.Side)
 		st := ctx.AutoState.TP[posKey]

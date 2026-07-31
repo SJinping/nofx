@@ -376,6 +376,31 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		if atp.CooldownMinutes > 0 {
 			atpMap["cooldown_minutes"] = atp.CooldownMinutes
 		}
+		if atp.Major != nil {
+			majorMap, _ := atpMap["major"].(map[string]interface{})
+			if majorMap == nil {
+				majorMap = make(map[string]interface{})
+			}
+			if atp.Major.Stage0Threshold > 0 {
+				majorMap["stage0_threshold"] = atp.Major.Stage0Threshold
+			}
+			if atp.Major.Stage0ClosePct > 0 {
+				majorMap["stage0_close_pct"] = atp.Major.Stage0ClosePct
+			}
+			if atp.Major.Stage1Threshold > 0 {
+				majorMap["stage1_threshold"] = atp.Major.Stage1Threshold
+			}
+			if atp.Major.Stage1ClosePct > 0 {
+				majorMap["stage1_close_pct"] = atp.Major.Stage1ClosePct
+			}
+			if atp.Major.FullCloseThreshold > 0 {
+				majorMap["full_close_threshold"] = atp.Major.FullCloseThreshold
+			}
+			if atp.Major.CooldownMinutes > 0 {
+				majorMap["cooldown_minutes"] = atp.Major.CooldownMinutes
+			}
+			atpMap["major"] = majorMap
+		}
 		raw["auto_take_profit"] = atpMap
 	}
 
@@ -712,28 +737,35 @@ func convertStopLossDistanceConfig(cfg config.StopLossDistanceConfig) decision.S
 // convertAutoTakeProfitConfig 将配置层的自动止盈参数转换为decision层结构体
 // 零值字段使用默认值
 func convertAutoTakeProfitConfig(cfg config.AutoTakeProfitConfig) decision.AutoTakeProfitConfig {
-	defaults := decision.DefaultAutoTakeProfitConfig()
+	base := mergeAutoTakeProfitConfig(decision.DefaultAutoTakeProfitConfig(), cfg)
+	if cfg.Major != nil {
+		major := mergeAutoTakeProfitConfig(base, *cfg.Major)
+		major.Major = nil
+		base.Major = &major
+	}
+	return base
+}
 
+func mergeAutoTakeProfitConfig(base decision.AutoTakeProfitConfig, cfg config.AutoTakeProfitConfig) decision.AutoTakeProfitConfig {
 	if cfg.Stage0Threshold > 0 {
-		defaults.Stage0Threshold = cfg.Stage0Threshold
+		base.Stage0Threshold = cfg.Stage0Threshold
 	}
 	if cfg.Stage0ClosePct > 0 {
-		defaults.Stage0ClosePct = cfg.Stage0ClosePct
+		base.Stage0ClosePct = cfg.Stage0ClosePct
 	}
 	if cfg.Stage1Threshold > 0 {
-		defaults.Stage1Threshold = cfg.Stage1Threshold
+		base.Stage1Threshold = cfg.Stage1Threshold
 	}
 	if cfg.Stage1ClosePct > 0 {
-		defaults.Stage1ClosePct = cfg.Stage1ClosePct
+		base.Stage1ClosePct = cfg.Stage1ClosePct
 	}
 	if cfg.FullCloseThreshold > 0 {
-		defaults.FullCloseThreshold = cfg.FullCloseThreshold
+		base.FullCloseThreshold = cfg.FullCloseThreshold
 	}
 	if cfg.CooldownMinutes > 0 {
-		defaults.CooldownMinutes = cfg.CooldownMinutes
+		base.CooldownMinutes = cfg.CooldownMinutes
 	}
-
-	return defaults
+	return base
 }
 
 func convertLeverageClipConfig(cfg config.LeverageClipConfig) decision.LeverageClipConfig {

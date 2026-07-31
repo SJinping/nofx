@@ -124,12 +124,13 @@ type MarginValidationConfig struct {
 // AutoTakeProfitConfig 自动止盈配置
 // 净ROI = 价格变动% × 杠杆 - round-trip成本%
 type AutoTakeProfitConfig struct {
-	Stage0Threshold    float64 `json:"stage0_threshold"`     // Stage0 触发净ROI%（默认1.0）
-	Stage0ClosePct     float64 `json:"stage0_close_pct"`     // Stage0 平仓比例%（默认50）
-	Stage1Threshold    float64 `json:"stage1_threshold"`     // Stage1 触发净ROI%（默认2.0）
-	Stage1ClosePct     float64 `json:"stage1_close_pct"`     // Stage1 平仓比例%（默认30）
-	FullCloseThreshold float64 `json:"full_close_threshold"` // 全部平仓净ROI%（默认4.0）
-	CooldownMinutes    int     `json:"cooldown_minutes"`     // 同一持仓两次止盈间隔（默认15分钟）
+	Stage0Threshold    float64               `json:"stage0_threshold"`     // Stage0 触发净ROI%（默认10.0）
+	Stage0ClosePct     float64               `json:"stage0_close_pct"`     // Stage0 平仓比例%（默认35）
+	Stage1Threshold    float64               `json:"stage1_threshold"`     // Stage1 触发净ROI%（默认15.0）
+	Stage1ClosePct     float64               `json:"stage1_close_pct"`     // Stage1 平仓比例%（默认35）
+	FullCloseThreshold float64               `json:"full_close_threshold"` // 全部平仓净ROI%（默认22.0）
+	CooldownMinutes    int                   `json:"cooldown_minutes"`     // 同一持仓两次止盈间隔（默认30分钟）
+	Major              *AutoTakeProfitConfig `json:"major,omitempty"`      // BTC/ETH 专用自动止盈配置；未设置字段继承顶层配置
 }
 
 // DefaultAutoTakeProfitConfig 返回默认的自动止盈配置
