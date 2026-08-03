@@ -225,10 +225,15 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	sb.WriteString("**在考虑平仓前，你必须逐条检查**：\n")
 	sb.WriteString("1. 入场时的技术逻辑（如4h趋势方向、关键支撑/阻力、形态）是否已被**彻底推翻**？\n")
 	sb.WriteString("2. 价格是否已经触及或跌破/涨破止损价？\n")
-	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到 → **默认 hold**，除非出现以下例外：\n")
+	sb.WriteString("3. 如果 (1) 入场逻辑未变 且 (2) 止损未到，可以保留核心仓位，但不等于必须完整 hold。已有明显浮盈且接近关键支撑/阻力、动能衰减或利润大幅回吐时，应优先考虑 `partial_close` 或 `update_stop_loss`：\n")
 	sb.WriteString("   - 突发事件导致波动范式突变\n")
 	sb.WriteString("   - 强平风险显著上升或保证金不足\n")
-	sb.WriteString(fmt.Sprintf("4. **不要用%d分钟级别的RSI/MACD短期波动来推翻4小时级别的入场判断**\n\n", market.ShortTermBarIntervalMinutes))
+	sb.WriteString("   - 多单接近重要阻力、空单接近重要支撑且短线动能衰减\n")
+	sb.WriteString("   - 当前利润已从本轮最大浮盈明显回撤，需要保护已经获得的收益\n")
+	sb.WriteString(fmt.Sprintf("4. **不要只用%d分钟级别的RSI/MACD短期波动全平4小时级别仓位**；但短线结构可以作为部分止盈或收紧止损的依据。\n", market.ShortTermBarIntervalMinutes))
+	sb.WriteString("5. `partial_close` 是按当前剩余仓位比例市价减仓。通常使用 25%~50%，保留 runner 追求趋势目标；禁止把 100% 写成 partial_close。\n")
+	sb.WriteString("6. `update_stop_loss` 只能收紧风险，不能把已有保护止损向亏损方向放宽。系统自动 breakeven/trailing 建立的保护底线优先于 AI。\n")
+	sb.WriteString("7. `update_take_profit` 用于把不现实的远端目标调整到新的结构目标；不要把它当作取消阶段性止盈的理由。\n\n")
 
 	// === 输出格式 ===
 	sb.WriteString("# 📤 输出格式\n\n")
@@ -240,13 +245,16 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 		"  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": 3000, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n",
 		btcEthLeverage,
 	))
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
+	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"partial_close\", \"close_percentage\": 35, \"reasoning\": \"接近4h阻力且动能减弱，先兑现部分利润并保留趋势仓位\"},\n")
+	sb.WriteString("  {\"symbol\": \"SOLUSDT\", \"action\": \"update_stop_loss\", \"new_stop_loss\": 145.2, \"reasoning\": \"已有浮盈，收紧止损保护利润\"}\n")
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("**字段说明**:\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
+	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | partial_close | update_stop_loss | update_take_profit | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
 	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
-	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short等涉及币种仓位的操作时，`symbol`字段必填\n")
+	sb.WriteString("- `partial_close`: 必须提供 `close_percentage` (0-100)，系统按市价减仓并以真实成交数量为准\n")
+	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`；`update_take_profit`: 必须提供 `new_take_profit`\n")
+	sb.WriteString("- `symbol`: 当决策为open_long | open_short | close_long | close_short | partial_close | update_stop_loss | update_take_profit等涉及币种仓位的操作时，`symbol`字段必填\n")
 	sb.WriteString("	`symbol`如果有值，则必须符合以下规则：必须严格从\"当前持仓列表\"和\"候选币种列表\"中选择，必须与你的决策思维对应，不允许虚构币种\n\n")
 
 	// === 系统自动风控机制 ===
@@ -670,6 +678,7 @@ func buildUserPrompt(ctx *Context) string {
 			}
 			// 入场论据（供 LLM 对比是否应继续持有）
 			sb.WriteString(formatEntryThesis(pos))
+			sb.WriteString(formatPositionRiskState(ctx, pos))
 		}
 	} else {
 		sb.WriteString("**当前持仓**: 无\n\n")
@@ -709,6 +718,35 @@ func buildUserPrompt(ctx *Context) string {
 	sb.WriteString("现在请分析并输出决策（思维链 + JSON）\n")
 
 	return sb.String()
+}
+
+func formatPositionRiskState(ctx *Context, pos PositionInfo) string {
+	if ctx == nil || ctx.AutoState == nil || ctx.AutoState.TP == nil {
+		return ""
+	}
+	st := ctx.AutoState.TP[pos.Symbol+"_"+strings.ToLower(pos.Side)]
+	if st == nil {
+		return ""
+	}
+	mfeR := 0.0
+	initialStop := st.InitialStop
+	if initialStop <= 0 {
+		initialStop = pos.EntryStopLoss
+	}
+	risk := 0.0
+	favorable := 0.0
+	if strings.ToLower(pos.Side) == "long" {
+		risk = pos.EntryPrice - initialStop
+		favorable = st.BestPrice - pos.EntryPrice
+	} else {
+		risk = initialStop - pos.EntryPrice
+		favorable = pos.EntryPrice - st.BestPrice
+	}
+	if risk > 0 && favorable > 0 {
+		mfeR = favorable / risk
+	}
+	return fmt.Sprintf("**仓位管理状态**: Stage=%d | MFE=%.2fR | 已实现净收益估算=%+.2f USDT | protected_stop=%.4f | trailing=%t。AI只能维持或加强该保护，不能放宽。\n\n",
+		st.Stage, mfeR, st.RealizedNetPnL, st.CurrentStop, st.TrailingActive)
 }
 
 // formatEntryThesis 格式化持仓的入场论据（供 LLM 对比当前状态）
@@ -1366,6 +1404,8 @@ func formatAutoEvents(events []AutoEventSummary) string {
 		sourceLabel := "自动止盈"
 		if ev.Source == "auto_stop_loss" {
 			sourceLabel = "自动止损"
+		} else if ev.Source == "auto_trailing_stop" {
+			sourceLabel = "自动追踪止损"
 		}
 		actionLabel := ev.Action
 		switch ev.Action {

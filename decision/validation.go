@@ -164,6 +164,26 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 			}
 		}
 
+		// 已建立的 protected stop 只能继续收紧，AI 和自动规则都不能向亏损方向放宽。
+		if ctx != nil && ctx.AutoState != nil && ctx.AutoState.TP != nil {
+			for _, p := range ctx.Positions {
+				if p.Symbol != d.Symbol {
+					continue
+				}
+				st := ctx.AutoState.TP[p.Symbol+"_"+strings.ToLower(p.Side)]
+				if st == nil || st.CurrentStop <= 0 {
+					break
+				}
+				if strings.ToLower(p.Side) == "long" && d.NewStopLoss < st.CurrentStop {
+					return fmt.Errorf("update_stop_loss 不得放宽多仓保护止损：当前 %.4f，新值 %.4f", st.CurrentStop, d.NewStopLoss)
+				}
+				if strings.ToLower(p.Side) == "short" && d.NewStopLoss > st.CurrentStop {
+					return fmt.Errorf("update_stop_loss 不得放宽空仓保护止损：当前 %.4f，新值 %.4f", st.CurrentStop, d.NewStopLoss)
+				}
+				break
+			}
+		}
+
 		// ✅ 额外硬约束：避免止损贴得太近导致3分钟噪声“瞬间触发”
 		// - 需要知道当前价与持仓方向（从 ctx.Positions 推断）
 		// - 只做“最小距离”校验，不限制你把止损放得更远（更宽松）的情况
@@ -461,6 +481,11 @@ func autoTakeProfitConfigForSymbol(symbol string, cfg AutoTakeProfitConfig) Auto
 	return cfg
 }
 
+// ResolveAutoTakeProfitConfig 返回指定币种最终生效的自动止盈配置，供执行层重建保护单使用。
+func ResolveAutoTakeProfitConfig(symbol string, cfg AutoTakeProfitConfig) AutoTakeProfitConfig {
+	return autoTakeProfitConfigForSymbol(symbol, cfg)
+}
+
 func mergeDecisionAutoTakeProfitConfig(base AutoTakeProfitConfig, override AutoTakeProfitConfig) AutoTakeProfitConfig {
 	if override.Stage0Threshold > 0 {
 		base.Stage0Threshold = override.Stage0Threshold
@@ -479,6 +504,21 @@ func mergeDecisionAutoTakeProfitConfig(base AutoTakeProfitConfig, override AutoT
 	}
 	if override.CooldownMinutes > 0 {
 		base.CooldownMinutes = override.CooldownMinutes
+	}
+	if override.BreakevenEnabled {
+		base.BreakevenEnabled = true
+	}
+	if override.BreakevenFloorUSDT > 0 {
+		base.BreakevenFloorUSDT = override.BreakevenFloorUSDT
+	}
+	if override.TrailingEnabled {
+		base.TrailingEnabled = true
+	}
+	if override.TrailingDistancePct > 0 {
+		base.TrailingDistancePct = override.TrailingDistancePct
+	}
+	if override.TrailingMinUpdatePct > 0 {
+		base.TrailingMinUpdatePct = override.TrailingMinUpdatePct
 	}
 	return base
 }
@@ -514,16 +554,25 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		posKey := pos.Symbol + "_" + strings.ToLower(pos.Side)
 		st := ctx.AutoState.TP[posKey]
 		if st == nil {
-			st = &AutoTPState{Stage: 0, LastActionTimeMs: 0, BaselineEntry: pos.EntryPrice, BaselineQty: pos.Quantity}
+			st = &AutoTPState{
+				Stage: 0, LastActionTimeMs: 0, BaselineEntry: pos.EntryPrice, BaselineQty: pos.Quantity,
+				InitialStop: pos.EntryStopLoss, CurrentStop: pos.EntryStopLoss,
+				CurrentTakeProfit: pos.EntryTakeProfit, BestPrice: pos.MarkPrice,
+			}
 			ctx.AutoState.TP[posKey] = st
 		}
-
-		// 冷却检查
-		if st.LastActionTimeMs > 0 {
-			nowMs := time.Now().UnixMilli()
-			if nowMs-st.LastActionTimeMs < cooldownMs {
-				continue
-			}
+		if st.BestPrice <= 0 {
+			st.BestPrice = pos.MarkPrice
+		} else if strings.ToLower(pos.Side) == "long" && pos.MarkPrice > st.BestPrice {
+			st.BestPrice = pos.MarkPrice
+		} else if strings.ToLower(pos.Side) == "short" && pos.MarkPrice < st.BestPrice {
+			st.BestPrice = pos.MarkPrice
+		}
+		if st.CurrentStop <= 0 && pos.EntryStopLoss > 0 {
+			st.CurrentStop = pos.EntryStopLoss
+		}
+		if st.CurrentTakeProfit <= 0 && pos.EntryTakeProfit > 0 {
+			st.CurrentTakeProfit = pos.EntryTakeProfit
 		}
 
 		// 计算“净ROI%（保证金口径）”
@@ -550,7 +599,48 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 			continue
 		}
 
+		// TP2 后代码级 trailing：基于持仓后的最佳价格，只允许向盈利方向收紧止损。
+		if st.Stage >= 2 && st.TrailingActive && tpCfg.TrailingEnabled && tpCfg.TrailingDistancePct > 0 {
+			candidate := 0.0
+			if strings.ToLower(pos.Side) == "long" {
+				candidate = st.BestPrice * (1 - tpCfg.TrailingDistancePct/100)
+			} else {
+				candidate = st.BestPrice * (1 + tpCfg.TrailingDistancePct/100)
+			}
+			improvementPct := 0.0
+			if st.CurrentStop > 0 {
+				if strings.ToLower(pos.Side) == "long" {
+					improvementPct = (candidate - st.CurrentStop) / st.CurrentStop * 100
+				} else {
+					improvementPct = (st.CurrentStop - candidate) / st.CurrentStop * 100
+				}
+			}
+			validSide := (strings.ToLower(pos.Side) == "long" && candidate > st.CurrentStop && candidate < pos.MarkPrice) ||
+				(strings.ToLower(pos.Side) == "short" && (st.CurrentStop <= 0 || candidate < st.CurrentStop) && candidate > pos.MarkPrice)
+			minImprovement := tpCfg.TrailingMinUpdatePct
+			if minImprovement <= 0 {
+				minImprovement = 0.15
+			}
+			if validSide && (st.CurrentStop <= 0 || improvementPct >= minImprovement) {
+				decisions = append(decisions, Decision{
+					Symbol:         pos.Symbol,
+					Action:         ActionUpdateStopLoss,
+					NewStopLoss:    candidate,
+					Reasoning:      fmt.Sprintf("代码级trailing：Stage=%d，最佳价=%.4f，距离=%.2f%%，保护止损 %.4f→%.4f", st.Stage, st.BestPrice, tpCfg.TrailingDistancePct, st.CurrentStop, candidate),
+					Confidence:     100,
+					DecisionSource: "auto_trailing_stop",
+				})
+				continue
+			}
+		}
+
 		// 分阶段止盈：只触发一次
+		if st.LastActionTimeMs > 0 {
+			nowMs := time.Now().UnixMilli()
+			if nowMs-st.LastActionTimeMs < cooldownMs {
+				continue
+			}
+		}
 		if st.Stage <= 0 && netROIPct >= tpCfg.Stage0Threshold {
 			decisions = append(decisions, Decision{
 				Symbol:          pos.Symbol,

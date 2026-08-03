@@ -976,6 +976,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 				LastActionTimeMs: 0,
 				BaselineEntry:    ep,
 				BaselineQty:      qty,
+				BestPrice:        mp,
 			}
 		} else {
 			// 加仓/均价变化阈值（经验值）
@@ -993,6 +994,9 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 				st.LastActionTimeMs = 0
 				st.BaselineEntry = ep
 				st.BaselineQty = qty
+				st.BestPrice = mp
+				st.RealizedNetPnL = 0
+				st.TrailingActive = false
 			}
 		}
 
@@ -1023,6 +1027,18 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 				positionInfos[i].EntryStopLoss = ep.StopLoss
 				positionInfos[i].EntryTakeProfit = ep.TakeProfit
 				positionInfos[i].EntryConfidence = ep.EntryConfidence
+				posKey := positionInfos[i].Symbol + "_" + strings.ToLower(positionInfos[i].Side)
+				if st := at.autoDecisionState.TP[posKey]; st != nil {
+					if st.InitialStop <= 0 {
+						st.InitialStop = ep.StopLoss
+					}
+					if st.CurrentStop <= 0 {
+						st.CurrentStop = ep.StopLoss
+					}
+					if st.CurrentTakeProfit <= 0 {
+						st.CurrentTakeProfit = ep.TakeProfit
+					}
+				}
 			}
 		}
 	}
@@ -1103,7 +1119,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			if !act.Success {
 				continue
 			}
-			if act.DecisionSource != "auto_stop_loss" && act.DecisionSource != "auto_take_profit" {
+			if act.DecisionSource != "auto_stop_loss" && act.DecisionSource != "auto_take_profit" && act.DecisionSource != "auto_trailing_stop" {
 				continue
 			}
 			recentAutoEvents = append(recentAutoEvents, decision.AutoEventSummary{
@@ -1432,40 +1448,40 @@ func (at *AutoTrader) executeDecisionWithRecord(ctx *decision.Context, dec *deci
 }
 
 // executeOpenWithRecord 执行开仓并记录详细信息
-func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, decision *decision.Decision, actionRecord *logger.DecisionAction, side string) error {
+func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, dec *decision.Decision, actionRecord *logger.DecisionAction, side string) error {
 	positionSide, sideName, icon, err := normalizeTradeSide(side)
 	if err != nil {
 		return err
 	}
-	log.Printf("  %s 开%s仓: %s", icon, sideName, decision.Symbol)
+	log.Printf("  %s 开%s仓: %s", icon, sideName, dec.Symbol)
 
 	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
-			if pos["symbol"] == decision.Symbol && pos["side"] == side {
-				return fmt.Errorf("❌ %s 已有%s仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_%s 决策", decision.Symbol, sideName, side)
+			if pos["symbol"] == dec.Symbol && pos["side"] == side {
+				return fmt.Errorf("❌ %s 已有%s仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_%s 决策", dec.Symbol, sideName, side)
 			}
 		}
 	}
 
 	// 获取当前价格。开仓需要用价格计算下单数量，因此仍是硬依赖。
-	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	currentPrice, err := at.trader.GetMarketPrice(dec.Symbol)
 	if err != nil {
 		return err
 	}
 
 	// 计算数量
-	quantity := decision.PositionSizeUSD / currentPrice
+	quantity := dec.PositionSizeUSD / currentPrice
 	actionRecord.Quantity = quantity
 	actionRecord.Price = currentPrice
 
 	// 开仓
 	var order map[string]interface{}
 	if side == "long" {
-		order, err = at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
+		order, err = at.trader.OpenLong(dec.Symbol, quantity, dec.Leverage)
 	} else {
-		order, err = at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
+		order, err = at.trader.OpenShort(dec.Symbol, quantity, dec.Leverage)
 	}
 	if err != nil {
 		return err
@@ -1479,19 +1495,31 @@ func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, decision *dec
 	log.Printf("  ✓ 开仓成功，订单ID: %v, 数量: %.4f", order["orderId"], quantity)
 
 	// 记录开仓时间
-	posKey := decision.Symbol + "_" + side
+	posKey := dec.Symbol + "_" + side
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+	if at.autoDecisionState.TP == nil {
+		at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
+	}
+	at.autoDecisionState.TP[posKey] = &decision.AutoTPState{
+		Stage:             0,
+		BaselineEntry:     currentPrice,
+		BaselineQty:       quantity,
+		InitialStop:       dec.StopLoss,
+		CurrentStop:       dec.StopLoss,
+		CurrentTakeProfit: dec.TakeProfit,
+		BestPrice:         currentPrice,
+	}
 
 	// ✅ 创建 TradeEpisode（开仓成功后）
 	if at.tradeMemory != nil {
-		at.tradeMemory.OnOpenSuccess(ctx, decision, quantity, currentPrice)
+		at.tradeMemory.OnOpenSuccess(ctx, dec, quantity, currentPrice)
 	}
 
 	// 设置止损止盈
-	if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
+	if err := at.trader.SetStopLoss(dec.Symbol, positionSide, quantity, dec.StopLoss); err != nil {
 		log.Printf("  ⚠ 设置止损失败: %v", err)
 	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.TakeProfit); err != nil {
+	if err := at.trader.SetTakeProfit(dec.Symbol, positionSide, quantity, dec.TakeProfit); err != nil {
 		log.Printf("  ⚠ 设置止盈失败: %v", err)
 	}
 
@@ -1549,11 +1577,9 @@ func (at *AutoTrader) executeCloseWithRecord(ctx *decision.Context, decision *de
 		log.Printf("  ⚠ 平仓成交价不可用，跳过TradeRecord写入: %s", decision.Symbol)
 	}
 
-	// 自动止盈的全平：清理状态，防止残留
-	if decision.DecisionSource == "auto_take_profit" {
-		posKey := decision.Symbol + "_" + side
-		delete(at.autoDecisionState.TP, posKey)
-	}
+	// 全平后无论来源都清理仓位管理状态，防止下一笔同币种交易继承旧阶段。
+	posKey := decision.Symbol + "_" + side
+	delete(at.autoDecisionState.TP, posKey)
 	return nil
 }
 
@@ -1650,6 +1676,9 @@ func orderFillPrice(order map[string]interface{}) float64 {
 	if executedQty > 0 && cumQuote > 0 {
 		return cumQuote / executedQty
 	}
+	if price := floatFromInterface(order["price"]); price > 0 {
+		return price
+	}
 	return 0
 }
 
@@ -1723,11 +1752,28 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 		return fmt.Errorf("未知持仓方向: %s", side)
 	}
 
+	// 决策预校验后，同一批中的 partial_close 可能刚建立了更严格的 breakeven。
+	// 下单前必须再次读取最新状态，防止后续 update_stop_loss 把它放宽。
+	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil && st.CurrentStop > 0 {
+		if side == "long" && decision.NewStopLoss < st.CurrentStop {
+			return fmt.Errorf("拒绝放宽多仓保护止损：当前 %.4f，新值 %.4f", st.CurrentStop, decision.NewStopLoss)
+		}
+		if side == "short" && decision.NewStopLoss > st.CurrentStop {
+			return fmt.Errorf("拒绝放宽空仓保护止损：当前 %.4f，新值 %.4f", st.CurrentStop, decision.NewStopLoss)
+		}
+	}
+
 	// 更新止损
 	// TODO: 如果有旧止损单，需要先取消旧止损单
 	positionSide := strings.ToUpper(side)
 	if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.NewStopLoss); err != nil {
 		return fmt.Errorf("设置止损失败: %w", err)
+	}
+	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil {
+		st.CurrentStop = decision.NewStopLoss
+		if decision.DecisionSource == "auto_trailing_stop" {
+			st.LastStopUpdateTimeMs = time.Now().UnixMilli()
+		}
 	}
 
 	log.Printf("  ✓ 止损更新成功")
@@ -1803,6 +1849,9 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 	if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.NewTakeProfit); err != nil {
 		return fmt.Errorf("设置止盈失败: %w", err)
 	}
+	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil {
+		st.CurrentTakeProfit = decision.NewTakeProfit
+	}
 
 	log.Printf("  ✓ 止盈更新成功")
 	return nil
@@ -1854,12 +1903,12 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 	}
 	actionRecord.Quantity = closeQuantity
 
-	// 执行部分平仓
+	// 执行部分减仓。Reduce* 不得清理剩余仓位的保护单；成交后会按真实余量重建。
 	var order map[string]interface{}
 	if side == "long" {
-		order, err = at.trader.CloseLong(dec.Symbol, closeQuantity)
+		order, err = at.trader.ReduceLong(dec.Symbol, closeQuantity)
 	} else if side == "short" {
-		order, err = at.trader.CloseShort(dec.Symbol, closeQuantity)
+		order, err = at.trader.ReduceShort(dec.Symbol, closeQuantity)
 	} else {
 		return fmt.Errorf("未知的持仓方向: %s", side)
 	}
@@ -1872,39 +1921,164 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 	if orderID, ok := order["orderId"].(int64); ok {
 		actionRecord.OrderID = orderID
 	}
-	if fillPrice := orderFillPrice(order); fillPrice > 0 {
+	fillPrice := orderFillPrice(order)
+	if fillPrice > 0 {
 		actionRecord.Price = fillPrice
+	} else {
+		fillPrice = currentPrice
 	}
 
 	log.Printf("  ✓ 部分平仓成功，平仓数量: %.4f (%.0f%%)", closeQuantity, dec.ClosePercentage)
 
-	// 平仓后，如果还有剩余持仓，可能需要更新止损止盈的数量
+	// 以交易所真实仓位为准，避免数量精度、部分成交或并发操作造成估算偏差。
 	remainingQuantity := quantity - closeQuantity
-	if remainingQuantity > 0 {
-		log.Printf("  ℹ️ 剩余持仓数量: %.4f", remainingQuantity)
+	if live, liveQty, liveErr := at.getLivePositionForExit(dec.Symbol, side); liveErr == nil {
+		remainingQuantity = liveQty
+		targetPosition = live
+	} else if remainingQuantity < 0 {
+		remainingQuantity = 0
+	}
+	log.Printf("  ℹ️ 剩余持仓数量: %.4f", remainingQuantity)
+
+	posKey := dec.Symbol + "_" + strings.ToLower(side)
+	if at.autoDecisionState.TP == nil {
+		at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
+	}
+	st := at.autoDecisionState.TP[posKey]
+	if st == nil {
+		entry := floatFromInterface(targetPosition["entryPrice"])
+		st = &decision.AutoTPState{BaselineEntry: entry, BaselineQty: quantity, BestPrice: currentPrice}
+		at.autoDecisionState.TP[posKey] = st
+	}
+	if st.BaselineEntry <= 0 {
+		st.BaselineEntry = floatFromInterface(targetPosition["entryPrice"])
+	}
+	if st.BaselineQty <= 0 {
+		st.BaselineQty = quantity
 	}
 
-	// ✅ 自动止盈状态更新：只有在真实执行成功后才推进TP阶段
-	// 由于 partial_close 决策本身不携带 side，这里复用已解析出的 side。
+	// 用真实/估算成交价累计部分平仓净收益，供整笔交易级 breakeven 计算。
+	closedQty := quantity - remainingQuantity
+	if closedQty <= 0 {
+		closedQty = closeQuantity
+	}
+	st.RealizedNetPnL += estimatePartialCloseNetPnL(strings.ToLower(side), st.BaselineEntry, fillPrice, closedQty,
+		at.config.AssumedTakerFeeRate+at.config.AssumedSlippageRate)
+
+	tpCfg := decision.ResolveAutoTakeProfitConfig(dec.Symbol, at.runtimeCfg.Get().AutoTakeProfit)
+	oldStage := st.Stage
 	if dec.DecisionSource == "auto_take_profit" {
-		posKey := dec.Symbol + "_" + side
-		if at.autoDecisionState.TP == nil {
-			at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
-		}
-		st, ok := at.autoDecisionState.TP[posKey]
-		if !ok || st == nil {
-			st = &decision.AutoTPState{}
-			at.autoDecisionState.TP[posKey] = st
-		}
-		// 阶段推进：每次 auto_take_profit 的 partial_close 成功执行就推进一档
-		if st.Stage < 0 {
-			st.Stage = 0
-		}
 		st.Stage++
-		st.LastActionTimeMs = time.Now().UnixMilli()
+	} else if st.BaselineQty > 0 {
+		remainingRatio := remainingQuantity / st.BaselineQty
+		stage1Remaining := 1 - tpCfg.Stage0ClosePct/100
+		stage2Remaining := stage1Remaining * (1 - tpCfg.Stage1ClosePct/100)
+		if remainingRatio <= stage2Remaining+1e-6 {
+			if st.Stage < 2 {
+				st.Stage = 2
+			}
+		} else if remainingRatio <= stage1Remaining+1e-6 {
+			if st.Stage < 1 {
+				st.Stage = 1
+			}
+		}
+	}
+	st.LastActionTimeMs = time.Now().UnixMilli()
+	if st.Stage >= 2 {
+		st.TrailingActive = tpCfg.TrailingEnabled
+	}
+
+	// TP1（或等量 AI 主动减仓）后，把剩余仓位保护到整笔交易级 breakeven。
+	previousStop := st.CurrentStop
+	desiredStop := previousStop
+	if desiredStop <= 0 {
+		desiredStop = st.InitialStop
+	}
+	if oldStage < 1 && st.Stage >= 1 && tpCfg.BreakevenEnabled && remainingQuantity > 0 {
+		if beStop := calculateEpisodeBreakevenStop(strings.ToLower(side), st.BaselineEntry, remainingQuantity,
+			st.RealizedNetPnL, tpCfg.BreakevenFloorUSDT, at.config.AssumedTakerFeeRate+at.config.AssumedSlippageRate); beStop > 0 {
+			if desiredStop <= 0 || (side == "long" && beStop > desiredStop) || (side == "short" && beStop < desiredStop) {
+				desiredStop = beStop
+			}
+		}
+	}
+
+	// 部分成交后按真实余量重建 SL/TP；任一失败都明确记录，但不重试减仓动作。
+	var protectionErrors []string
+	positionSide := strings.ToUpper(side)
+	markPrice := floatFromInterface(targetPosition["markPrice"])
+	if markPrice <= 0 {
+		markPrice = currentPrice
+	}
+	if desiredStop > 0 && remainingQuantity > 0 {
+		validStop := (side == "long" && desiredStop < markPrice) || (side == "short" && desiredStop > markPrice)
+		if !validStop {
+			protectionErrors = append(protectionErrors, fmt.Sprintf("breakeven/止损价 %.4f 对当前价 %.4f 无效", desiredStop, markPrice))
+		} else if err := at.trader.SetStopLoss(dec.Symbol, positionSide, remainingQuantity, desiredStop); err != nil {
+			// SetStopLoss 可能已经撤掉旧单；尝试立即恢复上一档保护，避免剩余仓位裸奔。
+			fallbackStop := previousStop
+			if fallbackStop <= 0 {
+				fallbackStop = st.InitialStop
+			}
+			if fallbackStop > 0 {
+				if fallbackErr := at.trader.SetStopLoss(dec.Symbol, positionSide, remainingQuantity, fallbackStop); fallbackErr == nil {
+					st.CurrentStop = fallbackStop
+					protectionErrors = append(protectionErrors, fmt.Sprintf("新止损 %.4f 设置失败，已恢复旧保护 %.4f: %v", desiredStop, fallbackStop, err))
+				} else {
+					protectionErrors = append(protectionErrors, fmt.Sprintf("重建止损失败且恢复旧保护失败: new=%v fallback=%v", err, fallbackErr))
+				}
+			} else {
+				protectionErrors = append(protectionErrors, "重建止损失败: "+err.Error())
+			}
+		} else {
+			st.CurrentStop = desiredStop
+		}
+	}
+	if st.CurrentTakeProfit > 0 && remainingQuantity > 0 {
+		if err := at.trader.SetTakeProfit(dec.Symbol, positionSide, remainingQuantity, st.CurrentTakeProfit); err != nil {
+			protectionErrors = append(protectionErrors, "重建止盈失败: "+err.Error())
+		}
+	}
+	if len(protectionErrors) > 0 {
+		warning := "部分平仓已成交，但保护单未完整重建: " + strings.Join(protectionErrors, "; ")
+		log.Printf("  🚨 %s", warning)
+		actionRecord.Error = warning
 	}
 
 	return nil
+}
+
+func estimatePartialCloseNetPnL(side string, entryPrice, fillPrice, quantity, oneWayCostRate float64) float64 {
+	if entryPrice <= 0 || fillPrice <= 0 || quantity <= 0 {
+		return 0
+	}
+	gross := (fillPrice - entryPrice) * quantity
+	if side == "short" {
+		gross = -gross
+	}
+	if oneWayCostRate < 0 {
+		oneWayCostRate = 0
+	}
+	return gross - (entryPrice+fillPrice)*quantity*oneWayCostRate
+}
+
+func calculateEpisodeBreakevenStop(side string, entryPrice, remainingQty, realizedNetPnL, floorUSDT, oneWayCostRate float64) float64 {
+	if entryPrice <= 0 || remainingQty <= 0 {
+		return 0
+	}
+	if oneWayCostRate < 0 {
+		oneWayCostRate = 0
+	}
+	available := realizedNetPnL - floorUSDT
+	if side == "long" {
+		denom := 1 - oneWayCostRate
+		if denom <= 0 {
+			return 0
+		}
+		return (entryPrice*(1+oneWayCostRate) - available/remainingQty) / denom
+	}
+	denom := 1 + oneWayCostRate
+	return (entryPrice*(1-oneWayCostRate) + available/remainingQty) / denom
 }
 
 // GetID 获取trader ID
@@ -2307,10 +2481,12 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 		switch action {
 		case decision.ActionCloseLong, decision.ActionCloseShort, decision.ActionPartialClose:
 			return 1 // 最高优先级：先平仓
+		case decision.ActionUpdateStopLoss, decision.ActionUpdateTakeProfit:
+			return 2 // 减仓后再按真实剩余数量更新保护单
 		case decision.ActionOpenLong, decision.ActionOpenShort:
-			return 2 // 次优先级：后开仓
+			return 3 // 保护动作完成后再开仓
 		case decision.ActionHold, decision.ActionWait:
-			return 3 // 最低优先级：观望
+			return 4 // 最低优先级：观望
 		default:
 			return 999 // 未知动作放最后
 		}

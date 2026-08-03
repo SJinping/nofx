@@ -114,13 +114,18 @@ type StopLossDistanceConfig struct {
 
 // AutoTakeProfitConfig 自动止盈配置
 type AutoTakeProfitConfig struct {
-	Stage0Threshold    float64               `json:"stage0_threshold,omitempty"`     // Stage0 触发净ROI%（默认10.0）
-	Stage0ClosePct     float64               `json:"stage0_close_pct,omitempty"`     // Stage0 平仓比例%（默认35）
-	Stage1Threshold    float64               `json:"stage1_threshold,omitempty"`     // Stage1 触发净ROI%（默认15.0）
-	Stage1ClosePct     float64               `json:"stage1_close_pct,omitempty"`     // Stage1 平仓比例%（默认35）
-	FullCloseThreshold float64               `json:"full_close_threshold,omitempty"` // 全部平仓净ROI%（默认22.0）
-	CooldownMinutes    int                   `json:"cooldown_minutes,omitempty"`     // 冷却时间（分钟，默认15）
-	Major              *AutoTakeProfitConfig `json:"major,omitempty"`                // BTC/ETH 专用自动止盈配置；未设置字段继承顶层配置
+	Stage0Threshold      float64               `json:"stage0_threshold,omitempty"`        // Stage0 触发净ROI%（默认10.0）
+	Stage0ClosePct       float64               `json:"stage0_close_pct,omitempty"`        // Stage0 平仓比例%（默认35）
+	Stage1Threshold      float64               `json:"stage1_threshold,omitempty"`        // Stage1 触发净ROI%（默认15.0）
+	Stage1ClosePct       float64               `json:"stage1_close_pct,omitempty"`        // Stage1 平仓比例%（默认35）
+	FullCloseThreshold   float64               `json:"full_close_threshold,omitempty"`    // 全部平仓净ROI%（默认22.0）
+	CooldownMinutes      int                   `json:"cooldown_minutes,omitempty"`        // 冷却时间（分钟，默认15）
+	BreakevenEnabled     bool                  `json:"breakeven_enabled,omitempty"`       // TP1 后设置交易级 breakeven
+	BreakevenFloorUSDT   float64               `json:"breakeven_floor_usdt,omitempty"`    // 交易级 breakeven 最低净收益
+	TrailingEnabled      bool                  `json:"trailing_enabled,omitempty"`        // TP2 后启用 trailing
+	TrailingDistancePct  float64               `json:"trailing_distance_pct,omitempty"`   // trailing 距最佳价的价格百分比
+	TrailingMinUpdatePct float64               `json:"trailing_min_update_pct,omitempty"` // 最小止损改善百分比
+	Major                *AutoTakeProfitConfig `json:"major,omitempty"`                   // BTC/ETH 专用自动止盈配置；未设置字段继承顶层配置
 }
 
 // Config 总配置

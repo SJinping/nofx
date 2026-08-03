@@ -449,6 +449,15 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 
 // CloseLong 平多仓
 func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	return t.closeLong(symbol, quantity, true)
+}
+
+// ReduceLong 部分减多仓，不清理剩余仓位的保护单。调用方成交后应按真实剩余数量重建保护单。
+func (t *FuturesTrader) ReduceLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	return t.closeLong(symbol, quantity, false)
+}
+
+func (t *FuturesTrader) closeLong(symbol string, quantity float64, cancelOrders bool) (map[string]interface{}, error) {
 	// 如果数量为0，获取当前持仓数量
 	if quantity == 0 {
 		positions, err := t.GetPositions()
@@ -489,9 +498,11 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 
 	log.Printf("✓ 平多仓成功: %s 数量: %s", symbol, quantityStr)
 
-	// 平仓后取消该币种的所有挂单（止损止盈单）
-	if err := t.CancelAllOrders(symbol); err != nil {
-		log.Printf("  ⚠ 取消挂单失败: %v", err)
+	// 只有全平语义才清理该币种挂单。部分减仓后由上层按剩余数量重建保护单。
+	if cancelOrders {
+		if err := t.CancelAllOrders(symbol); err != nil {
+			log.Printf("  ⚠ 取消挂单失败: %v", err)
+		}
 	}
 
 	result := make(map[string]interface{})
@@ -506,6 +517,15 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 
 // CloseShort 平空仓
 func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	return t.closeShort(symbol, quantity, true)
+}
+
+// ReduceShort 部分减空仓，不清理剩余仓位的保护单。调用方成交后应按真实剩余数量重建保护单。
+func (t *FuturesTrader) ReduceShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	return t.closeShort(symbol, quantity, false)
+}
+
+func (t *FuturesTrader) closeShort(symbol string, quantity float64, cancelOrders bool) (map[string]interface{}, error) {
 	// 如果数量为0，获取当前持仓数量
 	if quantity == 0 {
 		positions, err := t.GetPositions()
@@ -546,9 +566,11 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 
 	log.Printf("✓ 平空仓成功: %s 数量: %s", symbol, quantityStr)
 
-	// 平仓后取消该币种的所有挂单（止损止盈单）
-	if err := t.CancelAllOrders(symbol); err != nil {
-		log.Printf("  ⚠ 取消挂单失败: %v", err)
+	// 只有全平语义才清理该币种挂单。部分减仓后由上层按剩余数量重建保护单。
+	if cancelOrders {
+		if err := t.CancelAllOrders(symbol); err != nil {
+			log.Printf("  ⚠ 取消挂单失败: %v", err)
+		}
 	}
 
 	result := make(map[string]interface{})

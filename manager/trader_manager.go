@@ -376,6 +376,15 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		if atp.CooldownMinutes > 0 {
 			atpMap["cooldown_minutes"] = atp.CooldownMinutes
 		}
+		atpMap["breakeven_enabled"] = atp.BreakevenEnabled
+		atpMap["breakeven_floor_usdt"] = atp.BreakevenFloorUSDT
+		atpMap["trailing_enabled"] = atp.TrailingEnabled
+		if atp.TrailingDistancePct > 0 {
+			atpMap["trailing_distance_pct"] = atp.TrailingDistancePct
+		}
+		if atp.TrailingMinUpdatePct > 0 {
+			atpMap["trailing_min_update_pct"] = atp.TrailingMinUpdatePct
+		}
 		if atp.Major != nil {
 			majorMap, _ := atpMap["major"].(map[string]interface{})
 			if majorMap == nil {
@@ -398,6 +407,15 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 			}
 			if atp.Major.CooldownMinutes > 0 {
 				majorMap["cooldown_minutes"] = atp.Major.CooldownMinutes
+			}
+			majorMap["breakeven_enabled"] = atp.Major.BreakevenEnabled
+			majorMap["breakeven_floor_usdt"] = atp.Major.BreakevenFloorUSDT
+			majorMap["trailing_enabled"] = atp.Major.TrailingEnabled
+			if atp.Major.TrailingDistancePct > 0 {
+				majorMap["trailing_distance_pct"] = atp.Major.TrailingDistancePct
+			}
+			if atp.Major.TrailingMinUpdatePct > 0 {
+				majorMap["trailing_min_update_pct"] = atp.Major.TrailingMinUpdatePct
 			}
 			atpMap["major"] = majorMap
 		}
@@ -764,6 +782,21 @@ func mergeAutoTakeProfitConfig(base decision.AutoTakeProfitConfig, cfg config.Au
 	}
 	if cfg.CooldownMinutes > 0 {
 		base.CooldownMinutes = cfg.CooldownMinutes
+	}
+	if cfg.BreakevenEnabled {
+		base.BreakevenEnabled = true
+	}
+	if cfg.BreakevenFloorUSDT >= 0 {
+		base.BreakevenFloorUSDT = cfg.BreakevenFloorUSDT
+	}
+	if cfg.TrailingEnabled {
+		base.TrailingEnabled = true
+	}
+	if cfg.TrailingDistancePct > 0 {
+		base.TrailingDistancePct = cfg.TrailingDistancePct
+	}
+	if cfg.TrailingMinUpdatePct > 0 {
+		base.TrailingMinUpdatePct = cfg.TrailingMinUpdatePct
 	}
 	return base
 }

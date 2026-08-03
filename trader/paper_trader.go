@@ -291,6 +291,15 @@ func (pt *PaperTrader) CloseShort(symbol string, quantity float64) (map[string]i
 	return pt.closePosition(symbol, "short", quantity)
 }
 
+// ReduceLong/ReduceShort 在纸上交易中与指定数量平仓等价；纸上保护单不由交易所托管。
+func (pt *PaperTrader) ReduceLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	return pt.closePosition(symbol, "long", quantity)
+}
+
+func (pt *PaperTrader) ReduceShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	return pt.closePosition(symbol, "short", quantity)
+}
+
 // closePosition 平仓（内部方法）
 func (pt *PaperTrader) closePosition(symbol, side string, quantity float64) (map[string]interface{}, error) {
 	pt.mutex.Lock()

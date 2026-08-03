@@ -124,24 +124,34 @@ type MarginValidationConfig struct {
 // AutoTakeProfitConfig 自动止盈配置
 // 净ROI = 价格变动% × 杠杆 - round-trip成本%
 type AutoTakeProfitConfig struct {
-	Stage0Threshold    float64               `json:"stage0_threshold"`     // Stage0 触发净ROI%（默认10.0）
-	Stage0ClosePct     float64               `json:"stage0_close_pct"`     // Stage0 平仓比例%（默认35）
-	Stage1Threshold    float64               `json:"stage1_threshold"`     // Stage1 触发净ROI%（默认15.0）
-	Stage1ClosePct     float64               `json:"stage1_close_pct"`     // Stage1 平仓比例%（默认35）
-	FullCloseThreshold float64               `json:"full_close_threshold"` // 全部平仓净ROI%（默认22.0）
-	CooldownMinutes    int                   `json:"cooldown_minutes"`     // 同一持仓两次止盈间隔（默认30分钟）
-	Major              *AutoTakeProfitConfig `json:"major,omitempty"`      // BTC/ETH 专用自动止盈配置；未设置字段继承顶层配置
+	Stage0Threshold      float64               `json:"stage0_threshold"`        // Stage0 触发净ROI%（默认10.0）
+	Stage0ClosePct       float64               `json:"stage0_close_pct"`        // Stage0 平仓比例%（默认35）
+	Stage1Threshold      float64               `json:"stage1_threshold"`        // Stage1 触发净ROI%（默认15.0）
+	Stage1ClosePct       float64               `json:"stage1_close_pct"`        // Stage1 平仓比例%（默认35）
+	FullCloseThreshold   float64               `json:"full_close_threshold"`    // 全部平仓净ROI%（默认22.0）
+	CooldownMinutes      int                   `json:"cooldown_minutes"`        // 同一持仓两次止盈间隔（默认30分钟）
+	BreakevenEnabled     bool                  `json:"breakeven_enabled"`       // TP1 后为剩余仓位设置整笔交易级 breakeven
+	BreakevenFloorUSDT   float64               `json:"breakeven_floor_usdt"`    // breakeven 希望锁定的整笔交易最低净收益
+	TrailingEnabled      bool                  `json:"trailing_enabled"`        // TP2 后启用代码级 trailing
+	TrailingDistancePct  float64               `json:"trailing_distance_pct"`   // trailing 与最佳价格的距离（标的价格百分比）
+	TrailingMinUpdatePct float64               `json:"trailing_min_update_pct"` // 止损至少改善该价格百分比才更新
+	Major                *AutoTakeProfitConfig `json:"major,omitempty"`         // BTC/ETH 专用自动止盈配置；未设置字段继承顶层配置
 }
 
 // DefaultAutoTakeProfitConfig 返回默认的自动止盈配置
 func DefaultAutoTakeProfitConfig() AutoTakeProfitConfig {
 	return AutoTakeProfitConfig{
-		Stage0Threshold:    10.0,
-		Stage0ClosePct:     35.0,
-		Stage1Threshold:    15.0,
-		Stage1ClosePct:     35.0,
-		FullCloseThreshold: 22.0,
-		CooldownMinutes:    30,
+		Stage0Threshold:      10.0,
+		Stage0ClosePct:       35.0,
+		Stage1Threshold:      15.0,
+		Stage1ClosePct:       35.0,
+		FullCloseThreshold:   22.0,
+		CooldownMinutes:      30,
+		BreakevenEnabled:     false,
+		BreakevenFloorUSDT:   0,
+		TrailingEnabled:      false,
+		TrailingDistancePct:  0.8,
+		TrailingMinUpdatePct: 0.15,
 	}
 }
 
@@ -220,10 +230,17 @@ type AutoDecisionState struct {
 
 // AutoTPState 单个持仓的自动止盈状态
 type AutoTPState struct {
-	Stage            int     `json:"-"` // 0=未触发, 1=已触发TP1, 2=已触发TP2
-	LastActionTimeMs int64   `json:"-"` // 上次自动止盈动作时间（毫秒）
-	BaselineEntry    float64 `json:"-"` // 基准入场价（用于检测加仓/均价变化）
-	BaselineQty      float64 `json:"-"` // 基准数量（用于检测加仓）
+	Stage                int     `json:"-"` // 0=未触发, 1=已触发TP1, 2=已触发TP2
+	LastActionTimeMs     int64   `json:"-"` // 上次自动止盈动作时间（毫秒）
+	BaselineEntry        float64 `json:"-"` // 基准入场价（用于检测加仓/均价变化）
+	BaselineQty          float64 `json:"-"` // 基准数量（用于检测加仓）
+	InitialStop          float64 `json:"-"` // 开仓时初始止损，用于恢复和风险阶段管理
+	CurrentStop          float64 `json:"-"` // 当前已知保护止损
+	CurrentTakeProfit    float64 `json:"-"` // 当前已知止盈价
+	BestPrice            float64 `json:"-"` // 多单最高价/空单最低价
+	RealizedNetPnL       float64 `json:"-"` // 本进程已记录的部分平仓估算净收益
+	TrailingActive       bool    `json:"-"` // TP2 后是否已经进入 trailing 阶段
+	LastStopUpdateTimeMs int64   `json:"-"` // 上次代码级 trailing 更新交易所止损的时间
 }
 
 // Decision AI的交易决策

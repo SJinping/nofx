@@ -59,6 +59,12 @@ type Trader interface {
 	// CloseShort 平空仓（quantity=0表示全部平仓）
 	CloseShort(symbol string, quantity float64) (map[string]interface{}, error)
 
+	// ReduceLong 部分减多仓。不得把剩余仓位当作已全平清理保护单。
+	ReduceLong(symbol string, quantity float64) (map[string]interface{}, error)
+
+	// ReduceShort 部分减空仓。不得把剩余仓位当作已全平清理保护单。
+	ReduceShort(symbol string, quantity float64) (map[string]interface{}, error)
+
 	// SetLeverage 设置杠杆
 	SetLeverage(symbol string, leverage int) error
 

@@ -720,6 +720,11 @@ func (t *AsterTrader) CloseLong(symbol string, quantity float64) (map[string]int
 	return result, nil
 }
 
+// ReduceLong 使用 Aster 的指定数量 reduce 语义；CloseLong 本身不会清理保护单。
+func (t *AsterTrader) ReduceLong(symbol string, quantity float64) (map[string]interface{}, error) {
+	return t.CloseLong(symbol, quantity)
+}
+
 // CloseShort 平空单
 func (t *AsterTrader) CloseShort(symbol string, quantity float64) (map[string]interface{}, error) {
 	// 如果数量为0，获取当前持仓数量
@@ -795,6 +800,11 @@ func (t *AsterTrader) CloseShort(symbol string, quantity float64) (map[string]in
 
 	log.Printf("✓ 平空仓成功: %s 数量: %s", symbol, qtyStr)
 	return result, nil
+}
+
+// ReduceShort 使用 Aster 的指定数量 reduce 语义；CloseShort 本身不会清理保护单。
+func (t *AsterTrader) ReduceShort(symbol string, quantity float64) (map[string]interface{}, error) {
+	return t.CloseShort(symbol, quantity)
 }
 
 // SetLeverage 设置杠杆倍数
