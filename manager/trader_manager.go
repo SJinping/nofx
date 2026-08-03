@@ -31,7 +31,7 @@ func NewTraderManager(configFilePath string) *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, leverageClipCfg config.LeverageClipConfig, marginValidationCfg config.MarginValidationConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, autoResume bool, minHoldMinutes int, minOIValueMillions float64) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, leverageClipCfg config.LeverageClipConfig, marginValidationCfg config.MarginValidationConfig, enableRecording bool, binanceTestnet bool, stopLossDistCfg config.StopLossDistanceConfig, autoTPCfg config.AutoTakeProfitConfig, positionRiskCfg config.PositionRiskConfig, autoResume bool, minHoldMinutes int, minOIValueMillions float64) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -96,6 +96,7 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		MinRiskReward:                    cfg.MinRiskReward,
 		StopLossDistance:                 convertStopLossDistanceConfig(stopLossDistCfg),
 		AutoTakeProfit:                   convertAutoTakeProfitConfig(autoTPCfg),
+		PositionRisk:                     convertPositionRiskConfig(positionRiskCfg),
 		MinHoldMinutes:                   minHoldMinutes,
 		MinOIValueMillions:               minOIValueMillions,
 		EnableRecording:                  enableRecording,
@@ -122,6 +123,14 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 	tm.traders[cfg.ID] = at
 	log.Printf("✓ Trader '%s' (%s) 已添加", cfg.Name, cfg.AIModel)
 	return nil
+}
+
+func convertPositionRiskConfig(cfg config.PositionRiskConfig) trader.PositionRiskConfig {
+	return trader.PositionRiskConfig{
+		Enabled:             cfg.Enabled,
+		Mode:                cfg.Mode,
+		ScanIntervalSeconds: cfg.ScanIntervalSeconds,
+	}
 }
 
 // GetTrader 获取指定ID的trader
@@ -273,6 +282,14 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 	}
 	if patch.MinOIValueMil != nil {
 		raw["min_oi_value_millions"] = *patch.MinOIValueMil
+	}
+	if patch.PositionRisk != nil {
+		pr := patch.PositionRisk
+		raw["position_risk"] = map[string]interface{}{
+			"enabled":               pr.Enabled,
+			"mode":                  pr.Mode,
+			"scan_interval_seconds": pr.ScanIntervalSeconds,
+		}
 	}
 
 	// leverage 是嵌套对象

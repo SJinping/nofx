@@ -106,6 +106,7 @@ func main() {
 			cfg.BinanceTestnet,     // Binance 主网/测试网
 			cfg.StopLossDistance,   // 止损最小距离配置
 			cfg.AutoTakeProfit,     // 自动止盈配置
+			cfg.PositionRisk,       // 独立仓位风险扫描配置
 			cfg.AutoResume,         // 接续运行开关
 			cfg.MinHoldMinutes,     // LLM 最低持仓时间
 			cfg.MinOIValueMillions, // OI 价值过滤门槛

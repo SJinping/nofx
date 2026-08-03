@@ -275,7 +275,9 @@ type Decision struct {
 	WatchPriority         int     `json:"watch_priority,omitempty"`
 
 	// 决策来源标记: "llm" = LLM生成, "auto_stop_loss" = 自动止损, "auto_take_profit" = 自动止盈
-	DecisionSource string `json:"decision_source,omitempty"`
+	DecisionSource   string `json:"decision_source,omitempty"`
+	ExpectedStage    int    `json:"-"` // 自动仓位动作生成时预期的阶段，用于并发幂等校验
+	HasExpectedStage bool   `json:"-"`
 }
 
 // FullDecision AI的完整决策（包含思维链）

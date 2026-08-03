@@ -128,6 +128,13 @@ type AutoTakeProfitConfig struct {
 	Major                *AutoTakeProfitConfig `json:"major,omitempty"`                   // BTC/ETH 专用自动止盈配置；未设置字段继承顶层配置
 }
 
+// PositionRiskConfig 独立仓位风险扫描配置。默认关闭；只有 enabled=true 且周期>0 才启动。
+type PositionRiskConfig struct {
+	Enabled             bool   `json:"enabled,omitempty"`
+	Mode                string `json:"mode,omitempty"` // shadow / live；空值按 shadow
+	ScanIntervalSeconds int    `json:"scan_interval_seconds,omitempty"`
+}
+
 // Config 总配置
 type Config struct {
 	Traders         []TraderConfig `json:"traders"`
@@ -148,6 +155,7 @@ type Config struct {
 	MinRiskReward      float64                `json:"min_risk_reward"`             // 最小风险回报比
 	StopLossDistance   StopLossDistanceConfig `json:"stop_loss_distance"`          // 止损最小距离配置
 	AutoTakeProfit     AutoTakeProfitConfig   `json:"auto_take_profit"`            // 自动止盈配置
+	PositionRisk       PositionRiskConfig     `json:"position_risk,omitempty"`     // 独立高频仓位风险扫描
 	MinHoldMinutes     int                    `json:"min_hold_minutes"`            // LLM 平仓最低持仓时间（分钟，0=不限制）
 
 	// 候选币种 OI 价值过滤门槛（单位：百万USD，默认50）

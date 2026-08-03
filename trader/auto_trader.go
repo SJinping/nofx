@@ -1,6 +1,7 @@
 package trader
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"nofx/memory"
 	"nofx/pool"
 	"nofx/stats"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,6 +99,9 @@ type AutoTraderConfig struct {
 	// 自动止盈配置（零值时使用默认）
 	AutoTakeProfit decision.AutoTakeProfitConfig
 
+	// 独立仓位风险扫描配置（默认关闭）
+	PositionRisk PositionRiskConfig
+
 	// LLM 平仓前的最低持仓时间（分钟，0=不限制）
 	MinHoldMinutes int
 
@@ -159,6 +165,11 @@ type AutoTrader struct {
 	// 运行时可热更新配置（线程安全）
 	runtimeCfg     *RuntimeConfig
 	scanIntervalCh chan time.Duration // 通知 Run() 循环重置 ticker
+	riskConfigCh   chan PositionRiskConfig
+	tradeMu        sync.Mutex // AI 与高频风险循环共用的下单串行锁
+	autoStateMu    sync.Mutex // 保护 autoDecisionState；决策上下文使用其快照
+	riskLogMu      sync.Mutex
+	riskLogPath    string
 
 	// API缓存（减少币安API调用频率）
 	cacheMutex           sync.RWMutex
@@ -339,6 +350,8 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		// 运行时可热更新配置
 		runtimeCfg:     NewRuntimeConfig(config, aiClient),
 		scanIntervalCh: make(chan time.Duration, 1),
+		riskConfigCh:   make(chan PositionRiskConfig, 1),
+		riskLogPath:    filepath.Join(logDir, "risk_events.jsonl"),
 		// 初始化API缓存（30秒过期，减少币安API调用）
 		accountInfoCache: make(map[string]interface{}),
 		positionsCache:   []map[string]interface{}{},
@@ -359,6 +372,9 @@ func (at *AutoTrader) Run() error {
 	snap := at.runtimeCfg.Get()
 	ticker := time.NewTicker(time.Duration(snap.ScanIntervalMin) * time.Minute)
 	defer ticker.Stop()
+	riskCtx, cancelRisk := context.WithCancel(context.Background())
+	defer cancelRisk()
+	go at.runPositionRiskLoop(riskCtx)
 
 	// 首次立即执行（仅在未暂停时）
 	if !at.isPaused {
@@ -383,6 +399,254 @@ func (at *AutoTrader) Run() error {
 	}
 
 	return nil
+}
+
+// runPositionRiskLoop 独立于 LLM 主循环扫描已有仓位。配置关闭时 timer channel 为 nil，不产生轮询。
+func (at *AutoTrader) runPositionRiskLoop(ctx context.Context) {
+	cfg := normalizePositionRiskConfig(at.runtimeCfg.Get().PositionRisk)
+	var ticker *time.Ticker
+	var tickC <-chan time.Time
+	apply := func(next PositionRiskConfig) {
+		next = normalizePositionRiskConfig(next)
+		if ticker != nil {
+			ticker.Stop()
+			ticker = nil
+			tickC = nil
+		}
+		cfg = next
+		if !cfg.Enabled {
+			log.Printf("🛡️ [%s] 独立仓位风险循环已关闭", at.name)
+			return
+		}
+		ticker = time.NewTicker(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
+		tickC = ticker.C
+		log.Printf("🛡️ [%s] 独立仓位风险循环启动: mode=%s interval=%ds", at.name, cfg.Mode, cfg.ScanIntervalSeconds)
+	}
+	apply(cfg)
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case next := <-at.riskConfigCh:
+			apply(next)
+		case <-tickC:
+			if err := at.runPositionRiskScan(cfg); err != nil {
+				log.Printf("⚠️ [%s] 独立仓位风险扫描失败: %v", at.name, err)
+			}
+		}
+	}
+}
+
+func (at *AutoTrader) runPositionRiskScan(cfg PositionRiskConfig) error {
+	// 扫描、复核和可能的下单视为一个串行事务，避免读取到 AI 正在修改的中间仓位。
+	at.tradeMu.Lock()
+	defer at.tradeMu.Unlock()
+
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取实时持仓失败: %w", err)
+	}
+	if len(positions) == 0 {
+		return nil
+	}
+
+	infos := make([]decision.PositionInfo, 0, len(positions))
+	for _, raw := range positions {
+		if info, ok := fastPositionInfo(raw); ok {
+			infos = append(infos, info)
+		}
+	}
+	if len(infos) == 0 {
+		return nil
+	}
+
+	rc := at.runtimeCfg.Get()
+	riskCtx := &decision.Context{
+		Positions:           infos,
+		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
+		AssumedSlippageRate: at.config.AssumedSlippageRate,
+		AutoTakeProfit:      rc.AutoTakeProfit,
+	}
+
+	// 决策层会更新最佳价格；真实状态只在此锁内暴露，AI 上下文使用深拷贝。
+	at.autoStateMu.Lock()
+	at.reconcileAutoStateLocked(infos)
+	riskCtx.AutoState = &at.autoDecisionState
+	actions := decision.GenerateHighFrequencyRiskDecisions(riskCtx)
+	riskStateSnapshot := cloneAutoDecisionState(at.autoDecisionState)
+	riskCtx.AutoState = &riskStateSnapshot
+	at.autoStateMu.Unlock()
+
+	if len(actions) == 0 {
+		return nil
+	}
+	for _, action := range actions {
+		if cfg.Mode != "live" {
+			log.Printf("🧪 [%s] 风险扫描 shadow: %s %s - %s", at.name, action.Symbol, action.Action, action.Reasoning)
+			at.appendRiskEvent(cfg, action, nil, nil)
+			continue
+		}
+		record := &logger.DecisionAction{
+			Action: action.Action, Symbol: action.Symbol, DecisionSource: action.DecisionSource,
+			Reasoning: action.Reasoning, Timestamp: time.Now(),
+		}
+		execErr := at.executeDecisionWithRecord(riskCtx, &action, record)
+		if execErr != nil {
+			log.Printf("❌ [%s] 高频风险动作失败: %s %s: %v", at.name, action.Symbol, action.Action, execErr)
+			at.appendRiskEvent(cfg, action, record, execErr)
+			continue
+		}
+		log.Printf("✅ [%s] 高频风险动作成功: %s %s", at.name, action.Symbol, action.Action)
+		at.appendRiskEvent(cfg, action, record, nil)
+	}
+	return nil
+}
+
+func (at *AutoTrader) appendRiskEvent(cfg PositionRiskConfig, action decision.Decision, record *logger.DecisionAction, execErr error) {
+	if at.riskLogPath == "" {
+		return
+	}
+	event := map[string]interface{}{
+		"timestamp":             time.Now().Format(time.RFC3339Nano),
+		"trader_id":             at.id,
+		"mode":                  cfg.Mode,
+		"scan_interval_seconds": cfg.ScanIntervalSeconds,
+		"symbol":                action.Symbol,
+		"action":                action.Action,
+		"source":                action.DecisionSource,
+		"reasoning":             action.Reasoning,
+		"close_percentage":      action.ClosePercentage,
+		"new_stop_loss":         action.NewStopLoss,
+		"expected_stage":        action.ExpectedStage,
+		"executed":              cfg.Mode == "live",
+		"success":               execErr == nil,
+	}
+	if record != nil {
+		event["quantity"] = record.Quantity
+		event["price"] = record.Price
+		event["order_id"] = record.OrderID
+		if record.Error != "" {
+			event["warning"] = record.Error
+		}
+	}
+	if execErr != nil {
+		event["error"] = execErr.Error()
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	at.riskLogMu.Lock()
+	defer at.riskLogMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(at.riskLogPath), 0o755); err != nil {
+		log.Printf("⚠️ 创建风险日志目录失败: %v", err)
+		return
+	}
+	f, err := os.OpenFile(at.riskLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("⚠️ 打开风险日志失败: %v", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		log.Printf("⚠️ 写入风险日志失败: %v", err)
+	}
+}
+
+func fastPositionInfo(raw map[string]interface{}) (decision.PositionInfo, bool) {
+	symbol, _ := raw["symbol"].(string)
+	side, _ := raw["side"].(string)
+	entry := floatFromInterface(raw["entryPrice"])
+	mark := floatFromInterface(raw["markPrice"])
+	qty := absFloatFromMap(raw, "positionAmt")
+	if symbol == "" || (side != "long" && side != "short") || entry <= 0 || mark <= 0 || qty <= 0 {
+		return decision.PositionInfo{}, false
+	}
+	leverage := int(floatFromInterface(raw["leverage"]))
+	if leverage <= 0 {
+		leverage = 1
+	}
+	pnlPct := (mark - entry) / entry * 100
+	if side == "short" {
+		pnlPct = -pnlPct
+	}
+	return decision.PositionInfo{
+		Symbol: symbol, Side: side, EntryPrice: entry, MarkPrice: mark, Quantity: qty,
+		Leverage: leverage, UnrealizedPnL: floatFromInterface(raw["unRealizedProfit"]),
+		UnrealizedPnLPct: pnlPct, LiquidationPrice: floatFromInterface(raw["liquidationPrice"]),
+	}, true
+}
+
+func (at *AutoTrader) reconcileAutoStateLocked(infos []decision.PositionInfo) {
+	if at.autoDecisionState.TP == nil {
+		at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
+	}
+	current := make(map[string]bool, len(infos))
+	for i := range infos {
+		pos := &infos[i]
+		key := pos.Symbol + "_" + strings.ToLower(pos.Side)
+		current[key] = true
+		st := at.autoDecisionState.TP[key]
+		if st == nil {
+			st = &decision.AutoTPState{
+				BaselineEntry: pos.EntryPrice, BaselineQty: pos.Quantity, BestPrice: pos.MarkPrice,
+			}
+			at.autoDecisionState.TP[key] = st
+		}
+		pos.EntryStopLoss = st.InitialStop
+		pos.EntryTakeProfit = st.CurrentTakeProfit
+	}
+	for key := range at.autoDecisionState.TP {
+		if !current[key] {
+			delete(at.autoDecisionState.TP, key)
+		}
+	}
+}
+
+func cloneAutoDecisionState(src decision.AutoDecisionState) decision.AutoDecisionState {
+	dst := decision.AutoDecisionState{TP: make(map[string]*decision.AutoTPState, len(src.TP))}
+	for key, st := range src.TP {
+		if st == nil {
+			continue
+		}
+		copyState := *st
+		dst.TP[key] = &copyState
+	}
+	return dst
+}
+
+func (at *AutoTrader) mergeAutoStateObservations(ctx *decision.Context) {
+	if ctx == nil || ctx.AutoState == nil {
+		return
+	}
+	sides := make(map[string]string, len(ctx.Positions))
+	for _, pos := range ctx.Positions {
+		sides[pos.Symbol+"_"+strings.ToLower(pos.Side)] = strings.ToLower(pos.Side)
+	}
+	at.autoStateMu.Lock()
+	defer at.autoStateMu.Unlock()
+	for key, observed := range ctx.AutoState.TP {
+		if observed == nil {
+			continue
+		}
+		current := at.autoDecisionState.TP[key]
+		if current == nil {
+			copyState := *observed
+			at.autoDecisionState.TP[key] = &copyState
+			continue
+		}
+		side := sides[key]
+		if current.BestPrice <= 0 || (side == "long" && observed.BestPrice > current.BestPrice) ||
+			(side == "short" && observed.BestPrice > 0 && observed.BestPrice < current.BestPrice) {
+			current.BestPrice = observed.BestPrice
+		}
+	}
 }
 
 // Stop 停止自动交易
@@ -532,12 +796,27 @@ func (at *AutoTrader) GetRuntimeConfig() RuntimeConfigSnapshot {
 
 // UpdateRuntimeConfig 部分更新运行时配置（供 API 层调用）
 func (at *AutoTrader) UpdateRuntimeConfig(patch RuntimeConfigPatch) {
-	changed, newInterval := at.runtimeCfg.Update(patch)
+	changed, newInterval, riskChanged, riskCfg := at.runtimeCfg.Update(patch)
 	if changed {
 		// 非阻塞发送，避免 Run() 循环未就绪时死锁
 		select {
 		case at.scanIntervalCh <- newInterval:
 		default:
+		}
+	}
+	if riskChanged {
+		select {
+		case at.riskConfigCh <- riskCfg:
+		default:
+			// 保留最新配置，避免旧的未消费通知覆盖新值。
+			select {
+			case <-at.riskConfigCh:
+			default:
+			}
+			select {
+			case at.riskConfigCh <- riskCfg:
+			default:
+			}
 		}
 	}
 
@@ -674,6 +953,7 @@ func (at *AutoTrader) runCycle() error {
 	// 4. 调用AI获取完整决策
 	log.Println("🤖 正在请求AI分析并决策...")
 	engeinDecision, err := decision.GetFullDecision(ctx)
+	at.mergeAutoStateObservations(ctx)
 
 	// 记录 LLM 调用费用（即使决策解析失败，token 已消耗）
 	if engeinDecision != nil && engeinDecision.LLMUsage != nil {
@@ -786,13 +1066,16 @@ func (at *AutoTrader) runCycle() error {
 			}
 		}
 
-		if err := at.executeDecisionWithRecord(ctx, &d, &actionRecord); err != nil {
-			log.Printf("❌ 执行决策失败 (%s %s): %v", d.Symbol, d.Action, err)
-			actionRecord.Error = err.Error()
-			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s 失败: %v", d.Symbol, d.Action, err))
+		at.tradeMu.Lock()
+		execErr := at.executeDecisionWithRecord(ctx, &d, &actionRecord)
+		at.tradeMu.Unlock()
+		if execErr != nil {
+			log.Printf("❌ 执行决策失败 (%s %s): %v", d.Symbol, d.Action, execErr)
+			actionRecord.Error = execErr.Error()
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s 失败: %v", d.Symbol, d.Action, execErr))
 			// 记录交易执行错误
-			errType := stats.ClassifyTradeError(err.Error())
-			at.errorStats.RecordError(errType, err.Error(), d.Symbol, at.callCount)
+			errType := stats.ClassifyTradeError(execErr.Error())
+			at.errorStats.RecordError(errType, execErr.Error(), d.Symbol, at.callCount)
 		} else {
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s 成功", d.Symbol, d.Action))
@@ -885,6 +1168,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 	// 当前持仓的key集合（用于清理已平仓的记录）
 	currentPositionKeys := make(map[string]bool)
+	at.autoStateMu.Lock()
 
 	for _, pos := range positions {
 		symbolVal, ok := pos["symbol"]
@@ -1056,6 +1340,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			delete(at.autoDecisionState.TP, key)
 		}
 	}
+	autoStateSnapshot := cloneAutoDecisionState(at.autoDecisionState)
+	at.autoStateMu.Unlock()
 
 	// 3. 获取合并的候选币种池（AI500 + OI Top，去重）
 	// 无论有没有持仓，都分析相同数量的币种（让AI看到所有好机会）
@@ -1181,7 +1467,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		ShortTermWatchlist:  at.snapshotShortTermWatchlist(),
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
-		AutoState:           &at.autoDecisionState,
+		AutoState:           &autoStateSnapshot,
 		AI:                  at.aiClient,
 	}
 
@@ -1497,6 +1783,7 @@ func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, dec *decision
 	// 记录开仓时间
 	posKey := dec.Symbol + "_" + side
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+	at.autoStateMu.Lock()
 	if at.autoDecisionState.TP == nil {
 		at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
 	}
@@ -1509,6 +1796,7 @@ func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, dec *decision
 		CurrentTakeProfit: dec.TakeProfit,
 		BestPrice:         currentPrice,
 	}
+	at.autoStateMu.Unlock()
 
 	// ✅ 创建 TradeEpisode（开仓成功后）
 	if at.tradeMemory != nil {
@@ -1579,7 +1867,9 @@ func (at *AutoTrader) executeCloseWithRecord(ctx *decision.Context, decision *de
 
 	// 全平后无论来源都清理仓位管理状态，防止下一笔同币种交易继承旧阶段。
 	posKey := decision.Symbol + "_" + side
+	at.autoStateMu.Lock()
 	delete(at.autoDecisionState.TP, posKey)
+	at.autoStateMu.Unlock()
 	return nil
 }
 
@@ -1724,7 +2014,6 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	if quantity == 0 {
 		return fmt.Errorf("持仓数量为0")
 	}
-
 	// 获取当前价格，用于记录与有效性校验
 	currentPrice, err := at.trader.GetMarketPrice(decision.Symbol)
 	if err != nil {
@@ -1754,12 +2043,20 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 
 	// 决策预校验后，同一批中的 partial_close 可能刚建立了更严格的 breakeven。
 	// 下单前必须再次读取最新状态，防止后续 update_stop_loss 把它放宽。
-	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil && st.CurrentStop > 0 {
-		if side == "long" && decision.NewStopLoss < st.CurrentStop {
-			return fmt.Errorf("拒绝放宽多仓保护止损：当前 %.4f，新值 %.4f", st.CurrentStop, decision.NewStopLoss)
+	at.autoStateMu.Lock()
+	latestProtectedStop := 0.0
+	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil {
+		latestProtectedStop = st.CurrentStop
+	}
+	at.autoStateMu.Unlock()
+	if latestProtectedStop > 0 {
+		if side == "long" && (decision.NewStopLoss < latestProtectedStop ||
+			(decision.DecisionSource == "auto_trailing_stop" && decision.NewStopLoss <= latestProtectedStop)) {
+			return fmt.Errorf("拒绝放宽多仓保护止损：当前 %.4f，新值 %.4f", latestProtectedStop, decision.NewStopLoss)
 		}
-		if side == "short" && decision.NewStopLoss > st.CurrentStop {
-			return fmt.Errorf("拒绝放宽空仓保护止损：当前 %.4f，新值 %.4f", st.CurrentStop, decision.NewStopLoss)
+		if side == "short" && (decision.NewStopLoss > latestProtectedStop ||
+			(decision.DecisionSource == "auto_trailing_stop" && decision.NewStopLoss >= latestProtectedStop)) {
+			return fmt.Errorf("拒绝放宽空仓保护止损：当前 %.4f，新值 %.4f", latestProtectedStop, decision.NewStopLoss)
 		}
 	}
 
@@ -1769,12 +2066,14 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.NewStopLoss); err != nil {
 		return fmt.Errorf("设置止损失败: %w", err)
 	}
+	at.autoStateMu.Lock()
 	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil {
 		st.CurrentStop = decision.NewStopLoss
 		if decision.DecisionSource == "auto_trailing_stop" {
 			st.LastStopUpdateTimeMs = time.Now().UnixMilli()
 		}
 	}
+	at.autoStateMu.Unlock()
 
 	log.Printf("  ✓ 止损更新成功")
 	return nil
@@ -1849,9 +2148,11 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 	if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.NewTakeProfit); err != nil {
 		return fmt.Errorf("设置止盈失败: %w", err)
 	}
+	at.autoStateMu.Lock()
 	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil {
 		st.CurrentTakeProfit = decision.NewTakeProfit
 	}
+	at.autoStateMu.Unlock()
 
 	log.Printf("  ✓ 止盈更新成功")
 	return nil
@@ -1892,6 +2193,19 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 
 	if quantity == 0 {
 		return fmt.Errorf("持仓数量为0")
+	}
+
+	if dec.DecisionSource == "auto_take_profit" && dec.HasExpectedStage {
+		at.autoStateMu.Lock()
+		st := at.autoDecisionState.TP[dec.Symbol+"_"+strings.ToLower(side)]
+		actualStage := -1
+		if st != nil {
+			actualStage = st.Stage
+		}
+		at.autoStateMu.Unlock()
+		if actualStage != dec.ExpectedStage {
+			return fmt.Errorf("自动部分止盈动作已过期：expected_stage=%d actual_stage=%d", dec.ExpectedStage, actualStage)
+		}
 	}
 
 	// 计算要平仓的数量
@@ -1941,6 +2255,8 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 	log.Printf("  ℹ️ 剩余持仓数量: %.4f", remainingQuantity)
 
 	posKey := dec.Symbol + "_" + strings.ToLower(side)
+	at.autoStateMu.Lock()
+	defer at.autoStateMu.Unlock()
 	if at.autoDecisionState.TP == nil {
 		at.autoDecisionState.TP = make(map[string]*decision.AutoTPState)
 	}

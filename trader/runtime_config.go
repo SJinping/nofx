@@ -4,6 +4,7 @@ import (
 	"log"
 	"nofx/decision"
 	"nofx/mcp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,6 +20,7 @@ type RuntimeConfig struct {
 	marginValidation                 decision.MarginValidationConfig
 	stopLossDistance                 decision.StopLossDistanceConfig
 	autoTakeProfit                   decision.AutoTakeProfitConfig
+	positionRisk                     PositionRiskConfig
 	maxDailyLoss                     float64       // 最大日亏损百分比
 	maxDrawdown                      float64       // 最大回撤百分比
 	stopTradingTime                  time.Duration // 风控暂停时长
@@ -27,6 +29,24 @@ type RuntimeConfig struct {
 	minOIValueMil                    float64       // 候选币种 OI 价值门槛（百万USD）
 	minRiskReward                    float64       // 最小风险回报比（热更新）
 	aiClient                         *mcp.Client   // 该 trader 的 AI 客户端（用于热更新模型名）
+}
+
+// PositionRiskConfig 控制独立仓位风险循环。非正周期始终视为关闭。
+type PositionRiskConfig struct {
+	Enabled             bool   `json:"enabled"`
+	Mode                string `json:"mode"` // shadow / live
+	ScanIntervalSeconds int    `json:"scan_interval_seconds"`
+}
+
+func normalizePositionRiskConfig(cfg PositionRiskConfig) PositionRiskConfig {
+	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if cfg.Mode != "live" {
+		cfg.Mode = "shadow"
+	}
+	if cfg.ScanIntervalSeconds <= 0 {
+		cfg.Enabled = false
+	}
+	return cfg
 }
 
 // PeakHourPauseSnapshot 高峰时段暂停配置的只读快照
@@ -45,6 +65,7 @@ type RuntimeConfigSnapshot struct {
 	MarginValidation                 decision.MarginValidationConfig `json:"margin_validation"`
 	StopLossDistance                 decision.StopLossDistanceConfig `json:"stop_loss_distance"`
 	AutoTakeProfit                   decision.AutoTakeProfitConfig   `json:"auto_take_profit"`
+	PositionRisk                     PositionRiskConfig              `json:"position_risk"`
 	MaxDailyLoss                     float64                         `json:"max_daily_loss"`
 	MaxDrawdown                      float64                         `json:"max_drawdown"`
 	StopTradingMin                   int                             `json:"stop_trading_minutes"`
@@ -72,6 +93,7 @@ type RuntimeConfigPatch struct {
 	MarginValidation                 *decision.MarginValidationConfig `json:"margin_validation,omitempty"`
 	StopLossDistance                 *decision.StopLossDistanceConfig `json:"stop_loss_distance,omitempty"`
 	AutoTakeProfit                   *decision.AutoTakeProfitConfig   `json:"auto_take_profit,omitempty"`
+	PositionRisk                     *PositionRiskConfig              `json:"position_risk,omitempty"`
 	MaxDailyLoss                     *float64                         `json:"max_daily_loss,omitempty"`
 	MaxDrawdown                      *float64                         `json:"max_drawdown,omitempty"`
 	StopTradingMin                   *int                             `json:"stop_trading_minutes,omitempty"`
@@ -102,6 +124,7 @@ func NewRuntimeConfig(cfg AutoTraderConfig, aiClient *mcp.Client) *RuntimeConfig
 		marginValidation:                 cfg.MarginValidation,
 		stopLossDistance:                 cfg.StopLossDistance,
 		autoTakeProfit:                   cfg.AutoTakeProfit,
+		positionRisk:                     normalizePositionRiskConfig(cfg.PositionRisk),
 		maxDailyLoss:                     cfg.MaxDailyLoss,
 		maxDrawdown:                      cfg.MaxDrawdown,
 		stopTradingTime:                  cfg.StopTradingTime,
@@ -131,6 +154,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 		MarginValidation:                 rc.marginValidation,
 		StopLossDistance:                 rc.stopLossDistance,
 		AutoTakeProfit:                   rc.autoTakeProfit,
+		PositionRisk:                     rc.positionRisk,
 		MaxDailyLoss:                     rc.maxDailyLoss,
 		MaxDrawdown:                      rc.maxDrawdown,
 		StopTradingMin:                   int(rc.stopTradingTime.Minutes()),
@@ -144,7 +168,7 @@ func (rc *RuntimeConfig) Get() RuntimeConfigSnapshot {
 
 // Update 部分更新运行时配置。返回 scanInterval 是否发生了变化。
 // 如果 scanInterval 变了，调用方需要通知交易循环重置 ticker。
-func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged bool, newInterval time.Duration) {
+func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged bool, newInterval time.Duration, riskConfigChanged bool, riskCfg PositionRiskConfig) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
@@ -175,6 +199,15 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	if patch.AutoTakeProfit != nil {
 		log.Printf("🔧 运行时配置更新: AutoTakeProfit 已修改")
 		rc.autoTakeProfit = *patch.AutoTakeProfit
+	}
+	if patch.PositionRisk != nil {
+		next := normalizePositionRiskConfig(*patch.PositionRisk)
+		if next != rc.positionRisk {
+			log.Printf("🔧 运行时配置更新: PositionRisk enabled=%v mode=%s interval=%ds", next.Enabled, next.Mode, next.ScanIntervalSeconds)
+			rc.positionRisk = next
+			riskConfigChanged = true
+			riskCfg = next
+		}
 	}
 	if patch.MaxDailyLoss != nil && *patch.MaxDailyLoss >= 0 {
 		log.Printf("🔧 运行时配置更新: MaxDailyLoss %.2f → %.2f", rc.maxDailyLoss, *patch.MaxDailyLoss)
@@ -207,7 +240,7 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 		if newDur != rc.scanInterval {
 			log.Printf("🔧 运行时配置更新: ScanInterval %v → %v", rc.scanInterval, newDur)
 			rc.scanInterval = newDur
-			return true, newDur
+			return true, newDur, riskConfigChanged, riskCfg
 		}
 	}
 
@@ -219,5 +252,5 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 		}
 	}
 
-	return false, 0
+	return false, 0, riskConfigChanged, riskCfg
 }
