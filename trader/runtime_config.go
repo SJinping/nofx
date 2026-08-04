@@ -198,7 +198,7 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	}
 	if patch.AutoTakeProfit != nil {
 		log.Printf("🔧 运行时配置更新: AutoTakeProfit 已修改")
-		rc.autoTakeProfit = *patch.AutoTakeProfit
+		mergeAutoTakeProfitPatch(&rc.autoTakeProfit, patch.AutoTakeProfit)
 	}
 	if patch.PositionRisk != nil {
 		next := normalizePositionRiskConfig(*patch.PositionRisk)
@@ -253,4 +253,46 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	}
 
 	return false, 0, riskConfigChanged, riskCfg
+}
+
+// mergeAutoTakeProfitPatch 将 patch 中有效字段合并到 dst，零值数值字段不覆盖。
+// 布尔字段（BreakevenEnabled、TrailingEnabled）始终覆盖，以支持热更新开/关。
+func mergeAutoTakeProfitPatch(dst *decision.AutoTakeProfitConfig, patch *decision.AutoTakeProfitConfig) {
+	if patch.Stage0Threshold > 0 {
+		dst.Stage0Threshold = patch.Stage0Threshold
+	}
+	if patch.Stage0ClosePct > 0 {
+		dst.Stage0ClosePct = patch.Stage0ClosePct
+	}
+	if patch.Stage1Threshold > 0 {
+		dst.Stage1Threshold = patch.Stage1Threshold
+	}
+	if patch.Stage1ClosePct > 0 {
+		dst.Stage1ClosePct = patch.Stage1ClosePct
+	}
+	if patch.FullCloseThreshold > 0 {
+		dst.FullCloseThreshold = patch.FullCloseThreshold
+	}
+	if patch.CooldownMinutes > 0 {
+		dst.CooldownMinutes = patch.CooldownMinutes
+	}
+	dst.BreakevenEnabled = patch.BreakevenEnabled
+	if patch.BreakevenFloorUSDT >= 0 {
+		dst.BreakevenFloorUSDT = patch.BreakevenFloorUSDT
+	}
+	dst.TrailingEnabled = patch.TrailingEnabled
+	if patch.TrailingDistancePct > 0 {
+		dst.TrailingDistancePct = patch.TrailingDistancePct
+	}
+	if patch.TrailingMinUpdatePct > 0 {
+		dst.TrailingMinUpdatePct = patch.TrailingMinUpdatePct
+	}
+	if patch.Major != nil {
+		if dst.Major == nil {
+			base := *dst
+			base.Major = nil
+			dst.Major = &base
+		}
+		mergeAutoTakeProfitPatch(dst.Major, patch.Major)
+	}
 }

@@ -458,7 +458,7 @@ func GenerateAutoDecisions(ctx *Context) []Decision {
 }
 
 // GenerateHighFrequencyRiskDecisions 仅评估适合独立高频循环的确定性仓位规则。
-// 不依赖候选币、绩效或 LLM；优先处理无条件亏损硬限制，再评估止盈/追踪保护。
+// 不依赖候选币、绩效或 LLM；优先处理无条件亏损硬限制，同时评估盈利仓位的止盈/追踪保护。
 func GenerateHighFrequencyRiskDecisions(ctx *Context) []Decision {
 	if ctx == nil || len(ctx.Positions) == 0 {
 		return nil
@@ -478,10 +478,13 @@ func GenerateHighFrequencyRiskDecisions(ctx *Context) []Decision {
 			Reasoning:      fmt.Sprintf("高频无条件止损：价格口径浮亏 %.2f%% 超过 -5%% 硬限制", pos.UnrealizedPnLPct),
 		})
 	}
-	if len(decisions) > 0 {
-		return decisions
+	// 硬止损和 auto TP 作用于不同仓位（亏损 vs 盈利），始终同时评估，
+	// 避免某个仓位触发硬止损时跳过其余盈利仓位的 trailing 保护。
+	decisions = append(decisions, generateAutoTakeProfitDecisions(ctx)...)
+	if len(decisions) == 0 {
+		return nil
 	}
-	return generateAutoTakeProfitDecisions(ctx)
+	return decisions
 }
 
 // ===== 自动止盈（带状态&冷却，避免每周期重复触发）=====
@@ -535,7 +538,7 @@ func mergeDecisionAutoTakeProfitConfig(base AutoTakeProfitConfig, override AutoT
 	if override.BreakevenEnabled {
 		base.BreakevenEnabled = true
 	}
-	if override.BreakevenFloorUSDT > 0 {
+	if override.BreakevenFloorUSDT >= 0 {
 		base.BreakevenFloorUSDT = override.BreakevenFloorUSDT
 	}
 	if override.TrailingEnabled {
@@ -629,7 +632,10 @@ func generateAutoTakeProfitDecisions(ctx *Context) []Decision {
 		}
 
 		// TP2 后代码级 trailing：基于持仓后的最佳价格，只允许向盈利方向收紧止损。
-		if st.Stage >= 2 && st.TrailingActive && tpCfg.TrailingEnabled && tpCfg.TrailingDistancePct > 0 {
+		// 时间冷却：避免高频循环在短时间内反复更新交易所止损单。
+		const trailingMinIntervalMs = 20_000
+		if st.Stage >= 2 && st.TrailingActive && tpCfg.TrailingEnabled && tpCfg.TrailingDistancePct > 0 &&
+			(st.LastStopUpdateTimeMs <= 0 || time.Now().UnixMilli()-st.LastStopUpdateTimeMs >= trailingMinIntervalMs) {
 			candidate := 0.0
 			if strings.ToLower(pos.Side) == "long" {
 				candidate = st.BestPrice * (1 - tpCfg.TrailingDistancePct/100)
