@@ -239,8 +239,9 @@ type AutoTPState struct {
 	CurrentTakeProfit    float64 `json:"-"` // 当前已知止盈价
 	BestPrice            float64 `json:"-"` // 多单最高价/空单最低价
 	RealizedNetPnL       float64 `json:"-"` // 本进程已记录的部分平仓估算净收益
-	TrailingActive       bool    `json:"-"` // TP2 后是否已经进入 trailing 阶段
-	LastStopUpdateTimeMs int64   `json:"-"` // 上次代码级 trailing 更新交易所止损的时间
+	TrailingActive          bool    `json:"-"` // TP2 后是否已经进入 trailing 阶段
+	LastStopUpdateTimeMs    int64   `json:"-"` // 上次代码级 trailing 更新交易所止损的时间（20s 节流）
+	LastLLMStopUpdateTimeMs int64   `json:"-"` // 上次 AI/LLM update_stop_loss 的时间（15min 冷却）
 }
 
 // Decision AI的交易决策

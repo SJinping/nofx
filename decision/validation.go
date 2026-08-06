@@ -365,6 +365,72 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 	return nil
 }
 
+// ValidateStrategyAPositionManagement contains StrategyA-only execution gates.
+// The LLM chooses its desired position intent; code decides whether the proposed
+// stop change is currently safe to execute.  Automatic breakeven/trailing actions
+// remain deterministic code actions and intentionally bypass this LLM gate.
+func ValidateStrategyAPositionManagement(d *Decision, ctx *Context) error {
+	if d == nil || d.Action != ActionUpdateStopLoss || (d.DecisionSource != "" && d.DecisionSource != "llm") {
+		return nil
+	}
+	return validateLLMStopTightening(d, ctx)
+}
+
+// validateLLMStopTightening enforces fixed anti-churn gates for manual/LLM stop updates.
+// It deliberately does not infer market intent: the LLM still decides whether protection is
+// desirable; this layer only decides whether the proposed change is safe to execute.
+func validateLLMStopTightening(d *Decision, ctx *Context) error {
+	if ctx == nil {
+		return nil
+	}
+	for _, p := range ctx.Positions {
+		if p.Symbol != d.Symbol {
+			continue
+		}
+		initialStop := p.EntryStopLoss
+		currentStop := 0.0
+		lastUpdate := int64(0)
+		if ctx.AutoState != nil && ctx.AutoState.TP != nil {
+			if st := ctx.AutoState.TP[p.Symbol+"_"+strings.ToLower(p.Side)]; st != nil {
+				if st.InitialStop > 0 {
+					initialStop = st.InitialStop
+				}
+				currentStop = st.CurrentStop
+				lastUpdate = st.LastLLMStopUpdateTimeMs
+			}
+		}
+		if initialStop <= 0 || p.EntryPrice <= 0 || p.MarkPrice <= 0 {
+			return fmt.Errorf("update_stop_loss 缺少初始止损或实时价格，拒绝执行AI止损调整")
+		}
+		side := strings.ToLower(p.Side)
+		unitRisk, currentMove, tightening := 0.0, 0.0, 0.0
+		if side == "long" {
+			unitRisk = p.EntryPrice - initialStop
+			currentMove = p.MarkPrice - p.EntryPrice
+			tightening = d.NewStopLoss - currentStop
+		} else {
+			unitRisk = initialStop - p.EntryPrice
+			currentMove = p.EntryPrice - p.MarkPrice
+			tightening = currentStop - d.NewStopLoss
+		}
+		if unitRisk <= 0 {
+			return fmt.Errorf("update_stop_loss 初始止损方向无效，拒绝执行AI止损调整")
+		}
+		currentR := currentMove / unitRisk
+		if currentR < 0.50 {
+			return fmt.Errorf("update_stop_loss 仅允许在浮盈至少0.50R后由AI收紧，当前%+.2fR；入场逻辑失效请使用 close_*", currentR)
+		}
+		if currentStop > 0 && tightening/unitRisk < 0.25 {
+			return fmt.Errorf("update_stop_loss 本次收紧仅%.2fR，小于0.25R最小有效变化，拒绝频繁微调", tightening/unitRisk)
+		}
+		if lastUpdate > 0 && time.Now().UnixMilli()-lastUpdate < int64(15*time.Minute/time.Millisecond) {
+			return fmt.Errorf("update_stop_loss 距上次止损调整不足15分钟，拒绝频繁收紧")
+		}
+		return nil
+	}
+	return fmt.Errorf("update_stop_loss 未找到对应持仓: %s", d.Symbol)
+}
+
 // GenerateAutoDecisions 策略A的自动决策生成
 // 用于紧急止损、风险控制等自动规则
 func GenerateAutoDecisions(ctx *Context) []Decision {

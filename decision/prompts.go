@@ -145,7 +145,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	sb.WriteString("大多数时候应该是 `wait` 或 `hold`，只在极佳机会时才开仓。\n\n")
 
 	// === 硬约束（风险控制）===
-	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
+	sb.WriteString("# ⚖️ 仓位硬约束（风险控制）\n\n")
 	sb.WriteString(fmt.Sprintf("1. **风险回报比**: 必须 ≥ 1:%.0f(冒1%%风险，赚%.0f%%+收益) \n", minRiskReward, minRiskReward))
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
 	sb.WriteString(fmt.Sprintf("3. **单币最大仓位**: 山寨币不超过当前账户净值的 %.2g 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n", altcoinMaxPositionEquityMultiple))
@@ -232,8 +232,22 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	sb.WriteString("   - 当前利润已从本轮最大浮盈明显回撤，需要保护已经获得的收益\n")
 	sb.WriteString(fmt.Sprintf("4. **不要只用%d分钟级别的RSI/MACD短期波动全平4小时级别仓位**；但短线结构可以作为部分止盈或收紧止损的依据。\n", market.ShortTermBarIntervalMinutes))
 	sb.WriteString("5. `partial_close` 是按当前剩余仓位比例市价减仓。通常使用 25%~50%，保留 runner 追求趋势目标；禁止把 100% 写成 partial_close。\n")
-	sb.WriteString("6. `update_stop_loss` 只能收紧风险，不能把已有保护止损向亏损方向放宽。系统自动 breakeven/trailing 建立的保护底线优先于 AI。\n")
-	sb.WriteString("7. `update_take_profit` 用于把不现实的远端目标调整到新的结构目标；不要把它当作取消阶段性止盈的理由。\n\n")
+	sb.WriteString("6. `update_stop_loss` 只能收紧风险，不能把已有保护止损向亏损方向放宽。系统自动 breakeven/trailing 建立的保护底线优先于 AI。基于市场数据及当前盈利状态判断是否要采取此操作，不应因单个短周期指标变化频繁调整。\n")
+	sb.WriteString("7. `update_take_profit` 用于把不现实的远端目标调整到新的结构目标；基于市场数据判断是否要采取此操作，不要把它当作取消阶段性止盈的理由。\n\n")
+
+	sb.WriteString("## 系统自动仓位管理说明（代码执行层）\n\n")
+	sb.WriteString("每个持仓的「仓位风险」行会显示 `Stage`、`protected_stop` 和 `trailing` 状态，含义如下：\n")
+	sb.WriteString("- **Stage=0**：未触发过自动止盈。\n")
+	sb.WriteString("- **Stage=1（TP1 后）**：系统已按净ROI阈值自动部分平仓。若 breakeven 启用，系统会根据已实现净收益计算一个保本止损价（整笔交易扣成本后不亏），并挂到交易所。此时 `protected_stop` 反映该保本价。\n")
+	sb.WriteString("- **Stage=2（TP2 后）**：系统再次自动部分平仓，并激活代码级 trailing。此后 `trailing=true`，系统持续跟踪最佳价（多单最高价/空单最低价），将止损保持在最佳价后方固定距离，只向盈利方向收紧，永不放宽。\n")
+	sb.WriteString("- `protected_stop` 是当前代码管理的保护止损。你的 `update_stop_loss` 只能将止损移到比该值更严的位置，不能放宽。\n")
+	sb.WriteString("- 这些操作由代码自动完成，你不需要手动触发。你的职责是基于市场结构判断是否需要进一步收紧止损或全平。\n\n")
+
+	sb.WriteString("**止损执行硬门槛（代码强制，不可协商）**：\n")
+	// sb.WriteString("- 你可以自主判断是否需要改变仓位意图；但 `update_stop_loss` 只有在当前浮盈至少 `+0.50R` 时才允许执行。若入场逻辑已失效而仍在亏损/接近盈亏平衡，请使用 `close_long/close_short`，不要用移动止损代替。\n")
+	sb.WriteString("- 你可以自主判断是否需要改变仓位意图；但 `update_stop_loss` 至少要保证当前持仓处于盈利状态时才允许执行。若入场逻辑已失效而仍在亏损/接近盈亏平衡，请使用 `close_long/close_short`，不要用移动止损代替。\n")
+	sb.WriteString("- 每次 AI 收紧止损必须至少改善 `0.25R`，同一仓位两次 AI 止损调整至少间隔 `15分钟`；小幅、连续的跟价式收紧会被代码拒绝。\n")
+	sb.WriteString("- 上述门槛不限制系统自动 breakeven / trailing；它们由代码按已实现收益和价格轨迹执行。被拒绝不代表逻辑无效，而是当前时点不允许执行。\n\n")
 
 	// === 输出格式 ===
 	sb.WriteString("# 📤 输出格式\n\n")
@@ -664,10 +678,12 @@ func buildUserPrompt(ctx *Context) string {
 				}
 			}
 
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 浮盈亏%+.2f USDT (%+.2f%%) | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n",
 				i+1, pos.Symbol, strings.ToUpper(pos.Side),
-				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
+				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnL, pos.UnrealizedPnLPct,
 				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+			sb.WriteString(formatPositionRiskState(ctx, pos))
+			sb.WriteString("\n")
 
 			// 使用FormatMarketData输出完整市场数据
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
@@ -678,7 +694,6 @@ func buildUserPrompt(ctx *Context) string {
 			}
 			// 入场论据（供 LLM 对比是否应继续持有）
 			sb.WriteString(formatEntryThesis(pos))
-			sb.WriteString(formatPositionRiskState(ctx, pos))
 		}
 	} else {
 		sb.WriteString("**当前持仓**: 无\n\n")
@@ -720,33 +735,61 @@ func buildUserPrompt(ctx *Context) string {
 	return sb.String()
 }
 
+// 格式化持仓的风险状态
 func formatPositionRiskState(ctx *Context, pos PositionInfo) string {
-	if ctx == nil || ctx.AutoState == nil || ctx.AutoState.TP == nil {
-		return ""
+	var st *AutoTPState
+	if ctx != nil && ctx.AutoState != nil && ctx.AutoState.TP != nil {
+		st = ctx.AutoState.TP[pos.Symbol+"_"+strings.ToLower(pos.Side)]
 	}
-	st := ctx.AutoState.TP[pos.Symbol+"_"+strings.ToLower(pos.Side)]
-	if st == nil {
-		return ""
+	initialStop := pos.EntryStopLoss
+	currentStop := 0.0
+	stage, realizedNet, bestPrice, trailing := 0, 0.0, 0.0, false
+	if st != nil {
+		if st.InitialStop > 0 {
+			initialStop = st.InitialStop
+		}
+		currentStop, stage, realizedNet, bestPrice, trailing = st.CurrentStop, st.Stage, st.RealizedNetPnL, st.BestPrice, st.TrailingActive
 	}
-	mfeR := 0.0
-	initialStop := st.InitialStop
-	if initialStop <= 0 {
-		initialStop = pos.EntryStopLoss
-	}
-	risk := 0.0
+
+	side := strings.ToLower(pos.Side)
+	unitRisk := 0.0
+	currentMove := 0.0
 	favorable := 0.0
-	if strings.ToLower(pos.Side) == "long" {
-		risk = pos.EntryPrice - initialStop
-		favorable = st.BestPrice - pos.EntryPrice
+	if side == "long" {
+		unitRisk = pos.EntryPrice - initialStop
+		currentMove = pos.MarkPrice - pos.EntryPrice
+		favorable = bestPrice - pos.EntryPrice
 	} else {
-		risk = initialStop - pos.EntryPrice
-		favorable = pos.EntryPrice - st.BestPrice
+		unitRisk = initialStop - pos.EntryPrice
+		currentMove = pos.EntryPrice - pos.MarkPrice
+		favorable = pos.EntryPrice - bestPrice
 	}
-	if risk > 0 && favorable > 0 {
-		mfeR = favorable / risk
+	if bestPrice <= 0 {
+		favorable = currentMove
 	}
-	return fmt.Sprintf("**仓位管理状态**: Stage=%d | MFE=%.2fR | 已实现净收益估算=%+.2f USDT | protected_stop=%.4f | trailing=%t。AI只能维持或加强该保护，不能放宽。\n\n",
-		st.Stage, mfeR, st.RealizedNetPnL, st.CurrentStop, st.TrailingActive)
+	if unitRisk <= 0 || pos.Quantity <= 0 {
+		return fmt.Sprintf("**仓位管理状态**: 浮盈亏=%+.2f USDT | 初始风险尚不可用（等待有效初始止损）。\n", pos.UnrealizedPnL)
+	}
+	initialRiskUSD := unitRisk * pos.Quantity
+	currentR := currentMove / unitRisk
+	mfeR := favorable / unitRisk
+	drawdownR := mfeR - currentR
+	distanceStopPct, distanceStopR := 0.0, 0.0
+	if currentStop > 0 && pos.MarkPrice > 0 {
+		if side == "long" {
+			distanceStopPct = (pos.MarkPrice - currentStop) / pos.MarkPrice * 100
+			distanceStopR = (pos.MarkPrice - currentStop) / unitRisk
+		} else {
+			distanceStopPct = (currentStop - pos.MarkPrice) / pos.MarkPrice * 100
+			distanceStopR = (currentStop - pos.MarkPrice) / unitRisk
+		}
+	}
+	stopInfo := "无"
+	if currentStop > 0 {
+		stopInfo = fmt.Sprintf("%.4f（距止损%.2f%% / %.2fR）", currentStop, distanceStopPct, distanceStopR)
+	}
+	return fmt.Sprintf("**仓位风险**: 初始风险=%.2f USDT (1R) | 当前=%+.2fR | MFE=%.2fR | 从MFE回撤=%.2fR | 已实现净收益估算=%+.2f USDT | Stage=%d | protected_stop=%s | trailing=%t。AI只能维持或加强该保护，不能放宽。\n",
+		initialRiskUSD, currentR, mfeR, drawdownR, realizedNet, stage, stopInfo, trailing)
 }
 
 // formatEntryThesis 格式化持仓的入场论据（供 LLM 对比当前状态）

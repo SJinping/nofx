@@ -18,7 +18,10 @@ func (StrategyA) GenerateAutoDecisions(ctx *Context) []Decision {
 }
 
 func (StrategyA) ExtraValidate(d *Decision, ctx *Context) error {
-	return ExtraValidate(d, ctx)
+	if err := ExtraValidate(d, ctx); err != nil {
+		return err
+	}
+	return ValidateStrategyAPositionManagement(d, ctx)
 }
 
 // StrategyB 示例策略：展示如何定制一部分提示词逻辑

@@ -140,11 +140,12 @@ type AutoTrader struct {
 	peakEquity            float64 // 历史最高净值（用于回撤计算）
 	stopUntil             time.Time
 	isRunning             bool
-	isPaused              bool                    // 是否暂停（仅停止交易循环，不退出程序）
-	startTime             time.Time               // 系统启动时间
-	callCount             int                     // AI调用次数
-	promptStrategy        decision.PromptStrategy // 当前使用的Prompt策略（默认StrategyA）
-	positionFirstSeenTime map[string]int64        // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	isPaused              bool                        // 是否暂停（仅停止交易循环，不退出程序）
+	startTime             time.Time                   // 系统启动时间
+	callCount             int                         // AI调用次数
+	promptStrategy        decision.PromptStrategy     // 当前使用的Prompt策略（默认StrategyA）
+	positionFirstSeenTime map[string]int64            // 持仓首次出现时间 (symbol_side -> timestamp毫秒)
+	observedPositions     map[string]observedPosition // 上次成功读取到的持仓；用于对账交易所自行触发的条件单
 	autoDecisionState     decision.AutoDecisionState
 	shortTermWatchlist    map[string]*decision.ShortTermWatchItem // StrategyV 专用轻量 watchlist，per-trader 隔离
 
@@ -163,13 +164,14 @@ type AutoTrader struct {
 	peakMu           sync.RWMutex
 
 	// 运行时可热更新配置（线程安全）
-	runtimeCfg     *RuntimeConfig
-	scanIntervalCh chan time.Duration // 通知 Run() 循环重置 ticker
-	riskConfigCh   chan PositionRiskConfig
-	tradeMu        sync.Mutex // AI 与高频风险循环共用的下单串行锁
-	autoStateMu    sync.Mutex // 保护 autoDecisionState；决策上下文使用其快照
-	riskLogMu      sync.Mutex
-	riskLogPath    string
+	runtimeCfg        *RuntimeConfig
+	scanIntervalCh    chan time.Duration // 通知 Run() 循环重置 ticker
+	riskConfigCh      chan PositionRiskConfig
+	tradeMu           sync.Mutex // AI 与高频风险循环共用的下单串行锁
+	autoStateMu       sync.Mutex // 保护 autoDecisionState；决策上下文使用其快照
+	riskLogMu         sync.Mutex
+	riskLogPath       string
+	exchangeAuditPath string
 
 	// API缓存（减少币安API调用频率）
 	cacheMutex           sync.RWMutex
@@ -338,6 +340,7 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		startTime:             time.Now(),
 		callCount:             resumedCycle,
 		positionFirstSeenTime: make(map[string]int64),
+		observedPositions:     make(map[string]observedPosition),
 		autoDecisionState: decision.AutoDecisionState{
 			TP: make(map[string]*decision.AutoTPState),
 		},
@@ -348,10 +351,11 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 		// LLM 调用费用追踪（从 logDir 恢复历史累计）
 		llmCostTracker: NewLLMCostTracker(logDir),
 		// 运行时可热更新配置
-		runtimeCfg:     NewRuntimeConfig(config, aiClient),
-		scanIntervalCh: make(chan time.Duration, 1),
-		riskConfigCh:   make(chan PositionRiskConfig, 1),
-		riskLogPath:    filepath.Join(logDir, "risk_events.jsonl"),
+		runtimeCfg:        NewRuntimeConfig(config, aiClient),
+		scanIntervalCh:    make(chan time.Duration, 1),
+		riskConfigCh:      make(chan PositionRiskConfig, 1),
+		riskLogPath:       filepath.Join(logDir, "risk_events.jsonl"),
+		exchangeAuditPath: filepath.Join(logDir, "exchange_events.jsonl"),
 		// 初始化API缓存（30秒过期，减少币安API调用）
 		accountInfoCache: make(map[string]interface{}),
 		positionsCache:   []map[string]interface{}{},
@@ -581,6 +585,156 @@ func fastPositionInfo(raw map[string]interface{}) (decision.PositionInfo, bool) 
 		Leverage: leverage, UnrealizedPnL: floatFromInterface(raw["unRealizedProfit"]),
 		UnrealizedPnLPct: pnlPct, LiquidationPrice: floatFromInterface(raw["liquidationPrice"]),
 	}, true
+}
+
+// observedPosition is a local, non-persistent reconciliation checkpoint.  It is
+// intentionally only populated after a successful exchange position read: an API
+// failure must never be mistaken for a position closed by the exchange.
+type observedPosition struct {
+	Info        decision.PositionInfo
+	SeenAt      time.Time
+	InitialStop float64
+	CurrentStop float64
+	TakeProfit  float64
+}
+
+type exchangeCloseAuditEvent struct {
+	Timestamp      time.Time `json:"timestamp"`
+	Symbol         string    `json:"symbol"`
+	Side           string    `json:"side"`
+	Action         string    `json:"action"`
+	DecisionSource string    `json:"decision_source"`
+	Reasoning      string    `json:"reasoning"`
+	Quantity       float64   `json:"quantity"`
+	ExitPrice      float64   `json:"exit_price"`
+	OrderID        int64     `json:"order_id,omitempty"`
+	ObservedAt     time.Time `json:"observed_at"`
+}
+
+// auditExchangeClosedPositions fills the blind spot where Binance executes a
+// reduce-only conditional order itself.  Such a fill bypasses executeClose...,
+// so it otherwise would be absent from both decision_logs and trades.jsonl.
+func (at *AutoTrader) auditExchangeClosedPositions(missing []observedPosition) {
+	for _, prev := range missing {
+		if prev.Info.Symbol == "" || prev.Info.Side == "" {
+			continue
+		}
+		order, exitPrice := at.findExchangeExitOrder(prev)
+		source := classifyExchangeClose(prev, exitPrice)
+		if exitPrice <= 0 {
+			// A condition can be executed and then disappear from order history API
+			// briefly; retain a conservative fallback so the audit is still complete.
+			exitPrice = prev.Info.MarkPrice
+		}
+		action := decision.ActionCloseLong
+		if strings.EqualFold(prev.Info.Side, "short") {
+			action = decision.ActionCloseShort
+		}
+		reason := fmt.Sprintf("交易所持仓对账：上次观察到的%s仓已消失，未经过本地平仓执行路径", prev.Info.Side)
+		if prev.CurrentStop > 0 || prev.TakeProfit > 0 {
+			reason += fmt.Sprintf("；已知保护单 SL=%.8f TP=%.8f", prev.CurrentStop, prev.TakeProfit)
+		}
+		if order.OrderID != 0 {
+			reason += fmt.Sprintf("；匹配交易所 reduce-only 成交订单 #%d", order.OrderID)
+		}
+
+		event := exchangeCloseAuditEvent{
+			Timestamp: time.Now(), Symbol: prev.Info.Symbol, Side: prev.Info.Side,
+			Action: action, DecisionSource: source, Reasoning: reason,
+			Quantity: prev.Info.Quantity, ExitPrice: exitPrice, OrderID: order.OrderID,
+			ObservedAt: prev.SeenAt,
+		}
+		at.appendExchangeCloseAudit(event)
+		log.Printf("🧾 [%s] 补记交易所平仓: %s %s @ %.8f (%s)", at.name, event.Symbol, event.Action, exitPrice, source)
+
+		if at.tradeMemory != nil && exitPrice > 0 {
+			dec := &decision.Decision{Symbol: prev.Info.Symbol, Action: action, Reasoning: reason, DecisionSource: source}
+			if _, err := at.tradeMemory.OnCloseSuccess(nil, dec, exitPrice, source); err != nil {
+				log.Printf("⚠️ [%s] 补写 trades.jsonl 失败: %v", at.name, err)
+			}
+		}
+	}
+}
+
+func (at *AutoTrader) findExchangeExitOrder(prev observedPosition) (OrderRecord, float64) {
+	start := prev.SeenAt.Add(-5 * time.Second).UnixMilli()
+	orders, err := at.trader.ListOrders(prev.Info.Symbol, start, time.Now().UnixMilli(), 20)
+	if err != nil {
+		log.Printf("⚠️ [%s] 查询 %s 条件单成交记录失败，使用持仓快照补记: %v", at.name, prev.Info.Symbol, err)
+		return OrderRecord{}, 0
+	}
+	var best OrderRecord
+	for _, order := range orders {
+		if !order.ReduceOnly || !strings.EqualFold(order.Status, "FILLED") || order.ExecutedQty <= 0 {
+			continue
+		}
+		if order.UpdatedAt.Before(prev.SeenAt.Add(-5 * time.Second)) {
+			continue
+		}
+		if best.OrderID == 0 || order.UpdatedAt.After(best.UpdatedAt) {
+			best = order
+		}
+	}
+	if best.OrderID == 0 {
+		return best, 0
+	}
+	if best.AvgPrice > 0 {
+		return best, best.AvgPrice
+	}
+	if best.ExecutedQty > 0 && best.CumQuote > 0 {
+		return best, best.CumQuote / best.ExecutedQty
+	}
+	return best, best.Price
+}
+
+func classifyExchangeClose(prev observedPosition, exitPrice float64) string {
+	if exitPrice <= 0 {
+		return "exchange_position_disappeared"
+	}
+	// Permit a small execution/slippage band around the trigger.  A match is
+	// audit classification only; it never affects live trading behaviour.
+	const triggerBand = 0.0035
+	if strings.EqualFold(prev.Info.Side, "long") {
+		if prev.CurrentStop > 0 && exitPrice <= prev.CurrentStop*(1+triggerBand) {
+			return "exchange_conditional_stop_loss"
+		}
+		if prev.TakeProfit > 0 && exitPrice >= prev.TakeProfit*(1-triggerBand) {
+			return "exchange_conditional_take_profit"
+		}
+	} else {
+		if prev.CurrentStop > 0 && exitPrice >= prev.CurrentStop*(1-triggerBand) {
+			return "exchange_conditional_stop_loss"
+		}
+		if prev.TakeProfit > 0 && exitPrice <= prev.TakeProfit*(1+triggerBand) {
+			return "exchange_conditional_take_profit"
+		}
+	}
+	return "exchange_conditional_order_triggered"
+}
+
+func (at *AutoTrader) appendExchangeCloseAudit(event exchangeCloseAuditEvent) {
+	if at.exchangeAuditPath == "" {
+		return
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	at.riskLogMu.Lock()
+	defer at.riskLogMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(at.exchangeAuditPath), 0o755); err != nil {
+		log.Printf("⚠️ 创建交易所平仓审计目录失败: %v", err)
+		return
+	}
+	f, err := os.OpenFile(at.exchangeAuditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("⚠️ 打开交易所平仓审计日志失败: %v", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		log.Printf("⚠️ 写入交易所平仓审计日志失败: %v", err)
+	}
 }
 
 func (at *AutoTrader) reconcileAutoStateLocked(infos []decision.PositionInfo) {
@@ -1327,6 +1481,30 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		}
 	}
 
+	// 对账交易所自行触发的条件单。必须在清理自动状态前先保存上一份
+	// 保护单快照，才能区分 stop-loss / take-profit；审计写入在解锁后进行，
+	// 避免网络查询阻塞仓位状态锁。
+	missingObserved := make([]observedPosition, 0)
+	if at.observedPositions == nil {
+		at.observedPositions = make(map[string]observedPosition)
+	}
+	for key, observed := range at.observedPositions {
+		if !currentPositionKeys[key] {
+			missingObserved = append(missingObserved, observed)
+			delete(at.observedPositions, key)
+		}
+	}
+	for _, pos := range positionInfos {
+		key := pos.Symbol + "_" + strings.ToLower(pos.Side)
+		observed := observedPosition{Info: pos, SeenAt: time.Now()}
+		if st := at.autoDecisionState.TP[key]; st != nil {
+			observed.InitialStop = st.InitialStop
+			observed.CurrentStop = st.CurrentStop
+			observed.TakeProfit = st.CurrentTakeProfit
+		}
+		at.observedPositions[key] = observed
+	}
+
 	// 清理已平仓的持仓记录
 	for key := range at.positionFirstSeenTime {
 		if !currentPositionKeys[key] {
@@ -1342,6 +1520,9 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 	autoStateSnapshot := cloneAutoDecisionState(at.autoDecisionState)
 	at.autoStateMu.Unlock()
+	// 交易所条件单不会经过本地 executeClose...；在这里补写审计事件和
+	// TradeMemory 的 trades.jsonl。它不增加 AI cycle，也不会触发新决策。
+	at.auditExchangeClosedPositions(missingObserved)
 
 	// 3. 获取合并的候选币种池（AI500 + OI Top，去重）
 	// 无论有没有持仓，都分析相同数量的币种（让AI看到所有好机会）
@@ -1869,6 +2050,7 @@ func (at *AutoTrader) executeCloseWithRecord(ctx *decision.Context, decision *de
 	posKey := decision.Symbol + "_" + side
 	at.autoStateMu.Lock()
 	delete(at.autoDecisionState.TP, posKey)
+	delete(at.observedPositions, posKey) // 本地已记录的平仓，不应在下次快照被误判为交易所条件单
 	at.autoStateMu.Unlock()
 	return nil
 }
@@ -2069,8 +2251,11 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	at.autoStateMu.Lock()
 	if st := at.autoDecisionState.TP[decision.Symbol+"_"+strings.ToLower(side)]; st != nil {
 		st.CurrentStop = decision.NewStopLoss
+		now := time.Now().UnixMilli()
 		if decision.DecisionSource == "auto_trailing_stop" {
-			st.LastStopUpdateTimeMs = time.Now().UnixMilli()
+			st.LastStopUpdateTimeMs = now
+		} else {
+			st.LastLLMStopUpdateTimeMs = now
 		}
 	}
 	at.autoStateMu.Unlock()
