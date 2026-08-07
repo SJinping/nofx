@@ -114,25 +114,24 @@ func maybeAdjustOpenStopLossToMinDistance(d *Decision, entryPrice, minDist float
 }
 
 // validateDecisions 验证所有决策（需要账户信息和杠杆配置）
-func validateDecisions(decisions []Decision, ctx *Context) error {
-	for i, decision := range decisions {
-		if err := coreValidateDecision(&decisions[i], ctx); err != nil {
-			errType := stats.ClassifyDecisionValidateError(err.Error())
-			recordError(errType, err.Error(), decision.Symbol)
-			return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
+// validateDecisions validates every action independently. Semantic errors reject only
+// that action; malformed JSON is rejected by the parser before this function.
+func validateDecisions(decisions []Decision, ctx *Context) {
+	for i := range decisions {
+		d := &decisions[i]
+		d.ValidationError = ""
+		if err := coreValidateDecision(d, ctx); err != nil {
+			d.ValidationError = err.Error()
+			recordError(stats.ClassifyDecisionValidateError(err.Error()), err.Error(), d.Symbol)
+			continue
 		}
-
-		// 策略自己的额外校验（在通用校验之后）
-		strategy := ctx.PromptStrategy
-		if strategy != nil {
-			if err := strategy.ExtraValidate(&decisions[i], ctx); err != nil {
-				errType := stats.ClassifyDecisionValidateError(err.Error())
-				recordError(errType, err.Error(), decision.Symbol)
-				return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
+		if strategy := ctx.PromptStrategy; strategy != nil {
+			if err := strategy.ExtraValidate(d, ctx); err != nil {
+				d.ValidationError = err.Error()
+				recordError(stats.ClassifyDecisionValidateError(err.Error()), err.Error(), d.Symbol)
 			}
 		}
 	}
-	return nil
 }
 
 // coreValidateDecision 验证单个决策的有效性

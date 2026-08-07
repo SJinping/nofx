@@ -39,11 +39,7 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	// TODO: 注意autoDecisions要兼容validateDecisions中的验证条件
 	autoDecisions := strategy.GenerateAutoDecisions(ctx)
 	if len(autoDecisions) > 0 {
-		if err := validateDecisions(autoDecisions, ctx); err != nil {
-			errType := stats.ClassifyDecisionValidateError(err.Error())
-			recordError(errType, err.Error(), "")
-			return nil, fmt.Errorf("自动决策验证失败: %w", err)
-		}
+		validateDecisions(autoDecisions, ctx)
 
 		return &FullDecision{
 			UserPrompt: "(auto-strategy)",
@@ -206,11 +202,7 @@ func GetFullDecisionFromText(ctx *Context, systemPrompt, userPrompt string) (*Fu
 	// TODO: 注意autoDecisions要兼容validateDecisions中的验证条件
 	autoDecisions := strategy.GenerateAutoDecisions(ctx)
 	if len(autoDecisions) > 0 {
-		if err := validateDecisions(autoDecisions, ctx); err != nil {
-			errType := stats.ClassifyDecisionValidateError(err.Error())
-			recordError(errType, err.Error(), "")
-			return nil, fmt.Errorf("自动决策验证失败: %w", err)
-		}
+		validateDecisions(autoDecisions, ctx)
 
 		return &FullDecision{
 			UserPrompt: "(auto-strategy)",

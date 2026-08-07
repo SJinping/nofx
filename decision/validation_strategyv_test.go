@@ -55,24 +55,28 @@ func TestStrategyVRiskCapDoesNotAffectStrategyA(t *testing.T) {
 	d.PositionSizeUSD = 800
 
 	ctxA := testStrategyVRiskContext(StrategyA{})
-	if err := validateDecisions([]Decision{d}, ctxA); err != nil {
-		t.Fatalf("StrategyA should not use StrategyV short-term notional cap, got %v", err)
+	decisionsA := []Decision{d}
+	validateDecisions(decisionsA, ctxA)
+	if decisionsA[0].ValidationError != "" {
+		t.Fatalf("StrategyA rejected: %v", decisionsA[0].ValidationError)
 	}
 
 	ctxV := testStrategyVRiskContext(StrategyV{})
 	ctxV.AltcoinMaxPositionEquityMultiple = 0.75
-	err := validateDecisions([]Decision{d}, ctxV)
-	if err == nil || !strings.Contains(err.Error(), "山寨币单币种仓位价值不能超过750") {
-		t.Fatalf("expected StrategyV notional cap rejection, got %v", err)
+	decisionsV := []Decision{d}
+	validateDecisions(decisionsV, ctxV)
+	if !strings.Contains(decisionsV[0].ValidationError, "山寨币单币种仓位价值不能超过750") {
+		t.Fatalf("expected rejection")
 	}
 }
 
 func TestStrategyVRejectsLowConfidenceOpen(t *testing.T) {
 	d := validStrategyVOpenDecision()
 	d.Confidence = 69
-	err := validateDecisions([]Decision{d}, testStrategyVRiskContext(StrategyV{}))
-	if err == nil || !strings.Contains(err.Error(), "StrategyV短线开仓信心度不足") {
-		t.Fatalf("expected StrategyV confidence rejection, got %v", err)
+	decisions := []Decision{d}
+	validateDecisions(decisions, testStrategyVRiskContext(StrategyV{}))
+	if !strings.Contains(decisions[0].ValidationError, "StrategyV短线开仓信心度不足") {
+		t.Fatalf("expected rejection")
 	}
 }
 
@@ -92,7 +96,8 @@ func TestStrategyVAutoStopBypassesMinHoldValidation(t *testing.T) {
 	if len(decisions) != 1 || decisions[0].Action != ActionCloseLong || decisions[0].DecisionSource != "auto_stop_loss" {
 		t.Fatalf("expected one StrategyV auto close_long stop, got %#v", decisions)
 	}
-	if err := validateDecisions(decisions, ctx); err != nil {
-		t.Fatalf("StrategyV auto stop should bypass min-hold validation, got %v", err)
+	validateDecisions(decisions, ctx)
+	if decisions[0].ValidationError != "" {
+		t.Fatalf("auto stop rejected: %v", decisions[0].ValidationError)
 	}
 }

@@ -230,15 +230,15 @@ type AutoDecisionState struct {
 
 // AutoTPState 单个持仓的自动止盈状态
 type AutoTPState struct {
-	Stage                int     `json:"-"` // 0=未触发, 1=已触发TP1, 2=已触发TP2
-	LastActionTimeMs     int64   `json:"-"` // 上次自动止盈动作时间（毫秒）
-	BaselineEntry        float64 `json:"-"` // 基准入场价（用于检测加仓/均价变化）
-	BaselineQty          float64 `json:"-"` // 基准数量（用于检测加仓）
-	InitialStop          float64 `json:"-"` // 开仓时初始止损，用于恢复和风险阶段管理
-	CurrentStop          float64 `json:"-"` // 当前已知保护止损
-	CurrentTakeProfit    float64 `json:"-"` // 当前已知止盈价
-	BestPrice            float64 `json:"-"` // 多单最高价/空单最低价
-	RealizedNetPnL       float64 `json:"-"` // 本进程已记录的部分平仓估算净收益
+	Stage                   int     `json:"-"` // 0=未触发, 1=已触发TP1, 2=已触发TP2
+	LastActionTimeMs        int64   `json:"-"` // 上次自动止盈动作时间（毫秒）
+	BaselineEntry           float64 `json:"-"` // 基准入场价（用于检测加仓/均价变化）
+	BaselineQty             float64 `json:"-"` // 基准数量（用于检测加仓）
+	InitialStop             float64 `json:"-"` // 开仓时初始止损，用于恢复和风险阶段管理
+	CurrentStop             float64 `json:"-"` // 当前已知保护止损
+	CurrentTakeProfit       float64 `json:"-"` // 当前已知止盈价
+	BestPrice               float64 `json:"-"` // 多单最高价/空单最低价
+	RealizedNetPnL          float64 `json:"-"` // 本进程已记录的部分平仓估算净收益
 	TrailingActive          bool    `json:"-"` // TP2 后是否已经进入 trailing 阶段
 	LastStopUpdateTimeMs    int64   `json:"-"` // 上次代码级 trailing 更新交易所止损的时间（20s 节流）
 	LastLLMStopUpdateTimeMs int64   `json:"-"` // 上次 AI/LLM update_stop_loss 的时间（15min 冷却）
@@ -276,7 +276,9 @@ type Decision struct {
 	WatchPriority         int     `json:"watch_priority,omitempty"`
 
 	// 决策来源标记: "llm" = LLM生成, "auto_stop_loss" = 自动止损, "auto_take_profit" = 自动止盈
-	DecisionSource   string `json:"decision_source,omitempty"`
+	DecisionSource string `json:"decision_source,omitempty"`
+	// ValidationError is internal validation state; invalid actions are logged and skipped.
+	ValidationError  string `json:"-"`
 	ExpectedStage    int    `json:"-"` // 自动仓位动作生成时预期的阶段，用于并发幂等校验
 	HasExpectedStage bool   `json:"-"`
 }

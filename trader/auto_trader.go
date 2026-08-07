@@ -1192,6 +1192,14 @@ func (at *AutoTrader) runCycle() error {
 			Success:        false,
 		}
 
+		// Semantic validation rejects only this action; never send it to the exchange.
+		if d.ValidationError != "" {
+			actionRecord.Error = "validation_failed: " + d.ValidationError
+			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("⏭ %s %s 校验失败，跳过执行: %s", d.Symbol, d.Action, d.ValidationError))
+			record.Decisions = append(record.Decisions, actionRecord)
+			continue
+		}
+
 		// ✅ 开仓前历史学习：检索 + 规则Gate + 可选OpenGuard
 		if at.tradeMemory != nil && (d.Action == decision.ActionOpenLong || d.Action == decision.ActionOpenShort) {
 			gate, gateErr := at.tradeMemory.GateOpenDecision(ctx, &d)

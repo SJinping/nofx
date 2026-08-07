@@ -24,13 +24,9 @@ func parseFullDecisionResponse(aiResponse string, ctx *Context) (*FullDecision, 
 	// 3. 可选：在验证前裁剪 AI 给出的过高杠杆，确保 validation 和最终执行使用同一杠杆
 	applyLeverageClip(decisions, ctx)
 
-	// 4. 验证决策
-	if err := validateDecisions(decisions, ctx); err != nil {
-		return &FullDecision{
-			CoTTrace:  cotTrace,
-			Decisions: decisions,
-		}, fmt.Errorf("决策验证失败: %w\n\n=== AI思维链分析 ===\n%s", err, cotTrace)
-	}
+	// 4. Validate each semantic action independently; invalid actions remain in
+	// the batch with ValidationError set so valid actions can still execute.
+	validateDecisions(decisions, ctx)
 
 	return &FullDecision{
 		CoTTrace:  cotTrace,
