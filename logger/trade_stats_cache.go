@@ -40,14 +40,16 @@ type TradeStatsCache struct {
 	PeakEquityTime     string                       `json:"peak_equity_time"`
 	SymbolStats        map[string]*SymbolTradeStats `json:"symbols"`
 	OpenLots           map[string][]openTradeLot    `json:"open_lots"`
+	PendingTradePnL    map[string]float64           `json:"pending_trade_pnl"`
 }
 
 // NewTradeStatsCache loads the persistent stats cache for a decision log dir.
 func NewTradeStatsCache(logDir string) *TradeStatsCache {
 	cache := &TradeStatsCache{
-		path:        filepath.Join(logDir, "trade_stats.json"),
-		SymbolStats: make(map[string]*SymbolTradeStats),
-		OpenLots:    make(map[string][]openTradeLot),
+		path:            filepath.Join(logDir, "trade_stats.json"),
+		SymbolStats:     make(map[string]*SymbolTradeStats),
+		OpenLots:        make(map[string][]openTradeLot),
+		PendingTradePnL: make(map[string]float64),
 	}
 
 	data, err := os.ReadFile(cache.path)
@@ -67,6 +69,9 @@ func NewTradeStatsCache(logDir string) *TradeStatsCache {
 	}
 	if cache.OpenLots == nil {
 		cache.OpenLots = make(map[string][]openTradeLot)
+	}
+	if cache.PendingTradePnL == nil {
+		cache.PendingTradePnL = make(map[string]float64)
 	}
 	fmt.Printf("📂 已加载交易统计缓存: %d 个币种, 已处理 cycle %d\n", len(cache.SymbolStats), cache.LastProcessedCycle)
 	return cache
@@ -127,6 +132,9 @@ func (c *TradeStatsCache) ProcessRecords(records []*DecisionRecord) {
 	if c.OpenLots == nil {
 		c.OpenLots = make(map[string][]openTradeLot)
 	}
+	if c.PendingTradePnL == nil {
+		c.PendingTradePnL = make(map[string]float64)
+	}
 
 	for _, record := range records {
 		if record == nil || record.CycleNumber <= c.LastProcessedCycle {
@@ -146,6 +154,10 @@ func (c *TradeStatsCache) ProcessRecords(records []*DecisionRecord) {
 
 func (c *TradeStatsCache) processAction(record *DecisionRecord, action DecisionAction) {
 	symbol := action.Symbol
+	// Observation-only actions must not make a symbol appear as traded.
+	if !isTradingAction(action.Action) {
+		return
+	}
 	stat := c.ensureSymbolStats(symbol)
 	actionTime := action.Timestamp
 	if actionTime.IsZero() {
@@ -165,14 +177,35 @@ func (c *TradeStatsCache) processAction(record *DecisionRecord, action DecisionA
 		c.addOpenLot(symbol, "short", action.Price, action.Quantity, actionTime)
 	case "close_long":
 		stat.CloseLongCount++
-		c.closeLots(stat, symbol, "long", action.Price, action.Quantity)
+		c.applyClose(stat, symbol, "long", action.Price, action.Quantity)
 	case "close_short":
 		stat.CloseShortCount++
-		c.closeLots(stat, symbol, "short", action.Price, action.Quantity)
+		c.applyClose(stat, symbol, "short", action.Price, action.Quantity)
 	case "partial_close":
 		stat.PartialCloseCount++
-		// partial_close records in historical logs do not always carry side; count
-		// them separately and leave realized PnL to explicit close_* actions.
+		// Historical partial_close records do not carry side. In a normal
+		// one-position account exactly one side has an open lot. If both hedge legs
+		// exist, skip rather than attribute PnL to the wrong side.
+		longLots := len(c.OpenLots[symbol+"_long"]) > 0
+		shortLots := len(c.OpenLots[symbol+"_short"]) > 0
+		if longLots == shortLots {
+			// Without an explicit side, never consume the wrong hedge leg.
+			return
+		}
+		if longLots {
+			c.applyPartialClose(stat, symbol, "long", action.Price, action.Quantity)
+		} else {
+			c.applyPartialClose(stat, symbol, "short", action.Price, action.Quantity)
+		}
+	}
+}
+
+func isTradingAction(action string) bool {
+	switch action {
+	case "open_long", "open_short", "close_long", "close_short", "partial_close":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -206,14 +239,14 @@ func (c *TradeStatsCache) addOpenLot(symbol, side string, price, qty float64, t 
 	c.OpenLots[key] = append(c.OpenLots[key], openTradeLot{Price: price, Quantity: qty, Time: t})
 }
 
-func (c *TradeStatsCache) closeLots(stat *SymbolTradeStats, symbol, side string, closePrice, qty float64) {
+func (c *TradeStatsCache) closeLots(stat *SymbolTradeStats, symbol, side string, closePrice, qty float64) (float64, bool, bool) {
 	if stat == nil || closePrice <= 0 || qty <= 0 {
-		return
+		return 0, false, false
 	}
 	key := symbol + "_" + side
 	lots := c.OpenLots[key]
 	if len(lots) == 0 {
-		return
+		return 0, false, false
 	}
 
 	remaining := qty
@@ -241,13 +274,45 @@ func (c *TradeStatsCache) closeLots(stat *SymbolTradeStats, symbol, side string,
 	}
 	c.OpenLots[key] = lots
 	if !matched {
+		return 0, false, false
+	}
+	return realized, len(lots) == 0, true
+}
+
+func (c *TradeStatsCache) applyPartialClose(stat *SymbolTradeStats, symbol, side string, price, qty float64) {
+	realized, complete, matched := c.closeLots(stat, symbol, side, price, qty)
+	if !matched {
 		return
 	}
-	stat.TotalTrades++
+	key := symbol + "_" + side
+	c.PendingTradePnL[key] += realized
 	stat.RealizedPnL += realized
-	if realized > 0 {
+	if complete {
+		c.completeTrade(stat, key)
+	}
+}
+
+func (c *TradeStatsCache) applyClose(stat *SymbolTradeStats, symbol, side string, price, qty float64) {
+	realized, complete, matched := c.closeLots(stat, symbol, side, price, qty)
+	if !matched {
+		return
+	}
+	key := symbol + "_" + side
+	c.PendingTradePnL[key] += realized
+	stat.RealizedPnL += realized
+	if !complete {
+		return
+	}
+	c.completeTrade(stat, key)
+}
+
+func (c *TradeStatsCache) completeTrade(stat *SymbolTradeStats, key string) {
+	total := c.PendingTradePnL[key]
+	delete(c.PendingTradePnL, key)
+	stat.TotalTrades++
+	if total > 0 {
 		stat.WinCount++
-	} else if realized < 0 {
+	} else if total < 0 {
 		stat.LossCount++
 	}
 }
