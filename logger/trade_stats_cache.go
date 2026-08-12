@@ -278,7 +278,7 @@ func (c *TradeStatsCache) closeLots(stat *SymbolTradeStats, symbol, side string,
 	}
 	// Exchange quantity rounding can leave a dust-sized remainder after the
 	// final fill; treat it as fully closed rather than leaving a phantom trade.
-	if remaining > 0 && len(lots) > 0 && remaining <= 1e-3+1e-9 {
+	if remaining > 0 && len(lots) > 0 && remaining <= 0.01 {
 		lots = nil
 	}
 	c.OpenLots[key] = lots
