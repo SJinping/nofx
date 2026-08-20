@@ -118,9 +118,8 @@ func btcDirectionConstraintPrompt() string {
 	return sb.String()
 }
 
-// buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
-// 注意风险回报比要与minRiskReward保持一致
-func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int) string {
+// buildSystemPrompt 构建 System Prompt。开仓净 RR 规则必须与执行层使用同一组运行时成本假设。
+func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int, assumedTakerFeeRate, assumedSlippageRate float64) string {
 	if altcoinMaxPositionEquityMultiple <= 0 {
 		altcoinMaxPositionEquityMultiple = 2.0
 	}
@@ -146,11 +145,25 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 
 	// === 硬约束（风险控制）===
 	sb.WriteString("# ⚖️ 仓位硬约束（风险控制）\n\n")
-	sb.WriteString(fmt.Sprintf("1. **风险回报比**: 必须 ≥ 1:%.0f(冒1%%风险，赚%.0f%%+收益) \n", minRiskReward, minRiskReward))
+	sb.WriteString(fmt.Sprintf("1. **净风险回报比**: 必须 ≥ %.2f:1（按下方代码同口径公式扣除手续费和滑点后计算）\n", minRiskReward))
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
 	sb.WriteString(fmt.Sprintf("3. **单币最大仓位**: 山寨币不超过当前账户净值的 %.2g 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString("   当前账户净值会在用户消息中给出，你需要基于该数值自行判断仓位是否超限。\n")
 	sb.WriteString("4. **保证金**: 总使用率 ≤ 90%\n\n")
+
+	// 这段规则刻意把执行器的计算公式和当前 trader 的配置值直接交给模型，
+	// 避免模型按未扣成本的原始 RR 选出会被执行层拒绝的开仓。
+	sb.WriteString("## 开仓净风险回报计算（代码执行层同口径，开仓前必须逐项计算）\n")
+	sb.WriteString("对每个 `open_long` 或 `open_short`，以候选币当前价格 `entry_price`、你输出的 `stop_loss`、`take_profit` 和 `leverage` 计算；不要使用未扣成本的原始 RR 代替净 RR。\n")
+	sb.WriteString(fmt.Sprintf("本周期运行时参数（已由系统注入）：`taker_fee_rate = %.6f (%.3f%%)`；`slippage_rate = %.6f (%.3f%%)`；`min_net_rr = %.2f:1`。\n", assumedTakerFeeRate, assumedTakerFeeRate*100, assumedSlippageRate, assumedSlippageRate*100, minRiskReward))
+	sb.WriteString("做多：`raw_risk_pct = (entry_price - stop_loss) / entry_price * 100`；`raw_reward_pct = (take_profit - entry_price) / entry_price * 100`。\n")
+	sb.WriteString("做空：`raw_risk_pct = (stop_loss - entry_price) / entry_price * 100`；`raw_reward_pct = (entry_price - take_profit) / entry_price * 100`。\n")
+	sb.WriteString("`round_trip_cost_roi_pct = 2 * (taker_fee_rate + slippage_rate) * leverage * 100`。\n")
+	sb.WriteString("`net_risk_roi_pct = raw_risk_pct * leverage + round_trip_cost_roi_pct`。\n")
+	sb.WriteString("`net_reward_roi_pct = raw_reward_pct * leverage - round_trip_cost_roi_pct`。\n")
+	sb.WriteString("`net_rr = net_reward_roi_pct / net_risk_roi_pct`。\n")
+	sb.WriteString("硬门槛：仅当 net_reward_roi_pct > 0 且 net_rr >= min_net_rr 时才可输出 open_long 或 open_short；否则输出 `wait`，不要期待执行层放宽规则。\n")
+	sb.WriteString("先在 reasoning 中简要列出 raw_risk_pct、raw_reward_pct、round_trip_cost_roi_pct、net_risk_roi_pct、net_reward_roi_pct、net_rr，再输出开仓 JSON；这只是自检说明，执行层仍会用实时价格复算。\n\n")
 
 	// === 交易频率认知 ===
 	sb.WriteString("# ⏱️ 交易频率认知\n\n")
@@ -280,7 +293,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	sb.WriteString("- 目标是夏普比率，不是交易频率\n")
 	sb.WriteString("- 做空 = 做多，都是赚钱工具\n")
 	sb.WriteString("- 宁可错过，不做低质量交易\n")
-	sb.WriteString(fmt.Sprintf("风险回报比1:%.0f是底线\n", minRiskReward))
+	sb.WriteString(fmt.Sprintf("扣成本后的净风险回报比 %.2f:1 是硬底线\n", minRiskReward))
 
 	return sb.String()
 }

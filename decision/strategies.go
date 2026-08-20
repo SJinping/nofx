@@ -6,7 +6,15 @@ type StrategyA struct{}
 func (StrategyA) Name() string { return "A" }
 
 func (StrategyA) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPrompt(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.AltcoinMaxPositionEquityMultiple, ctx.ScanIntervalMin)
+	return buildSystemPrompt(
+		ctx.Account.TotalEquity,
+		ctx.BTCETHLeverage,
+		ctx.AltcoinLeverage,
+		ctx.AltcoinMaxPositionEquityMultiple,
+		ctx.ScanIntervalMin,
+		ctx.AssumedTakerFeeRate,
+		ctx.AssumedSlippageRate,
+	)
 }
 
 func (StrategyA) BuildUserPrompt(ctx *Context) string {
