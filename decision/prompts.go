@@ -1420,6 +1420,19 @@ func getPerformance(ctx *Context) string {
 	// 近期系统自动操作记录
 	sb.WriteString(formatAutoEvents(ctx.RecentAutoEvents))
 
+	cooldown := ctx.PerformanceCooldown
+	if cooldown.Active {
+		remaining := time.Until(cooldown.ReleaseAt)
+		if remaining < 0 {
+			remaining = 0
+		}
+		sb.WriteString(fmt.Sprintf("\n**绩效冷却（代码强制）**: 已观望%d分钟/%d周期，剩余约%d分钟；冷却结束前禁止新开仓，允许持仓风控操作。\n",
+			cooldown.WaitMinutes, cooldown.WaitCycles, int(remaining.Minutes())))
+	} else if cooldown.EverTriggered {
+		sb.WriteString(fmt.Sprintf("\n**绩效冷却（代码状态）**: 已结束，已观望%d分钟/%d周期；允许重新评估新开仓，但仍须满足全部风险门槛。\n",
+			cooldown.WaitMinutes, cooldown.WaitCycles))
+	}
+
 	return sb.String()
 }
 

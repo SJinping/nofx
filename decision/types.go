@@ -157,22 +157,23 @@ func DefaultAutoTakeProfitConfig() AutoTakeProfitConfig {
 
 // Context 交易上下文（传递给AI的完整信息）
 type Context struct {
-	CurrentTime                      string                  `json:"current_time"`
-	RuntimeMinutes                   int                     `json:"runtime_minutes"`
-	CallCount                        int                     `json:"call_count"`
-	Account                          AccountInfo             `json:"account"`
-	Positions                        []PositionInfo          `json:"positions"`
-	CandidateCoins                   []CandidateCoin         `json:"candidate_coins"`
-	MarketDataMap                    map[string]*market.Data `json:"-"` // 不序列化，但内部使用
-	OITopDataMap                     map[string]*OITopData   `json:"-"` // OI Top数据映射
-	Performance                      interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
-	BTCETHLeverage                   int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
-	AltcoinLeverage                  int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
-	AltcoinMaxPositionEquityMultiple float64                 `json:"-"` // 山寨币单币名义仓位上限：账户净值倍数（从配置读取）
-	LeverageClip                     LeverageClipConfig      `json:"-"` // 杠杆裁剪配置
-	MarginValidation                 MarginValidationConfig  `json:"-"` // 保证金预检配置
-	PromptStrategy                   PromptStrategy          `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
-	AutoState                        *AutoDecisionState      `json:"-"` // 自动决策跨周期状态（由trader层注入）
+	CurrentTime                      string                   `json:"current_time"`
+	RuntimeMinutes                   int                      `json:"runtime_minutes"`
+	CallCount                        int                      `json:"call_count"`
+	Account                          AccountInfo              `json:"account"`
+	Positions                        []PositionInfo           `json:"positions"`
+	CandidateCoins                   []CandidateCoin          `json:"candidate_coins"`
+	MarketDataMap                    map[string]*market.Data  `json:"-"` // 不序列化，但内部使用
+	OITopDataMap                     map[string]*OITopData    `json:"-"` // OI Top数据映射
+	Performance                      interface{}              `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
+	PerformanceCooldown              PerformanceCooldownState `json:"-"` // 基于绩效的真实时间冷却状态
+	BTCETHLeverage                   int                      `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
+	AltcoinLeverage                  int                      `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	AltcoinMaxPositionEquityMultiple float64                  `json:"-"` // 山寨币单币名义仓位上限：账户净值倍数（从配置读取）
+	LeverageClip                     LeverageClipConfig       `json:"-"` // 杠杆裁剪配置
+	MarginValidation                 MarginValidationConfig   `json:"-"` // 保证金预检配置
+	PromptStrategy                   PromptStrategy           `json:"-"` // 可插拔策略实现（为空时默认StrategyA）
+	AutoState                        *AutoDecisionState       `json:"-"` // 自动决策跨周期状态（由trader层注入）
 
 	// 成本假设（用于风控/自动止盈/校验，不传给LLM）
 	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004
@@ -209,6 +210,20 @@ type Context struct {
 
 	// AI 客户端（每个 trader 独立实例，为 nil 时使用全局默认）
 	AI AICaller `json:"-"`
+}
+
+// PerformanceCooldownState 是 trader 层计算后注入 prompt/执行层的绩效冷却快照。
+// 冷却不是由 LLM 通过自然语言自行计数，而是由代码按时间和决策周期维护。
+type PerformanceCooldownState struct {
+	Active            bool      `json:"active"`
+	EverTriggered     bool      `json:"ever_triggered"`
+	TriggeredAt       time.Time `json:"triggered_at,omitempty"`
+	ReleaseAt         time.Time `json:"release_at,omitempty"`
+	TriggerCycle      int       `json:"trigger_cycle,omitempty"`
+	WaitCycles        int       `json:"wait_cycles,omitempty"`
+	WaitMinutes       int       `json:"wait_minutes,omitempty"`
+	CooldownMinutes   int       `json:"cooldown_minutes,omitempty"`
+	LastTriggerReason string    `json:"last_trigger_reason,omitempty"`
 }
 
 // AutoEventSummary 近期系统自动操作摘要（注入 prompt，供 LLM 学习）

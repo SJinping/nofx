@@ -140,6 +140,7 @@ type AutoTrader struct {
 	dailyStartEquity      float64 // 当日开始净值（用于日亏损计算）
 	peakEquity            float64 // 历史最高净值（用于回撤计算）
 	stopUntil             time.Time
+	performanceCooldown   decision.PerformanceCooldownState
 	isRunning             bool
 	isPaused              bool                        // 是否暂停（仅停止交易循环，不退出程序）
 	startTime             time.Time                   // 系统启动时间
@@ -169,6 +170,7 @@ type AutoTrader struct {
 	scanIntervalCh    chan time.Duration // 通知 Run() 循环重置 ticker
 	riskConfigCh      chan PositionRiskConfig
 	tradeMu           sync.Mutex // AI 与高频风险循环共用的下单串行锁
+	performanceMu     sync.Mutex // 保护 performanceCooldown
 	autoStateMu       sync.Mutex // 保护 autoDecisionState；决策上下文使用其快照
 	riskLogMu         sync.Mutex
 	riskLogPath       string
@@ -1618,6 +1620,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 	// 6. 构建上下文（从运行时配置读取可热更新的参数）
 	rcSnap := at.runtimeCfg.Get()
+	performanceCooldown := at.updatePerformanceCooldown(performance, time.Now(), at.callCount, rcSnap.ScanIntervalMin)
 	ctx := &decision.Context{
 		CurrentTime:                      time.Now().Format("2006-01-02 15:04:05"),
 		RuntimeMinutes:                   int(time.Since(at.startTime).Minutes()),
@@ -1641,6 +1644,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Positions:           positionInfos,
 		CandidateCoins:      candidateCoins,
 		Performance:         performance,
+		PerformanceCooldown: performanceCooldown,
 		RecentAutoEvents:    recentAutoEvents,
 		RecentTrades:        recentTrades,
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
@@ -1812,6 +1816,65 @@ func (at *AutoTrader) updateShortTermWatchlist(decisions []decision.Decision, ct
 	}
 }
 
+// updatePerformanceCooldown converts the prompt-only Sharpe rule into a real
+// time-based gate. The same unchanged bad-performance snapshot is allowed to
+// expire once; a new trigger requires a changed performance signature or a
+// recovery followed by a new deterioration.
+func (at *AutoTrader) updatePerformanceCooldown(perf *logger.PerformanceAnalysis, now time.Time, cycle, scanIntervalMin int) decision.PerformanceCooldownState {
+	if scanIntervalMin <= 0 {
+		scanIntervalMin = 10
+	}
+	interval := time.Duration(scanIntervalMin) * time.Minute
+	duration := 6 * interval
+
+	at.performanceMu.Lock()
+	defer at.performanceMu.Unlock()
+
+	st := at.performanceCooldown
+	bad := perf != nil && perf.SharpeRatio < -0.5
+	if !bad {
+		st.Active = false
+		st.LastTriggerReason = ""
+		if st.EverTriggered {
+			st.WaitMinutes = int(now.Sub(st.TriggeredAt).Minutes())
+			st.WaitCycles = int(now.Sub(st.TriggeredAt) / interval)
+		}
+		at.performanceCooldown = st
+		return st
+	}
+
+	signature := fmt.Sprintf("trades=%d;losses=%d;streak=%d;sharpe=%.4f", perf.TotalTrades, perf.LosingTrades, perf.CurrentLosingStreak, perf.SharpeRatio)
+	if st.Active {
+		if now.Before(st.ReleaseAt) {
+			st.WaitMinutes = int(now.Sub(st.TriggeredAt).Minutes())
+			st.WaitCycles = int(now.Sub(st.TriggeredAt) / interval)
+			at.performanceCooldown = st
+			return st
+		}
+		st.Active = false
+		st.WaitMinutes = int(now.Sub(st.TriggeredAt).Minutes())
+		st.WaitCycles = int(now.Sub(st.TriggeredAt) / interval)
+	}
+
+	// Do not restart an endless cooldown every cycle when no new trade result
+	// has changed the performance state.
+	if signature != st.LastTriggerReason {
+		st.Active = true
+		st.EverTriggered = true
+		st.TriggeredAt = now
+		st.ReleaseAt = now.Add(duration)
+		st.TriggerCycle = cycle
+		st.WaitCycles = 0
+		st.WaitMinutes = 0
+		st.CooldownMinutes = int(duration / time.Minute)
+		st.LastTriggerReason = signature
+		log.Printf("⏳ 绩效冷却启动：Sharpe=%.2f，连续亏损=%d，持续%d分钟（至%s）",
+			perf.SharpeRatio, perf.CurrentLosingStreak, st.CooldownMinutes, st.ReleaseAt.Format(time.RFC3339))
+	}
+	at.performanceCooldown = st
+	return st
+}
+
 // shouldPauseForRisk 基于净值序列进行硬风控判断：
 // - max_daily_loss：从“当日开始净值”计算
 // - max_drawdown：从“历史峰值净值”计算
@@ -1896,6 +1959,12 @@ func (at *AutoTrader) shouldPauseForRisk(ctx *decision.Context) bool {
 
 // executeDecisionWithRecord 执行AI决策并记录详细信息
 func (at *AutoTrader) executeDecisionWithRecord(ctx *decision.Context, dec *decision.Decision, actionRecord *logger.DecisionAction) error {
+	if ctx != nil && dec != nil && ctx.PerformanceCooldown.Active && time.Now().Before(ctx.PerformanceCooldown.ReleaseAt) &&
+		(dec.Action == decision.ActionOpenLong || dec.Action == decision.ActionOpenShort) {
+		return fmt.Errorf("绩效冷却中，禁止新开仓，剩余约%d分钟（至%s）",
+			int(time.Until(ctx.PerformanceCooldown.ReleaseAt).Minutes()), ctx.PerformanceCooldown.ReleaseAt.Format(time.RFC3339))
+	}
+
 	switch dec.Action {
 	case decision.ActionOpenLong:
 		return at.executeOpenWithRecord(ctx, dec, actionRecord, "long")
