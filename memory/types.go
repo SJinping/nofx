@@ -21,12 +21,17 @@ type TradeEpisode struct {
 	StopLoss   float64 `json:"stop_loss,omitempty"`
 	TakeProfit float64 `json:"take_profit,omitempty"`
 
-	EntryReasoning string `json:"entry_reasoning,omitempty"`
-	EntryConfidence int   `json:"entry_confidence,omitempty"`
+	EntryReasoning  string `json:"entry_reasoning,omitempty"`
+	EntryConfidence int    `json:"entry_confidence,omitempty"`
 
 	// SignalVector is the lightweight numeric representation of the entry signal.
 	// It is used for similarity search.
 	SignalVector []float64 `json:"signal_vector,omitempty"`
+
+	// RealizedPnL and ClosedQuantity accumulate locally executed partial exits so
+	// the eventual completed TradeRecord reflects the whole position lifecycle.
+	RealizedPnL    float64 `json:"realized_pnl,omitempty"`
+	ClosedQuantity float64 `json:"closed_quantity,omitempty"`
 
 	// Rolling metrics maintained during holding.
 	Rolling RollingMetrics `json:"rolling"`
@@ -99,7 +104,7 @@ type TradeAnalysis struct {
 }
 
 type SimilarMatch struct {
-	Score float64     `json:"score"`
+	Score float64      `json:"score"`
 	Trade *TradeRecord `json:"trade"`
 	// Analysis may be nil if not available.
 	Analysis *TradeAnalysis `json:"analysis,omitempty"`
@@ -122,4 +127,3 @@ type GateResult struct {
 	// Similar matches used for this decision (for logging / OpenGuard context).
 	Similar []SimilarMatch `json:"similar,omitempty"`
 }
-

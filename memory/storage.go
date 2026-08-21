@@ -26,7 +26,7 @@ func appendJSONL(path string, v any) error {
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return err
 	}
-	return nil
+	return f.Sync()
 }
 
 func loadJSONL[T any](path string, maxLines int) ([]T, error) {
@@ -84,4 +84,3 @@ func readJSONFile(path string, v any) error {
 func analysisFilePath(baseDir, tradeID string) string {
 	return filepath.Join(baseDir, "analyses", fmt.Sprintf("%s.json", tradeID))
 }
-

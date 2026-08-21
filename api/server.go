@@ -505,7 +505,7 @@ func calcOrderStatsFromOrders(symbol string, orders []traderpkg.OrderRecord, ass
 }
 
 // handleTradedSymbols 返回按币种汇总的盈亏详情（已实现 + 当前未实现）。
-// 数据来源：TradeStatsCache（增量持久化）+ 当前持仓快照（positions）。
+// 已实现统计来自统一 completed-trade ledger；当前仓位来自交易所快照。
 func (s *Server) handleTradedSymbols(c *gin.Context) {
 	_, traderID, err := s.getTraderFromQuery(c)
 	if err != nil {
@@ -519,7 +519,7 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		return
 	}
 
-	cachedStats := trader.GetDecisionLogger().GetTradeStatsCache().GetSymbolStats()
+	cachedStats := trader.GetCompletedSymbolStats()
 
 	items := make(map[string]*tradedSymbolSummaryItem)
 	for _, cs := range cachedStats {
@@ -746,7 +746,7 @@ func (s *Server) handleExchangeTradedSymbols(c *gin.Context) {
 		for _, sym := range symbols {
 			requested[sym] = struct{}{}
 		}
-		for _, st := range at.GetDecisionLogger().GetTradeStatsCache().GetSymbolStats() {
+		for _, st := range at.GetCompletedSymbolStats() {
 			if st == nil {
 				continue
 			}
@@ -1335,13 +1335,12 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		return
 	}
 
-	// 分析最近N个周期的交易表现（默认100，可通过 limit/trade_limit 调整）
-	limit := 100
+	// trade_limit limits returned recent completed trades; limit is retained as a
+	// backwards-compatible alias now that cycle-count lookback is not meaningful.
 	tradeLimit := 100
-
 	if v := c.Query("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
+			tradeLimit = n
 		}
 	}
 	if v := c.Query("trade_limit"); v != "" {
@@ -1350,27 +1349,16 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		}
 	}
 
-	// basic clamp to avoid huge IO
-	if limit < 1 {
-		limit = 1
-	}
 	if tradeLimit < 0 {
 		tradeLimit = 0
-	}
-	if limit > 5000 {
-		limit = 5000
 	}
 	if tradeLimit > 500 {
 		tradeLimit = 500
 	}
 
-	performance, err := trader.GetDecisionLogger().AnalyzePerformance(limit, tradeLimit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("分析历史表现失败: %v", err),
-		})
-		return
-	}
+	// 已完成交易只能从统一账本读取：交易所条件单平仓不会新增 AI cycle，
+	// 因而不能回放有限 decision log 来统计。
+	performance := trader.AnalyzeCompletedTrades(tradeLimit)
 
 	c.JSON(http.StatusOK, performance)
 }

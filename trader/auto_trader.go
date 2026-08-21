@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"nofx/decision"
 	"nofx/logger"
 	"nofx/mcp"
@@ -1569,13 +1570,9 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		marginUsedPct = (totalMarginUsed / totalEquity) * 100
 	}
 
-	// 5. 分析历史表现（最近20个周期）
-	performance, err := at.decisionLogger.AnalyzePerformance(100, 100)
-	if err != nil {
-		log.Printf("⚠️  分析历史表现失败: %v", err)
-		// 不影响主流程，继续执行（但设置performance为nil以避免传递错误数据）
-		performance = nil
-	}
+	// 5. 从统一的已完成交易账本读取表现。该账本同时记录本地平仓和
+	// 交易所条件单触发后由对账逻辑补记的平仓，不能再只回放有限的 AI cycle。
+	performance := at.AnalyzeCompletedTrades(100)
 
 	// 5.5 提取近期系统自动操作记录和最近交易结果（供 prompt 注入）
 	var recentAutoEvents []decision.AutoEventSummary
@@ -2467,9 +2464,19 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 	}
 
 	// 用真实/估算成交价累计部分平仓净收益，供整笔交易级 breakeven 计算。
-	closedQty := quantity - remainingQuantity
-	if closedQty <= 0 {
-		closedQty = closeQuantity
+	// Attribute only this reduce order's fill to the episode. A concurrent exchange
+	// stop/manual reduction can also change the live snapshot and must not inherit
+	// this order's price.
+	closedQty := closeQuantity
+	if executedQty := floatFromInterface(order["executedQty"]); executedQty > 0 {
+		closedQty = math.Min(executedQty, quantity)
+	} else if observedReduction := quantity - remainingQuantity; observedReduction >= 0 && observedReduction < closedQty {
+		closedQty = observedReduction
+	}
+	if at.tradeMemory != nil && fillPrice > 0 && closedQty > 0 {
+		if err := at.tradeMemory.OnPartialCloseSuccess(dec, side, closedQty, fillPrice); err != nil {
+			log.Printf("  ⚠ 部分平仓账本补记失败: %v", err)
+		}
 	}
 	st.RealizedNetPnL += estimatePartialCloseNetPnL(strings.ToLower(side), st.BaselineEntry, fillPrice, closedQty,
 		at.config.AssumedTakerFeeRate+at.config.AssumedSlippageRate)
@@ -2613,6 +2620,43 @@ func (at *AutoTrader) GetAIClient() *mcp.Client {
 // GetDecisionLogger 获取决策日志记录器
 func (at *AutoTrader) GetDecisionLogger() *logger.DecisionLogger {
 	return at.decisionLogger
+}
+
+// AnalyzeCompletedTrades returns performance from the canonical completed-trade
+// ledger. It includes exchange-side conditional exits reconciled into TradeMemory.
+func (at *AutoTrader) AnalyzeCompletedTrades(tradeLimit int) *logger.PerformanceAnalysis {
+	if at != nil && at.tradeMemory != nil {
+		return at.tradeMemory.AnalyzeCompletedTrades(tradeLimit)
+	}
+	// TradeMemory initialization is best-effort at startup. Preserve a read-only
+	// fallback rather than silently treating an unavailable ledger as zero trades.
+	if at != nil && at.decisionLogger != nil {
+		if performance, err := at.decisionLogger.AnalyzePerformance(5000, tradeLimit); err == nil {
+			return performance
+		}
+	}
+	return &logger.PerformanceAnalysis{
+		RecentTrades: []logger.TradeOutcome{},
+		SymbolStats:  make(map[string]*logger.SymbolPerformance),
+	}
+}
+
+// GetCompletedSymbolStats returns closed-trade summaries from the same ledger
+// used for performance and decision feedback.
+func (at *AutoTrader) GetCompletedSymbolStats() map[string]*logger.SymbolTradeStats {
+	if at != nil && at.tradeMemory != nil {
+		return at.tradeMemory.CompletedSymbolStats()
+	}
+	if at != nil && at.decisionLogger != nil && at.decisionLogger.GetTradeStatsCache() != nil {
+		fallback := make(map[string]*logger.SymbolTradeStats)
+		for _, stat := range at.decisionLogger.GetTradeStatsCache().GetSymbolStats() {
+			if stat != nil {
+				fallback[stat.Symbol] = stat
+			}
+		}
+		return fallback
+	}
+	return map[string]*logger.SymbolTradeStats{}
 }
 
 // GetAssumedTakerFeeRate 返回“估算手续费率”（用于订单级别复盘展示的估算，不影响真实下单）

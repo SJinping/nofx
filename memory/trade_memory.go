@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"nofx/decision"
@@ -14,12 +15,14 @@ import (
 )
 
 type TradeMemory struct {
-	traderID   string
-	baseDir    string
-	tradesPath string
+	traderID     string
+	baseDir      string
+	tradesPath   string
+	episodesPath string
 
 	mu       sync.Mutex
 	episodes map[string]*TradeEpisode // key: symbol_side
+	closing  map[string]struct{}      // prevents duplicate finalization per symbol_side
 	history  []*TradeRecord           // completed trades (recent first)
 
 	analysisCache map[string]*TradeAnalysis
@@ -50,11 +53,36 @@ func NewTradeMemory(traderID string) (*TradeMemory, error) {
 	// most recent first
 	sort.Slice(h, func(i, j int) bool { return h[i].CloseTime.After(h[j].CloseTime) })
 
+	episodesPath := filepath.Join(base, "open_episodes.json")
+	episodes := make(map[string]*TradeEpisode)
+	if err := readJSONFile(episodesPath, &episodes); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("load open trade episodes: %w", err)
+	}
+	completedIDs := make(map[string]struct{}, len(h))
+	for _, trade := range h {
+		if trade != nil && trade.TradeID != "" {
+			completedIDs[trade.TradeID] = struct{}{}
+		}
+	}
+	for key, ep := range episodes {
+		if ep == nil || ep.Symbol == "" || (ep.Side != "long" && ep.Side != "short") {
+			delete(episodes, key)
+			continue
+		}
+		// A crash after appending the completed record but before checkpointing
+		// episodes leaves a stale entry. The ledger wins on recovery.
+		if _, completed := completedIDs[ep.TradeID]; completed {
+			delete(episodes, key)
+		}
+	}
+
 	tm := &TradeMemory{
 		traderID:      traderID,
 		baseDir:       base,
 		tradesPath:    tradesPath,
-		episodes:      make(map[string]*TradeEpisode),
+		episodesPath:  episodesPath,
+		episodes:      episodes,
+		closing:       make(map[string]struct{}),
 		history:       h,
 		analysisCache: make(map[string]*TradeAnalysis),
 	}
@@ -74,6 +102,46 @@ func NewTradeMemory(traderID string) (*TradeMemory, error) {
 
 func posKey(symbol, side string) string {
 	return strings.ToUpper(strings.TrimSpace(symbol)) + "_" + strings.ToLower(strings.TrimSpace(side))
+}
+
+// persistEpisodesLocked atomically checkpoints open lifecycle state. In particular,
+// partial-close PnL must survive a process restart before the final exchange exit.
+func (tm *TradeMemory) persistEpisodesLocked() error {
+	if tm == nil || tm.episodesPath == "" {
+		return nil
+	}
+	if err := ensureDir(filepath.Dir(tm.episodesPath)); err != nil {
+		return err
+	}
+	data, err := json.Marshal(tm.episodes)
+	if err != nil {
+		return err
+	}
+	tmp := tm.episodesPath + ".tmp"
+	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, tm.episodesPath); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(tm.episodesPath))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // UpdateEpisodesFromPositions updates rolling metrics for active episodes based on current positions snapshot.
@@ -114,6 +182,10 @@ func (tm *TradeMemory) UpdateEpisodesFromPositions(traderID string, positions []
 			mark = p.EntryPrice
 		}
 		tm.updateRollingLocked(ep, mark, now)
+	}
+	if err := tm.persistEpisodesLocked(); err != nil {
+		// Rolling-state persistence is best-effort; it must not interrupt trading.
+		return
 	}
 }
 
@@ -489,6 +561,44 @@ func (tm *TradeMemory) OnOpenSuccess(ctx *decision.Context, dec *decision.Decisi
 		SignalVector:    vec,
 		Rolling:         RollingMetrics{},
 	}
+	if err := tm.persistEpisodesLocked(); err != nil {
+		// The position is live even if the local checkpoint failed; keep trading and
+		// let a later position refresh retry persistence.
+		return
+	}
+}
+
+// OnPartialCloseSuccess accumulates a locally executed partial exit without
+// finalizing the episode. The subsequent final close, including an exchange-side
+// conditional close detected by reconciliation, records the total lifecycle PnL.
+func (tm *TradeMemory) OnPartialCloseSuccess(dec *decision.Decision, side string, quantity, exitPrice float64) error {
+	if tm == nil || dec == nil || quantity <= 0 || exitPrice <= 0 {
+		return nil
+	}
+	sym := strings.ToUpper(strings.TrimSpace(dec.Symbol))
+	side = strings.ToLower(strings.TrimSpace(side))
+	if sym == "" || (side != "long" && side != "short") {
+		return nil
+	}
+
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	ep := tm.episodes[posKey(sym, side)]
+	if ep == nil || ep.EntryPrice <= 0 || ep.Quantity <= 0 {
+		return nil
+	}
+	remaining := ep.Quantity - ep.ClosedQuantity
+	if remaining <= 0 {
+		return nil
+	}
+	closedQty := math.Min(quantity, remaining)
+	pnl := (exitPrice - ep.EntryPrice) * closedQty
+	if side == "short" {
+		pnl = -pnl
+	}
+	ep.RealizedPnL += pnl
+	ep.ClosedQuantity += closedQty
+	return tm.persistEpisodesLocked()
 }
 
 // OnCloseSuccess finalizes an episode into a persisted TradeRecord and triggers post-trade review agent (async).
@@ -507,24 +617,28 @@ func (tm *TradeMemory) OnCloseSuccess(ctx *decision.Context, dec *decision.Decis
 	k := posKey(sym, side)
 
 	tm.mu.Lock()
-	ep := tm.episodes[k]
-	// If no episode found, create a placeholder (best-effort).
-	if ep == nil {
-		ep = &TradeEpisode{
-			TradeID:         fmt.Sprintf("%s_%s_%d", tm.traderID, k, time.Now().UnixMilli()),
-			TraderID:        tm.traderID,
-			Symbol:          sym,
-			Side:            side,
-			OpenTime:        time.Now().Add(-10 * time.Minute),
-			EntryPrice:      exitPrice,
-			Quantity:        0,
-			Leverage:        0,
-			PositionSizeUSD: 0,
-		}
+	if tm.closing == nil {
+		tm.closing = make(map[string]struct{})
 	}
-	// detach episode
-	delete(tm.episodes, k)
+	if _, alreadyClosing := tm.closing[k]; alreadyClosing {
+		tm.mu.Unlock()
+		return nil, nil
+	}
+	ep := tm.episodes[k]
+	if ep == nil {
+		// Never synthesize a zero-quantity completed trade: an absent episode means
+		// this close was already finalized or was not observed by the local ledger.
+		tm.mu.Unlock()
+		return nil, nil
+	}
+	tm.closing[k] = struct{}{}
 	tm.mu.Unlock()
+
+	clearClosing := func() {
+		tm.mu.Lock()
+		delete(tm.closing, k)
+		tm.mu.Unlock()
+	}
 
 	closeTime := time.Now()
 	durationS := int64(0)
@@ -535,22 +649,23 @@ func (tm *TradeMemory) OnCloseSuccess(ctx *decision.Context, dec *decision.Decis
 		}
 	}
 
-	// PnL computation (USDT): (exit-entry)*qty for long, reverse for short.
-	pnl := 0.0
-	if ep.Quantity > 0 && ep.EntryPrice > 0 {
+	// PnL computation (USDT) includes any earlier partial exits from this episode.
+	// The final close only applies to the quantity still open on the exchange.
+	remainingQty := ep.Quantity - ep.ClosedQuantity
+	if remainingQty < 0 {
+		remainingQty = 0
+	}
+	pnl := ep.RealizedPnL
+	if remainingQty > 0 && ep.EntryPrice > 0 {
 		if side == "long" {
-			pnl = (exitPrice - ep.EntryPrice) * ep.Quantity
+			pnl += (exitPrice - ep.EntryPrice) * remainingQty
 		} else {
-			pnl = (ep.EntryPrice - exitPrice) * ep.Quantity
+			pnl += (ep.EntryPrice - exitPrice) * remainingQty
 		}
 	}
 	pnlPct := 0.0
-	if ep.EntryPrice > 0 {
-		if side == "long" {
-			pnlPct = ((exitPrice - ep.EntryPrice) / ep.EntryPrice) * 100
-		} else {
-			pnlPct = ((ep.EntryPrice - exitPrice) / ep.EntryPrice) * 100
-		}
+	if ep.EntryPrice > 0 && ep.Quantity > 0 {
+		pnlPct = pnl / (ep.EntryPrice * ep.Quantity) * 100
 	}
 
 	tr := &TradeRecord{
@@ -579,18 +694,27 @@ func (tm *TradeMemory) OnCloseSuccess(ctx *decision.Context, dec *decision.Decis
 		SignalVector:    ep.SignalVector,
 	}
 
-	// Persist the trade record.
+	// Persist the trade record before removing the checkpointed open episode.
 	if err := appendJSONL(tm.tradesPath, tr); err != nil {
+		clearClosing()
 		return tr, err
 	}
 
 	// Update in-memory history (recent first, keep bounded).
 	tm.mu.Lock()
+	delete(tm.episodes, k)
 	tm.history = append([]*TradeRecord{tr}, tm.history...)
 	if len(tm.history) > 5000 {
 		tm.history = tm.history[:5000]
 	}
+	checkpointErr := tm.persistEpisodesLocked()
+	delete(tm.closing, k)
 	tm.mu.Unlock()
+	if checkpointErr != nil {
+		// The completed record is durable; surface checkpoint failure so callers can
+		// log it rather than silently allowing a later duplicate close attempt.
+		return tr, fmt.Errorf("checkpoint closed trade episode: %w", checkpointErr)
+	}
 
 	// Async post-trade review + analysis file.
 	go func() {
@@ -645,4 +769,179 @@ func (tm *TradeMemory) EnsureStorage() {
 		})
 		// remove the init line to keep file clean? keep it; loader will ignore unknown shape.
 	}
+}
+
+// AnalyzeCompletedTrades calculates strategy feedback from the canonical completed
+// trade ledger. Both local closes and reconciled exchange conditional closes are
+// persisted there, unlike decision-cycle logs which can omit exchange-side fills.
+func (tm *TradeMemory) AnalyzeCompletedTrades(tradeLimit int) *logger.PerformanceAnalysis {
+	analysis := &logger.PerformanceAnalysis{
+		RecentTrades: []logger.TradeOutcome{},
+		SymbolStats:  make(map[string]*logger.SymbolPerformance),
+	}
+	if tm == nil {
+		return analysis
+	}
+
+	tm.mu.Lock()
+	history := append([]*TradeRecord(nil), tm.history...)
+	tm.mu.Unlock()
+	if len(history) == 0 {
+		return analysis
+	}
+
+	// history is stored newest-first; calculate streaks in close-time order.
+	sort.SliceStable(history, func(i, j int) bool { return history[i].CloseTime.Before(history[j].CloseTime) })
+	returns := make([]float64, 0, len(history))
+	currentLosingStreak, maxLosingStreak := 0, 0
+	totalWin, totalLoss := 0.0, 0.0
+
+	for _, trade := range history {
+		if trade == nil || trade.Symbol == "" || trade.CloseTime.IsZero() {
+			continue
+		}
+		analysis.TotalTrades++
+		returns = append(returns, trade.PnLPct)
+		if trade.PnL > 0 {
+			analysis.WinningTrades++
+			totalWin += trade.PnL
+			currentLosingStreak = 0
+		} else if trade.PnL < 0 {
+			analysis.LosingTrades++
+			totalLoss += trade.PnL
+			currentLosingStreak++
+			if currentLosingStreak > maxLosingStreak {
+				maxLosingStreak = currentLosingStreak
+			}
+		}
+
+		stats := analysis.SymbolStats[trade.Symbol]
+		if stats == nil {
+			stats = &logger.SymbolPerformance{Symbol: trade.Symbol}
+			analysis.SymbolStats[trade.Symbol] = stats
+		}
+		stats.TotalTrades++
+		stats.TotalPnL += trade.PnL
+		if trade.PnL > 0 {
+			stats.WinningTrades++
+		} else if trade.PnL < 0 {
+			stats.LosingTrades++
+		}
+	}
+
+	analysis.CurrentLosingStreak = currentLosingStreak
+	analysis.MaxLosingStreak = maxLosingStreak
+	if analysis.TotalTrades > 0 {
+		analysis.WinRate = float64(analysis.WinningTrades) / float64(analysis.TotalTrades)
+	}
+	if analysis.WinningTrades > 0 {
+		analysis.AvgWin = totalWin / float64(analysis.WinningTrades)
+	}
+	if analysis.LosingTrades > 0 {
+		analysis.AvgLoss = totalLoss / float64(analysis.LosingTrades)
+	}
+	if totalLoss != 0 {
+		analysis.ProfitFactor = totalWin / -totalLoss
+	}
+	analysis.SharpeRatio = completedTradeSharpe(returns)
+
+	bestPnL, worstPnL := math.Inf(-1), math.Inf(1)
+	for symbol, stats := range analysis.SymbolStats {
+		if stats.TotalTrades == 0 {
+			continue
+		}
+		stats.WinRate = float64(stats.WinningTrades) / float64(stats.TotalTrades) * 100
+		stats.AvgPnL = stats.TotalPnL / float64(stats.TotalTrades)
+		if stats.TotalPnL > bestPnL {
+			bestPnL, analysis.BestSymbol = stats.TotalPnL, symbol
+		}
+		if stats.TotalPnL < worstPnL {
+			worstPnL, analysis.WorstSymbol = stats.TotalPnL, symbol
+		}
+	}
+
+	for i := len(history) - 1; i >= 0 && (tradeLimit <= 0 || len(analysis.RecentTrades) < tradeLimit); i-- {
+		trade := history[i]
+		if trade == nil || trade.Symbol == "" || trade.CloseTime.IsZero() {
+			continue
+		}
+		analysis.RecentTrades = append(analysis.RecentTrades, logger.TradeOutcome{
+			Symbol:      trade.Symbol,
+			Side:        trade.Side,
+			OpenPrice:   trade.EntryPrice,
+			ClosePrice:  trade.ExitPrice,
+			PnL:         trade.PnL,
+			PnLPct:      trade.PnLPct,
+			Duration:    time.Duration(trade.DurationS * int64(time.Second)).String(),
+			OpenTime:    trade.OpenTime,
+			CloseTime:   trade.CloseTime,
+			WasStopLoss: strings.Contains(trade.ExitReason, "stop_loss"),
+			CloseSource: trade.ExitReason,
+		})
+	}
+	return analysis
+}
+
+// CompletedSymbolStats derives closed-trade summaries from the canonical ledger.
+// It intentionally reports no open lots: live positions are supplied separately by
+// the API from the exchange snapshot.
+func (tm *TradeMemory) CompletedSymbolStats() map[string]*logger.SymbolTradeStats {
+	stats := make(map[string]*logger.SymbolTradeStats)
+	if tm == nil {
+		return stats
+	}
+	tm.mu.Lock()
+	history := append([]*TradeRecord(nil), tm.history...)
+	tm.mu.Unlock()
+	for _, trade := range history {
+		if trade == nil || trade.Symbol == "" || trade.CloseTime.IsZero() {
+			continue
+		}
+		item := stats[trade.Symbol]
+		if item == nil {
+			item = &logger.SymbolTradeStats{Symbol: trade.Symbol}
+			stats[trade.Symbol] = item
+		}
+		item.TotalTrades++
+		item.RealizedPnL += trade.PnL
+		if trade.PnL > 0 {
+			item.WinCount++
+		} else if trade.PnL < 0 {
+			item.LossCount++
+		}
+		if strings.EqualFold(trade.Side, "short") {
+			item.CloseShortCount++
+		} else {
+			item.CloseLongCount++
+		}
+		closedAt := trade.CloseTime.Format(time.RFC3339)
+		if item.FirstTradeTime == "" || closedAt < item.FirstTradeTime {
+			item.FirstTradeTime = closedAt
+		}
+		if item.LastTradeTime == "" || closedAt > item.LastTradeTime {
+			item.LastTradeTime = closedAt
+		}
+	}
+	return stats
+}
+
+func completedTradeSharpe(returns []float64) float64 {
+	if len(returns) < 2 {
+		return 0
+	}
+	mean := 0.0
+	for _, r := range returns {
+		mean += r
+	}
+	mean /= float64(len(returns))
+	variance := 0.0
+	for _, r := range returns {
+		delta := r - mean
+		variance += delta * delta
+	}
+	stdDev := math.Sqrt(variance / float64(len(returns)-1))
+	if stdDev == 0 {
+		return 0
+	}
+	return mean / stdDev
 }
