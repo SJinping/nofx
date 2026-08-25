@@ -896,6 +896,13 @@ func (at *AutoTrader) shouldSkipForPeakHour(positionCount int) bool {
 	return true
 }
 
+// shouldSkipLLMForPerformanceCooldown keeps execution deterministic while a
+// severe-performance cooldown is active. It intentionally does not depend on
+// LLM call count, so bypassing the LLM cannot extend the time-based cooldown.
+func shouldSkipLLMForPerformanceCooldown(cooldown decision.PerformanceCooldownState, now time.Time) bool {
+	return cooldown.Active && now.Before(cooldown.ReleaseAt)
+}
+
 // SetPeakHourOverride 手动切换高峰时段 override（用户恢复/重新暂停）
 func (at *AutoTrader) SetPeakHourOverride(override bool) {
 	at.peakMu.Lock()
@@ -1106,6 +1113,18 @@ func (at *AutoTrader) runCycle() error {
 
 	log.Printf("📊 账户净值: %.2f USDT | 可用: %.2f USDT | 持仓: %d",
 		ctx.Account.TotalEquity, ctx.Account.AvailableBalance, ctx.Account.PositionCount)
+
+	// 3.7 绩效冷却：不调用 LLM，也不执行任何 LLM 决策。
+	// 冷却状态由每个扫描周期的代码按真实时间更新，绕过 LLM 不会延长冷却。
+	if shouldSkipLLMForPerformanceCooldown(ctx.PerformanceCooldown, time.Now()) {
+		remaining := time.Until(ctx.PerformanceCooldown.ReleaseAt)
+		minutes := int(math.Ceil(remaining.Minutes()))
+		log.Printf("⏳ 绩效冷却中，剩余约%d分钟：跳过 LLM 调用和全部 LLM 交易决策", minutes)
+		record.Success = true
+		record.ErrorMessage = fmt.Sprintf("绩效冷却中，剩余约%d分钟；跳过 LLM 调用和全部 LLM 交易决策", minutes)
+		at.decisionLogger.LogDecision(record)
+		return nil
+	}
 
 	// 4. 调用AI获取完整决策
 	log.Println("🤖 正在请求AI分析并决策...")
@@ -1831,7 +1850,10 @@ func (at *AutoTrader) updatePerformanceCooldown(perf *logger.PerformanceAnalysis
 	defer at.performanceMu.Unlock()
 
 	st := at.performanceCooldown
-	bad := perf != nil && perf.SharpeRatio < -0.5
+	// Moderate underperformance remains visible to the LLM as performance data,
+	// but only a severe Sharpe decline plus a five-trade loss streak starts a
+	// deterministic no-trade cooldown.
+	bad := perf != nil && perf.SharpeRatio < -0.75 && perf.CurrentLosingStreak >= 5
 	if !bad {
 		st.Active = false
 		st.LastTriggerReason = ""

@@ -1,8 +1,10 @@
 package decision
 
 import (
+	"nofx/logger"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStrategyASystemPromptInjectsRuntimeNetRiskRewardRules(t *testing.T) {
@@ -47,5 +49,28 @@ func TestStrategyASystemPromptUsesConfiguredZeroCostAssumptions(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt did not preserve configured cost assumption %q", want)
 		}
+	}
+}
+
+func TestPerformancePromptDoesNotInstructLLMAboutCooldownTradingBan(t *testing.T) {
+	now := time.Now()
+	prompt := getPerformance(&Context{
+		Performance: &logger.PerformanceAnalysis{
+			TotalTrades:         12,
+			WinRate:             42,
+			SharpeRatio:         -0.80,
+			CurrentLosingStreak: 5,
+		},
+		PerformanceCooldown: PerformanceCooldownState{
+			Active:    true,
+			ReleaseAt: now.Add(time.Hour),
+		},
+	})
+
+	if strings.Contains(prompt, "绩效冷却") || strings.Contains(prompt, "禁止新开仓") {
+		t.Fatalf("performance prompt must not include cooldown execution instructions: %q", prompt)
+	}
+	if !strings.Contains(prompt, "夏普比率-0.80") || !strings.Contains(prompt, "当前连亏: 5 笔") {
+		t.Fatalf("performance prompt should retain performance facts for cautious trading: %q", prompt)
 	}
 }
