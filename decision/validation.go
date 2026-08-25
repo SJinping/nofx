@@ -826,20 +826,8 @@ func calcTrailingStopLoss(side string, markPrice float64, volatilityPct float64,
 }
 
 // ExtraValidate 策略A的额外验证
-// 用于禁止逆势开仓、Sharpe过低禁止开仓等
+// 用于禁止逆势开仓及其他确定性市场风险限制。
 func ExtraValidate(d *Decision, ctx *Context) error {
-	perf, ok := ctx.Performance.(*logger.PerformanceAnalysis)
-	if ok && perf != nil {
-		if d.Action == ActionOpenLong || d.Action == ActionOpenShort {
-			if perf.SharpeRatio < -0.5 {
-				return fmt.Errorf("sharpe 比率 %.2f 过差，禁止新开仓，只允许平仓/减仓/移动止损", perf.SharpeRatio)
-			}
-			if perf.CurrentLosingStreak >= 4 {
-				return fmt.Errorf("当前已连续亏损 %d 笔，暂停新开仓，等待市场明确信号", perf.CurrentLosingStreak)
-			}
-		}
-	}
-
 	// 禁止逆势开仓逻辑
 	if marketData, ok := ctx.MarketDataMap[d.Symbol]; ok {
 		if d.Action == ActionOpenLong {

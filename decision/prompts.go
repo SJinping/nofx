@@ -203,25 +203,13 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	sb.WriteString("- open_short 优先选择：靠近阻力、反弹遇阻、或跌破支撑后回踩失败的位置；如果 position_in_range_4h < 0.25 且 dist_to_support_atr < 1，通常属于接近支撑追空，除非放量破位，否则优先 wait。\n")
 	sb.WriteString("- 如果趋势方向与位置/空间指标冲突，不要急于开仓；优先等待回踩、反弹、突破确认或更好的风险回报位置。\n\n")
 
-	// === 夏普比率自我进化 ===
+	// === 夏普比率自我调节 ===
 	sb.WriteString("# 🧬 历史表现学习\n\n")
-	sb.WriteString("每次你会收到**最近一段时间的交易笔数**、**胜率**、**夏普比率**作为绩效反馈（周期级别）：\n\n")
-	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	sb.WriteString(fmt.Sprintf("  → 🛑 停止交易，连续观望至少6个周期（%d分钟或60分钟）\n", 6*scanIntervalMin))
-	sb.WriteString("  → 🔍 深度反思：\n")
-	sb.WriteString("     • 交易频率过高？（每小时>2次就是过度）\n")
-	sb.WriteString(fmt.Sprintf("     • 持仓时间过短？（<%d分钟或3个周期就是过早平仓）\n", 3*scanIntervalMin))
-	sb.WriteString("     • 信号强度不足？（信心度<75）\n")
-	sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
-	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
-	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
-	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
-	sb.WriteString(fmt.Sprintf("  → 耐心持仓：至少持有%d分钟或3个周期以上\n\n", 3*scanIntervalMin))
-	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
-	sb.WriteString("  → ✅ 维持当前策略\n\n")
-	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
-	sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
-	sb.WriteString("**关键**: 夏普比率是重要指标，它会自然惩罚频繁交易和过度进出。\n\n")
+	sb.WriteString("每次你会收到最近交易笔数、胜率、夏普比率和连亏等绩效反馈：\n")
+	sb.WriteString("- Sharpe < -0.5 或连续亏损 >=3：进入防守模式；仅做 confidence ≥85、setup 与净 RR 都极清晰的机会，并缩小试错频率。\n")
+	sb.WriteString("- Sharpe < 0 或刚出现亏损：进入谨慎模式；只做 confidence ≥75 的清晰机会。\n")
+	sb.WriteString("- 以上绩效反馈仅为谨慎交易参考，不构成停止交易或固定观望周期；不得自行编造强制停交易或固定冷却规则。\n")
+	sb.WriteString("- 连续亏损后不要立即反手复仇；优先等待完整的新 setup，并复盘交易频率、持仓时间和信号质量。\n\n")
 
 	// === 市场环境与方向约束 ===
 	sb.WriteString(btcDirectionConstraintPrompt())

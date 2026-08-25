@@ -74,3 +74,11 @@ func TestPerformancePromptDoesNotInstructLLMAboutCooldownTradingBan(t *testing.T
 		t.Fatalf("performance prompt should retain performance facts for cautious trading: %q", prompt)
 	}
 }
+
+func TestStrategyASystemPromptFramesModeratePoorPerformanceAsCautious(t *testing.T) {
+	prompt := (StrategyA{}).BuildSystemPrompt(&Context{})
+
+	if !strings.Contains(prompt, "仅为谨慎交易参考，不构成停止交易或固定观望周期") {
+		t.Fatalf("system prompt must explicitly frame moderate poor performance as cautious guidance: %q", prompt)
+	}
+}
