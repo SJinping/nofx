@@ -206,31 +206,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	// === 夏普比率自我调节 ===
 	sb.WriteString("# 🧬 历史表现学习\n\n")
 
-	// sb.WriteString("每次你会收到**最近一段时间的交易笔数**、**胜率**、**夏普比率**作为绩效反馈（周期级别）：\n\n")
-	// sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	// sb.WriteString(fmt.Sprintf("  → 🛑 停止交易，连续观望至少6个周期（%d分钟或60分钟）\n", 6*scanIntervalMin))
-	// sb.WriteString("  → 🔍 深度反思：\n")
-	// sb.WriteString("     • 交易频率过高？（每小时>2次就是过度）\n")
-	// sb.WriteString(fmt.Sprintf("     • 持仓时间过短？（<%d分钟或3个周期就是过早平仓）\n", 3*scanIntervalMin))
-	// sb.WriteString("     • 信号强度不足？（信心度<75）\n")
-	// sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
-	// sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
-	// sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
-	// sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
-	// sb.WriteString(fmt.Sprintf("  → 耐心持仓：至少持有%d分钟或3个周期以上\n\n", 3*scanIntervalMin))
-	// sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
-	// sb.WriteString("  → ✅ 维持当前策略\n\n")
-	// sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
-	// sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
-	// sb.WriteString("**关键**: 夏普比率是重要指标，它会自然惩罚频繁交易和过度进出。\n\n")
-
-	// 使用简单的夏普比率自我调节指令
-	sb.WriteString("每次你会收到最近交易笔数、胜率、夏普比率和连亏等绩效反馈：\n")
-	sb.WriteString("- Sharpe < -0.5 或连续亏损 >=3：进入防守模式；仅做 confidence ≥85、setup 与净 RR 都极清晰的机会，并缩小试错频率。\n")
-	sb.WriteString("- Sharpe < 0 或刚出现亏损：进入谨慎模式；只做 confidence ≥75 的清晰机会。\n")
-	sb.WriteString("- Sharpe > 0.7：表现优异；可适度扩大仓位。\n")
-	sb.WriteString("- 以上绩效反馈仅为谨慎交易参考，不构成停止交易或固定观望周期；不得自行编造强制停交易或固定冷却规则。\n")
-	sb.WriteString("- 连续亏损后不要立即反手复仇；优先等待完整的新 setup，并复盘交易频率、持仓时间和信号质量。\n\n")
+	sb.WriteString(performanceGuidancePrompt())
 
 	// === 市场环境与方向约束 ===
 	sb.WriteString(btcDirectionConstraintPrompt())
@@ -372,30 +348,8 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int, altcoinM
 	// sb.WriteString("\n")
 	sb.WriteString("提示：位置感只是“风险提示项”，不等于绝对否决。只要逻辑清晰、性价比高、风控到位，你可以在高位/低位做出交易，但需要更高置信度与更谨慎仓位。\n\n")
 
-	sb.WriteString("# 4️⃣ 基于夏普率的自我调节\n\n")
-	sb.WriteString("你会收到**最近一段时间的**胜率**、**夏普比率**作为绩效反馈，你需要据此调节：\n")
-	sb.WriteString("**夏普比率 < -0.5** (持续亏损):\n")
-	sb.WriteString(fmt.Sprintf("- **停止新开仓**：连续观望至少6个周期（%d分钟）。期间允许且优先做风控：`update_stop_loss` / `partial_close`；如止损触发、结构被破坏或强平风险上升，可执行必要的 `close_long/close_short`。\n\n", 6*scanIntervalMin))
-	sb.WriteString("**深度反思**：\n")
-	sb.WriteString("- 交易频率过高？（每小时>1次就是过度）\n")
-	sb.WriteString("- 持仓时间过短？（<30分钟就是过早平仓，止损/结构破坏等例外除外）\n")
-	sb.WriteString("- 信号强度不足？（信心度<75）\n")
-	sb.WriteString("- 是否逆势操作？\n")
-	sb.WriteString("- 止损执行是否严格？\n")
-
-	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
-	sb.WriteString("- **严格控制**：只做信心度>80的交易\n")
-	sb.WriteString("- 减少交易频率：每小时最多1笔新开仓\n")
-	sb.WriteString("- 缩小仓位：使用正常仓位的50-70%\n")
-	sb.WriteString("- 耐心持仓：至少持有45分钟以上\n")
-
-	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
-	sb.WriteString("**维持策略**：按既定标准执行\n")
-	sb.WriteString("保持警惕：不因盈利而放松标准\n")
-
-	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
-	sb.WriteString("**适度进取**：可在信心度>85时适度扩大仓位\n")
-	sb.WriteString("保持纪律：不因成功而改变稳健原则\n")
+	sb.WriteString("# 4️⃣ 基于有效绩效的自我调节\n\n")
+	sb.WriteString(performanceGuidancePrompt())
 
 	sb.WriteString("# 5️⃣ 风险与仓位\n\n")
 	sb.WriteString("当前账户净值、实时盈亏、保证金使用率会在用户消息中给出，你需要基于这些数值评估回撤和风险。\n")
@@ -598,13 +552,8 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("- 如果突破后没有 follow-through、跌回/涨回区间内，或 time_stop 接近且仍未兑现，应主动退出或减仓。\n")
 	sb.WriteString(fmt.Sprintf("- update_stop_loss 不能贴现价太近，应至少参考 intraday_atr14 (%dm) 留出噪声空间。\n\n", barIntervalMin))
 
-	sb.WriteString("# 9️⃣ 基于历史表现的自我调节\n\n")
-	sb.WriteString("每次你会收到最近交易笔数、胜率、夏普比率、连亏等反馈：\n")
-	sb.WriteString("- Sharpe < -0.5 或连续亏损 >=3：防守模式，只有 confidence ≥85 且 setup 极清晰才开仓。\n")
-	sb.WriteString("- Sharpe < 0 或刚出现亏损：谨慎模式，confidence ≥75 才开仓，减少试错。\n")
-	sb.WriteString("- 交易样本很少且无明显亏损：探索模式，confidence ≥68 且净 RR 达标即可小仓位开仓，用 paper 样本验证策略。\n")
-	sb.WriteString("- Sharpe 为正且稳定：正常模式，confidence ≥70 才开仓。\n")
-	sb.WriteString("- 连续亏损后不要立刻反手复仇；宁可等待一个完整的新 setup。\n\n")
+	sb.WriteString("# 9️⃣ 基于有效绩效的自我调节\n\n")
+	sb.WriteString(performanceGuidancePrompt())
 
 	// === 市场环境与方向约束 ===
 	sb.WriteString(btcDirectionConstraintPrompt())
@@ -1401,7 +1350,7 @@ func autoRiskControlPrompt() string {
 func getPerformance(ctx *Context) string {
 	var sb strings.Builder
 	if ctx.Performance == nil {
-		return "夏普比率: 0.00"
+		return "有效绩效: 无样本 | 夏普比率未定义\n"
 	}
 
 	var perf *logger.PerformanceAnalysis
@@ -1412,16 +1361,26 @@ func getPerformance(ctx *Context) string {
 	case logger.PerformanceAnalysis:
 		perf = &v
 	default:
-		return "夏普比率: 0.00"
+		return "有效绩效: 无样本 | 夏普比率未定义\n"
 	}
 
-	sb.WriteString(fmt.Sprintf(
-		"**总体**: %d笔交易 | 胜率%.1f%% | 夏普比率%.2f | 当前连亏: %d 笔\n",
-		perf.TotalTrades,
-		perf.WinRate,
-		perf.SharpeRatio,
-		perf.CurrentLosingStreak,
-	))
+	if ctx.PerformanceReset {
+		sb.WriteString("**绩效重置**: 空仓且距上次真实交易已满10天；按正常模式重新评估新机会，旧连亏不参与决策。\n")
+	}
+	sharpe := "未定义（样本不足）"
+	if perf.TotalTrades >= 2 {
+		sharpe = fmt.Sprintf("%.2f", perf.SharpeRatio)
+	}
+	sb.WriteString(fmt.Sprintf("**有效绩效**: %d笔交易 | 胜率%.1f%% | 夏普比率%s | 当前连亏: %d 笔\n",
+		perf.TotalTrades, perf.WinRate*100, sharpe, perf.CurrentLosingStreak))
+	if ctx.LifetimePerformance != nil {
+		lifetime := ctx.LifetimePerformance
+		pnl := 0.0
+		for _, stat := range lifetime.SymbolStats {
+			pnl += stat.TotalPnL
+		}
+		sb.WriteString(fmt.Sprintf("**历史累计（仅展示，不参与决策）**: %d笔交易 | 已实现盈亏%+.2f USDT\n", lifetime.TotalTrades, pnl))
+	}
 
 	// 最近交易结果（含平仓来源）
 	sb.WriteString(formatRecentTrades(ctx.RecentTrades))

@@ -282,7 +282,7 @@ func (tm *TradeMemory) GateOpenDecision(ctx *decision.Context, dec *decision.Dec
 	}
 
 	// Retrieve similar trades (across all symbols) for this side.
-	sim := tm.searchSimilarLocked(vec, side, 8)
+	sim := tm.effectiveSimilar(vec, side, ctx)
 
 	// Quick rule gate (no LLM).
 	losers := 0
@@ -304,6 +304,21 @@ func (tm *TradeMemory) GateOpenDecision(ctx *decision.Context, dec *decision.Dec
 
 	// Symbol-specific recent performance
 	symLossStreak := tm.symbolRecentLossStreak(sym, side, 3)
+	if p, ok := ctx.Performance.(*logger.PerformanceAnalysis); ok && p != nil {
+		symLossStreak = 0
+		for _, tr := range p.RecentTrades {
+			if tr.Symbol != sym || !strings.EqualFold(tr.Side, side) {
+				continue
+			}
+			if tr.PnLPct >= 0 {
+				break
+			}
+			symLossStreak++
+			if symLossStreak >= 3 {
+				break
+			}
+		}
+	}
 
 	// base result
 	res := &GateResult{
@@ -420,6 +435,43 @@ func gateSoftSizeMultiplier(avg float64, count, symLossStreak, confidence int, n
 	}
 
 	return multiplier, tier
+}
+
+func (tm *TradeMemory) effectiveSimilar(vec []float64, side string, ctx *decision.Context) []SimilarMatch {
+	p, ok := ctx.Performance.(*logger.PerformanceAnalysis)
+	if !ok || p == nil {
+		return tm.searchSimilarLocked(vec, side, 8)
+	}
+	if len(p.RecentTrades) == 0 {
+		return nil
+	}
+	// Match against the same completed outcomes used by the prompt and risk controls.
+	// Keep the lookup bounded to the effective recent ledger, never lifetime history.
+	type key struct {
+		symbol, side string
+		close        time.Time
+	}
+	allowed := make(map[key]bool, len(p.RecentTrades))
+	for _, tr := range p.RecentTrades {
+		allowed[key{tr.Symbol, tr.Side, tr.CloseTime}] = true
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	matches := make([]SimilarMatch, 0, len(allowed))
+	for _, tr := range tm.history {
+		if tr == nil || !strings.EqualFold(tr.Side, side) || len(tr.SignalVector) == 0 || !allowed[key{tr.Symbol, tr.Side, tr.CloseTime}] {
+			continue
+		}
+		score := cosineSimilarity(vec, tr.SignalVector)
+		if score > 0 {
+			matches = append(matches, SimilarMatch{Score: score, Trade: tr, Analysis: tm.analysisCache[tr.TradeID]})
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Score > matches[j].Score })
+	if len(matches) > 8 {
+		matches = matches[:8]
+	}
+	return matches
 }
 
 func (tm *TradeMemory) searchSimilarLocked(vec []float64, side string, topK int) []SimilarMatch {
@@ -775,17 +827,18 @@ func (tm *TradeMemory) EnsureStorage() {
 // trade ledger. Both local closes and reconciled exchange conditional closes are
 // persisted there, unlike decision-cycle logs which can omit exchange-side fills.
 func (tm *TradeMemory) AnalyzeCompletedTrades(tradeLimit int) *logger.PerformanceAnalysis {
-	analysis := &logger.PerformanceAnalysis{
-		RecentTrades: []logger.TradeOutcome{},
-		SymbolStats:  make(map[string]*logger.SymbolPerformance),
-	}
 	if tm == nil {
-		return analysis
+		return analyzeTradeHistory(nil, tradeLimit)
 	}
 
 	tm.mu.Lock()
 	history := append([]*TradeRecord(nil), tm.history...)
 	tm.mu.Unlock()
+	return analyzeTradeHistory(history, tradeLimit)
+}
+
+func analyzeTradeHistory(history []*TradeRecord, tradeLimit int) *logger.PerformanceAnalysis {
+	analysis := &logger.PerformanceAnalysis{RecentTrades: []logger.TradeOutcome{}, SymbolStats: make(map[string]*logger.SymbolPerformance)}
 	if len(history) == 0 {
 		return analysis
 	}

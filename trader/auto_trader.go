@@ -1593,7 +1593,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 	// 5. 从统一的已完成交易账本读取表现。该账本同时记录本地平仓和
 	// 交易所条件单触发后由对账逻辑补记的平仓，不能再只回放有限的 AI cycle。
-	performance := at.AnalyzeCompletedTrades(100)
+	lifetimePerformance, performance, performanceReset := at.tradeMemory.PerformanceEra(100, time.Now(), positionInfos)
 
 	// 5.5 提取近期系统自动操作记录和最近交易结果（供 prompt 注入）
 	var recentAutoEvents []decision.AutoEventSummary
@@ -1663,6 +1663,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		Positions:           positionInfos,
 		CandidateCoins:      candidateCoins,
 		Performance:         performance,
+		LifetimePerformance: lifetimePerformance,
+		PerformanceReset:    performanceReset,
 		PerformanceCooldown: performanceCooldown,
 		RecentAutoEvents:    recentAutoEvents,
 		RecentTrades:        recentTrades,
