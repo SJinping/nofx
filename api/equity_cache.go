@@ -1,225 +1,138 @@
 package api
 
 import (
-	"fmt"
+	"nofx/logger"
 	"sync"
 	"time"
-
-	"nofx/logger"
 )
 
 const (
 	defaultEquityHistoryLimit = 2000
 	maxEquityHistoryLimit     = 20000
-	equityCacheRefreshWindow  = 500
 )
 
-// EquityPoint is the lightweight account-equity sample returned to the web UI.
-// Keep this intentionally small: do not cache full decision records, prompts, or market data.
 type EquityPoint struct {
-	Timestamp        string  `json:"timestamp"`
-	TotalEquity      float64 `json:"total_equity"`      // 账户净值（wallet + unrealized）
-	AvailableBalance float64 `json:"available_balance"` // 可用余额
-	TotalPnL         float64 `json:"total_pnl"`         // 总盈亏（相对初始余额）
-	TotalPnLPct      float64 `json:"total_pnl_pct"`     // 总盈亏百分比
-	PositionCount    int     `json:"position_count"`    // 持仓数量
-	MarginUsedPct    float64 `json:"margin_used_pct"`   // 保证金使用率
-	CycleNumber      int     `json:"cycle_number"`
+	Timestamp        string               `json:"timestamp"`
+	TotalEquity      float64              `json:"total_equity"`
+	AvailableBalance float64              `json:"available_balance"`
+	TotalPnL         float64              `json:"total_pnl"`
+	TotalPnLPct      float64              `json:"total_pnl_pct"`
+	PositionCount    int                  `json:"position_count"`
+	MarginUsedPct    float64              `json:"margin_used_pct"`
+	CycleNumber      int                  `json:"cycle_number"`
+	SourceFile       string               `json:"source_file"`
+	Actions          []logger.ChartAction `json:"actions,omitempty"`
 }
-
 type EquityHistoryQuery struct {
-	Limit     int
-	FromCycle int
-	ToCycle   int
+	Limit          int
+	FromCycle      int
+	ToCycle        int
+	IncludeActions bool
 }
-
 type equityHistoryEntry struct {
 	points         []EquityPoint
 	lastLoadedAt   time.Time
 	initialBalance float64
-	loadedLimit    int
+	query          EquityHistoryQuery
 }
-
 type EquityHistoryCache struct {
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	entries    map[string]*equityHistoryEntry
 	maxHistory int
 	ttl        time.Duration
 }
-
-type equityRecordFetcher func(limit int) ([]*logger.DecisionRecord, error)
+type equityIndexFetcher func(limit, from, to int, actions bool) ([]logger.ChartRecord, error)
 
 func NewEquityHistoryCache(maxHistory int, ttl time.Duration) *EquityHistoryCache {
-	if maxHistory <= 0 {
+	if maxHistory <= 0 || maxHistory > maxEquityHistoryLimit {
 		maxHistory = maxEquityHistoryLimit
 	}
 	if ttl <= 0 {
 		ttl = 30 * time.Second
 	}
-	return &EquityHistoryCache{
-		entries:    make(map[string]*equityHistoryEntry),
-		maxHistory: maxHistory,
-		ttl:        ttl,
-	}
+	return &EquityHistoryCache{entries: make(map[string]*equityHistoryEntry), maxHistory: maxHistory, ttl: ttl}
 }
 
-func (c *EquityHistoryCache) Get(traderID string, fetch equityRecordFetcher, initialBalance float64, requestedLimit int) ([]EquityPoint, error) {
-	requestedLimit = clampEquityHistoryLimit(requestedLimit)
-	now := time.Now()
-
-	c.mu.RLock()
-	entry := c.entries[traderID]
-	if entry != nil && now.Sub(entry.lastLoadedAt) < c.ttl && equityInitialBalanceMatches(entry.initialBalance, initialBalance) && entry.loadedLimit >= requestedLimit {
-		points := cloneEquityPoints(entry.points)
-		c.mu.RUnlock()
-		return points, nil
+// GetIndexed caches only lightweight data. Range filtering happens at the
+// persisted source BEFORE its bounded newest-N selection; no 500-cycle refresh
+// window/high-water mark can permanently hide gaps or backfilled points.
+func (c *EquityHistoryCache) GetIndexed(traderID string, fetch equityIndexFetcher, initialBalance float64, q EquityHistoryQuery) ([]EquityPoint, error) {
+	q.Limit = clampEquityHistoryLimit(q.Limit)
+	if q.Limit > c.maxHistory {
+		q.Limit = c.maxHistory
 	}
-	c.mu.RUnlock()
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	entry = c.entries[traderID]
-	if entry != nil && now.Sub(entry.lastLoadedAt) < c.ttl && equityInitialBalanceMatches(entry.initialBalance, initialBalance) && entry.loadedLimit >= requestedLimit {
+	now := time.Now()
+	entry := c.entries[traderID]
+	if entry != nil && entry.query == q && entry.initialBalance == initialBalance && now.Sub(entry.lastLoadedAt) < c.ttl {
 		return cloneEquityPoints(entry.points), nil
 	}
-
-	fetchLimit := requestedLimit
-	canRefreshIncrementally := entry != nil && len(entry.points) > 0 && equityInitialBalanceMatches(entry.initialBalance, initialBalance) && entry.loadedLimit >= requestedLimit
-	if canRefreshIncrementally {
-		fetchLimit = equityCacheRefreshWindow
-		if initialBalance == 0 {
-			initialBalance = entry.initialBalance
-		}
-	}
-
-	records, err := fetch(fetchLimit)
+	records, err := fetch(q.Limit, q.FromCycle, q.ToCycle, q.IncludeActions)
 	if err != nil {
 		return nil, err
 	}
-
-	if initialBalance == 0 && len(records) > 0 {
-		initialBalance = records[0].AccountState.TotalBalance
-	}
-
-	newPoints, err := buildEquityPoints(records, initialBalance)
-	if err != nil {
-		return nil, err
-	}
-
-	if !canRefreshIncrementally {
-		entry = &equityHistoryEntry{
-			points:         trimEquityPoints(newPoints, c.maxHistory),
-			lastLoadedAt:   now,
-			initialBalance: initialBalance,
-			loadedLimit:    fetchLimit,
-		}
-		c.entries[traderID] = entry
-		return cloneEquityPoints(entry.points), nil
-	}
-
-	lastCycle := 0
-	if len(entry.points) > 0 {
-		lastCycle = entry.points[len(entry.points)-1].CycleNumber
-	}
-	for _, point := range newPoints {
-		if point.CycleNumber > lastCycle {
-			entry.points = append(entry.points, point)
+	requestedBalance := initialBalance
+	if initialBalance <= 0 {
+		for _, r := range records {
+			if r.Success && r.AccountState.TotalBalance > 0 {
+				initialBalance = r.AccountState.TotalBalance
+				break
+			}
 		}
 	}
-	entry.points = trimEquityPoints(entry.points, c.maxHistory)
-	entry.lastLoadedAt = now
-
-	return cloneEquityPoints(entry.points), nil
+	points := make([]EquityPoint, 0, len(records))
+	for _, r := range records {
+		if !r.Success || r.AccountState.TotalBalance <= 0 {
+			continue
+		}
+		pct := 0.0
+		if initialBalance > 0 {
+			pct = r.AccountState.TotalUnrealizedProfit / initialBalance * 100
+		}
+		p := EquityPoint{Timestamp: r.Timestamp.Format("2006-01-02 15:04:05"), TotalEquity: r.AccountState.TotalBalance, AvailableBalance: r.AccountState.AvailableBalance, TotalPnL: r.AccountState.TotalUnrealizedProfit, TotalPnLPct: pct, PositionCount: r.AccountState.PositionCount, MarginUsedPct: r.AccountState.MarginUsedPct, CycleNumber: r.CycleNumber, SourceFile: r.SourceFile}
+		if q.IncludeActions {
+			p.Actions = r.Actions
+		}
+		points = append(points, p)
+	}
+	// Bound retained query variants/traders as well as individual histories.
+	if len(c.entries) >= 8 {
+		for key := range c.entries {
+			delete(c.entries, key)
+			break
+		}
+	}
+	c.entries[traderID] = &equityHistoryEntry{points: points, lastLoadedAt: now, initialBalance: requestedBalance, query: q}
+	return cloneEquityPoints(points), nil
 }
-
 func clampEquityHistoryLimit(limit int) int {
-	if limit <= 0 {
-		return maxEquityHistoryLimit
-	}
-	if limit > maxEquityHistoryLimit {
+	if limit <= 0 || limit > maxEquityHistoryLimit {
 		return maxEquityHistoryLimit
 	}
 	return limit
 }
-
-func equityInitialBalanceMatches(cached float64, requested float64) bool {
-	return requested <= 0 || cached == requested
-}
-
-func buildEquityPoints(records []*logger.DecisionRecord, initialBalance float64) ([]EquityPoint, error) {
-	if initialBalance == 0 && len(records) > 0 {
-		initialBalance = records[0].AccountState.TotalBalance
-	}
-	if initialBalance == 0 {
-		return nil, fmt.Errorf("无法获取初始余额")
-	}
-
-	history := make([]EquityPoint, 0, len(records))
-	for _, record := range records {
-		// ⚠️ 过滤掉失败的记录或账户状态异常的记录（避免网络超时导致曲线大幅波动）
-		if record == nil || !record.Success || record.AccountState.TotalBalance <= 0 {
+func applyEquityHistoryQuery(points []EquityPoint, q EquityHistoryQuery) []EquityPoint {
+	out := make([]EquityPoint, 0, len(points))
+	for _, p := range points {
+		if (q.FromCycle > 0 && p.CycleNumber < q.FromCycle) || (q.ToCycle > 0 && p.CycleNumber > q.ToCycle) {
 			continue
 		}
-
-		// TotalBalance字段实际存储的是TotalEquity
-		totalEquity := record.AccountState.TotalBalance
-		// TotalUnrealizedProfit字段实际存储的是TotalPnL（相对初始余额）
-		totalPnL := record.AccountState.TotalUnrealizedProfit
-
-		totalPnLPct := 0.0
-		if initialBalance > 0 {
-			totalPnLPct = (totalPnL / initialBalance) * 100
-		}
-
-		history = append(history, EquityPoint{
-			Timestamp:        record.Timestamp.Format("2006-01-02 15:04:05"),
-			TotalEquity:      totalEquity,
-			AvailableBalance: record.AccountState.AvailableBalance,
-			TotalPnL:         totalPnL,
-			TotalPnLPct:      totalPnLPct,
-			PositionCount:    record.AccountState.PositionCount,
-			MarginUsedPct:    record.AccountState.MarginUsedPct,
-			CycleNumber:      record.CycleNumber,
-		})
+		out = append(out, p)
 	}
-
-	return history, nil
+	limit := clampEquityHistoryLimit(q.Limit)
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return cloneEquityPoints(out)
 }
-
-func applyEquityHistoryQuery(points []EquityPoint, query EquityHistoryQuery) []EquityPoint {
-	filtered := points
-	if query.FromCycle > 0 || query.ToCycle > 0 {
-		filtered = make([]EquityPoint, 0, len(points))
-		for _, point := range points {
-			if query.FromCycle > 0 && point.CycleNumber < query.FromCycle {
-				continue
-			}
-			if query.ToCycle > 0 && point.CycleNumber > query.ToCycle {
-				continue
-			}
-			filtered = append(filtered, point)
-		}
-	}
-
-	if query.Limit > 0 && len(filtered) > query.Limit {
-		filtered = filtered[len(filtered)-query.Limit:]
-	}
-	return cloneEquityPoints(filtered)
-}
-
-func trimEquityPoints(points []EquityPoint, max int) []EquityPoint {
-	if max > 0 && len(points) > max {
-		points = points[len(points)-max:]
-	}
-	return points
-}
-
 func cloneEquityPoints(points []EquityPoint) []EquityPoint {
-	if len(points) == 0 {
-		return []EquityPoint{}
-	}
 	out := make([]EquityPoint, len(points))
 	copy(out, points)
+	for i := range out {
+		if out[i].Actions != nil {
+			out[i].Actions = append([]logger.ChartAction(nil), out[i].Actions...)
+		}
+	}
 	return out
 }

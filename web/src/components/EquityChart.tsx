@@ -13,17 +13,10 @@ import useSWR from 'swr';
 import { api } from '../lib/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
-import type { DecisionRecord, DecisionAction } from '../types';
+import type { EquityHistoryPoint as EquityPoint, ChartAction as DecisionAction } from '../types';
 import { RangeSlider } from './RangeSlider';
 import { EquityChartModal } from './EquityChartModal';
 
-interface EquityPoint {
-  timestamp: string;
-  total_equity: number;
-  pnl: number;
-  pnl_pct: number;
-  cycle_number: number;
-}
 
 interface EquityChartProps {
   traderId?: string;
@@ -39,8 +32,8 @@ export function EquityChart({ traderId }: EquityChartProps) {
   const [rangeEnd, setRangeEnd] = useState<number | null>(null);
 
   const { data: history, error } = useSWR<EquityPoint[]>(
-    traderId ? `equity-history-${traderId}` : 'equity-history',
-    () => api.getEquityHistory(traderId, 2000),
+    traderId ? `equity-history-actions-${traderId}` : 'equity-history-actions',
+    () => api.getEquityHistory(traderId, 2000, true),
     {
       refreshInterval: 10000, // 每10秒刷新
     }
@@ -54,13 +47,6 @@ export function EquityChart({ traderId }: EquityChartProps) {
     }
   );
 
-  const { data: decisions } = useSWR<DecisionRecord[]>(
-    traderId ? `decisions-${traderId}` : 'decisions',
-    () => api.getDecisions(traderId),
-    {
-      refreshInterval: 10000, // 每10秒刷新
-    }
-  );
 
   if (error) {
     return (
@@ -110,21 +96,12 @@ export function EquityChart({ traderId }: EquityChartProps) {
     || account?.total_equity
     || 100;  // 默认值改为100，与常见配置一致
 
-  // 将决策按 cycle_number 组织
-  const decisionsByCycle = new Map<number, DecisionAction[]>();
-  if (decisions) {
-    decisions.forEach((record: DecisionRecord) => {
-      if (record.decisions && record.decisions.length > 0) {
-        decisionsByCycle.set(record.cycle_number, record.decisions);
-      }
-    });
-  }
 
   // 转换数据格式
   const chartData = displayHistory.map((point: EquityPoint) => {
     const pnl = point.total_equity - initialBalance;
     const pnlPct = ((pnl / initialBalance) * 100).toFixed(2);
-    const cycleDecisions = decisionsByCycle.get(point.cycle_number) || [];
+    const cycleDecisions = point.actions || [];
     
     return {
       time: new Date(point.timestamp).toLocaleTimeString('zh-CN', {

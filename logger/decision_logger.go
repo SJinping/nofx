@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,7 @@ type DecisionLogger struct {
 	logDir      string
 	cycleNumber int
 	statsCache  *TradeStatsCache
+	chart       *chartIndex
 }
 
 // NewDecisionLogger 创建决策日志记录器
@@ -100,6 +102,12 @@ func NewDecisionLogger(logDir string) *DecisionLogger {
 		dl.rebuildStatsCache()
 	}
 
+	dl.chart = newChartIndex(logDir)
+	go func() {
+		if err := dl.chart.rebuild(); err != nil {
+			fmt.Printf("⚠ Chart index backfill unavailable: %v\n", err)
+		}
+	}()
 	return dl
 }
 
@@ -170,6 +178,14 @@ func ArchiveLogs(logDir string) error {
 		count++
 	}
 
+	// The chart index is derived from the active logs. Rebuild it from the
+	// remaining files on next startup; archived cycles must never leak into a
+	// fresh run that reuses cycle numbers.
+	if count > 0 {
+		if err := os.RemoveAll(filepath.Join(logDir, "chart_index")); err != nil {
+			return fmt.Errorf("删除旧图表索引失败: %w", err)
+		}
+	}
 	fmt.Printf("📦 已归档 %d 个日志文件到 %s\n", count, archiveDir)
 	return nil
 }
@@ -200,6 +216,14 @@ func (l *DecisionLogger) LogDecision(record *DecisionRecord) error {
 
 	fmt.Printf("📝 决策记录已保存: %s\n", filename)
 
+	// The full decision is authoritative; derivative failures never fail trading.
+	if l.chart != nil {
+		p := chartPointFromDecision(record, filename)
+		if err := l.chart.appendPoint(p); err != nil {
+			fmt.Printf("⚠ Chart index append failed (will reconcile on restart): %v\n", err)
+		}
+	}
+
 	// 增量更新统计缓存
 	if l.statsCache != nil {
 		l.statsCache.ProcessRecords([]*DecisionRecord{record})
@@ -221,29 +245,36 @@ func (l *DecisionLogger) rebuildStatsCache() {
 	lastCycle := l.statsCache.GetLastProcessedCycle()
 	fmt.Printf("🔄 补算交易统计缓存（从 cycle %d 开始）...\n", lastCycle+1)
 
-	records, err := l.GetLatestRecords(100000)
+	files, err := os.ReadDir(l.logDir)
 	if err != nil {
 		fmt.Printf("⚠ 读取日志用于统计补算失败: %v\n", err)
 		return
 	}
 
-	// 只取 lastCycle 之后的记录（GetLatestRecords 返回正序）
-	var newRecords []*DecisionRecord
-	for _, r := range records {
-		if r.CycleNumber > lastCycle {
-			newRecords = append(newRecords, r)
+	// Numeric cycle order, one narrow raw decode at a time; never retain prompts.
+	sort.Slice(files, func(i, j int) bool {
+		return chartSourceCycle(files[i].Name()) < chartSourceCycle(files[j].Name())
+	})
+	count := 0
+	for _, file := range files {
+		if !file.Type().IsRegular() || !chartFilename.MatchString(file.Name()) || chartSourceCycle(file.Name()) <= lastCycle {
+			continue
 		}
+		p, err := readChartRaw(l.logDir, file.Name())
+		if err != nil {
+			continue
+		}
+		r := &DecisionRecord{Timestamp: p.Timestamp, CycleNumber: p.CycleNumber}
+		for _, a := range p.Actions {
+			r.Decisions = append(r.Decisions, DecisionAction{Action: a.Action, Symbol: a.Symbol, DecisionSource: a.DecisionSource, Quantity: a.Quantity, Leverage: a.Leverage, Price: a.Price, OrderID: a.OrderID, Timestamp: a.Timestamp, Success: a.Success})
+		}
+		l.statsCache.ProcessRecords([]*DecisionRecord{r})
+		count++
 	}
-
-	if len(newRecords) == 0 {
-		return
-	}
-
-	l.statsCache.ProcessRecords(newRecords)
 	if err := l.statsCache.Save(); err != nil {
 		fmt.Printf("⚠ 保存统计缓存失败: %v\n", err)
 	}
-	fmt.Printf("✅ 统计缓存已更新，处理了 %d 条新记录\n", len(newRecords))
+	fmt.Printf("✅ 统计缓存已更新，处理了 %d 条新记录\n", count)
 }
 
 // GetLatestRecords 获取最近N条记录（按时间正序：从旧到新）

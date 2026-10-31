@@ -64,6 +64,22 @@ export interface DecisionAction {
   error?: string;
 }
 
+// Persisted chart payload has no prompts, reasoning, or execution errors.
+export type ChartAction = Omit<DecisionAction, 'error'> & { decision_source?: string };
+
+export interface EquityHistoryPoint {
+  timestamp: string;
+  total_equity: number;
+  available_balance: number;
+  total_pnl: number;
+  total_pnl_pct: number;
+  position_count: number;
+  margin_used_pct: number;
+  cycle_number: number;
+  source_file: string;
+  actions?: ChartAction[];
+}
+
 export interface AccountSnapshot {
   total_balance: number;
   available_balance: number;

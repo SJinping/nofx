@@ -3,6 +3,7 @@ import type {
   AccountInfo,
   Position,
   DecisionRecord,
+  EquityHistoryPoint,
   Statistics,
   TraderInfo,
   CompetitionData,
@@ -105,16 +106,20 @@ export const api = {
   },
 
   // 获取收益率历史数据（支持trader_id）
-  async getEquityHistory(traderId?: string, limit?: number): Promise<any[]> {
+  async getEquityHistory(traderId?: string, limit?: number, includeActions = false): Promise<EquityHistoryPoint[]> {
     const params = new URLSearchParams();
     if (traderId) params.set('trader_id', traderId);
     if (limit) params.set('limit', String(limit));
+    if (includeActions) params.set('include_actions', 'true');
     const query = params.toString();
     const url = query
       ? `${API_BASE}/equity-history?${query}`
       : `${API_BASE}/equity-history`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error('获取历史数据失败');
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null);
+      throw new Error(detail?.error || '获取历史数据失败');
+    }
     return res.json();
   },
 

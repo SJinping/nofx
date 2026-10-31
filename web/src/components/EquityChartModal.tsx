@@ -11,16 +11,7 @@ import {
 import { Modal } from './Modal';
 import { api } from '../lib/api';
 import { useLanguage } from '../contexts/LanguageContext';
-
-interface EquityPoint {
-  timestamp: string;
-  total_equity: number;
-  total_pnl: number;
-  total_pnl_pct: number;
-  position_count: number;
-  margin_used_pct: number;
-  cycle_number: number;
-}
+import type { EquityHistoryPoint as EquityPoint } from '../types';
 
 interface EquityChartModalProps {
   traderId?: string;

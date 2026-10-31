@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -10,7 +12,6 @@ import (
 	"nofx/market"
 	traderpkg "nofx/trader"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -951,88 +952,34 @@ func (s *Server) handleLogList(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing trader_id"})
 		return
 	}
-
-	logsDir := "./decision_logs"
-	traderDir := filepath.Join(logsDir, traderID)
-	entries, err := os.ReadDir(traderDir)
+	logs, err := listDecisionLogFiles("./decision_logs", traderID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "trader logs not found"})
+		status := http.StatusNotFound
+		if errors.Is(err, fs.ErrInvalid) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": "invalid trader or logs not found"})
 		return
 	}
-
-	var logsList []LogEntry
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-
-			// 尝试解析文件名提取 Cycle 和 Timestamp
-			// 格式: decision_20251201_201324_cycle62.json
-			var cycle int
-			var ts time.Time
-
-			// 简单解析逻辑...
-			parts := strings.Split(entry.Name(), "_")
-			if len(parts) >= 4 {
-				// 解析时间
-				timeStr := parts[1] + parts[2] // 20251201201324
-				if t, err := time.Parse("20060102150405", timeStr); err == nil {
-					ts = t
-				}
-				// 解析 Cycle
-				cyclePart := parts[3] // cycle62.json
-				cyclePart = strings.TrimSuffix(cyclePart, ".json")
-				fmt.Sscanf(cyclePart, "cycle%d", &cycle)
-			}
-
-			// 如果解析失败，使用文件修改时间
-			if ts.IsZero() {
-				ts = info.ModTime()
-			}
-
-			logsList = append(logsList, LogEntry{
-				Filename:  entry.Name(),
-				Cycle:     cycle,
-				Timestamp: ts,
-				Size:      info.Size(),
-			})
-		}
-	}
-
-	// 按时间倒序排序
-	sort.Slice(logsList, func(i, j int) bool {
-		return logsList[i].Timestamp.After(logsList[j].Timestamp)
-	})
-
-	c.JSON(http.StatusOK, logsList)
+	c.JSON(http.StatusOK, logs)
 }
 
 // handleLogDetail 读取具体日志内容
 func (s *Server) handleLogDetail(c *gin.Context) {
-	traderID := c.Query("trader_id")
-	filename := c.Query("filename")
+	traderID, filename := c.Query("trader_id"), c.Query("filename")
 	if traderID == "" || filename == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing parameters"})
 		return
 	}
-
-	// 安全检查: 防止目录遍历攻击
-	if strings.Contains(filename, "..") || strings.Contains(filename, "/") || strings.Contains(filename, "\\") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid filename"})
-		return
-	}
-
-	logsDir := "./decision_logs"
-	filePath := filepath.Join(logsDir, traderID, filename)
-	content, err := ioutil.ReadFile(filePath)
+	content, err := readDecisionLogFile("./decision_logs", traderID, filename)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		status := http.StatusNotFound
+		if errors.Is(err, fs.ErrInvalid) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": "invalid filename or file not found"})
 		return
 	}
-
-	// 直接返回 JSON 内容
 	c.Data(http.StatusOK, "application/json", content)
 }
 
@@ -1274,16 +1221,17 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 		}
 	}
 
-	points, err := s.equityCache.Get(traderID, trader.GetDecisionLogger().GetLatestRecords, initialBalance, query.Limit)
+	points, err := s.equityCache.GetIndexed(traderID, trader.GetDecisionLogger().GetChartHistory, initialBalance, query)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": fmt.Sprintf("获取历史数据失败: %v", err),
+		c.Header("Retry-After", "30")
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"state": "chart_index_pending_or_unavailable",
+			"error": fmt.Sprintf("Chart history index pending or unavailable: %v", err),
 		})
 		return
 	}
 
-	history := applyEquityHistoryQuery(points, query)
-	c.JSON(http.StatusOK, history)
+	c.JSON(http.StatusOK, points)
 }
 
 func parseEquityHistoryQuery(c *gin.Context) EquityHistoryQuery {
@@ -1315,9 +1263,10 @@ func parseEquityHistoryQuery(c *gin.Context) EquityHistoryQuery {
 	}
 
 	return EquityHistoryQuery{
-		Limit:     limit,
-		FromCycle: fromCycle,
-		ToCycle:   toCycle,
+		Limit:          limit,
+		FromCycle:      fromCycle,
+		ToCycle:        toCycle,
+		IncludeActions: c.Query("include_actions") == "true",
 	}
 }
 
