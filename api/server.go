@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"nofx/manager"
 	"nofx/market"
@@ -26,11 +27,18 @@ type Server struct {
 	router        *gin.Engine
 	traderManager *manager.TraderManager
 	port          int
+	listenHost    string
 	equityCache   *EquityHistoryCache
 }
 
 // NewServer 创建API服务器
 func NewServer(traderManager *manager.TraderManager, port int) *Server {
+	return NewServerWithHost(traderManager, port, "127.0.0.1")
+}
+
+// NewServerWithHost supports explicit container-network binding. Native deployments
+// should use loopback: the management routes are not public or authenticated.
+func NewServerWithHost(traderManager *manager.TraderManager, port int, host string) *Server {
 	// 设置为Release模式（减少日志输出）
 	gin.SetMode(gin.ReleaseMode)
 
@@ -43,6 +51,7 @@ func NewServer(traderManager *manager.TraderManager, port int) *Server {
 		router:        router,
 		traderManager: traderManager,
 		port:          port,
+		listenHost:    host,
 		equityCache:   NewEquityHistoryCache(maxEquityHistoryLimit, 30*time.Second),
 	}
 
@@ -1760,8 +1769,12 @@ func (s *Server) handleMarketOverview(c *gin.Context) {
 
 // Start 启动服务器
 func (s *Server) Start() error {
-	addr := fmt.Sprintf(":%d", s.port)
-	log.Printf("🌐 API服务器启动在 http://localhost%s", addr)
+	host := s.listenHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(s.port))
+	log.Printf("🌐 管理API服务器启动在 http://%s", addr)
 	log.Printf("📊 API文档:")
 	log.Printf("  • GET  /api/competition      - 竞赛总览（对比所有trader）")
 	log.Printf("  • GET  /api/traders          - Trader列表")

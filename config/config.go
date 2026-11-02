@@ -146,6 +146,8 @@ type Config struct {
 	// 说明：当前实现按“全局开关”切换，适用于一次运行只选一种环境的场景。
 	BinanceTestnet     bool                   `json:"binance_testnet,omitempty"`
 	APIServerPort      int                    `json:"api_server_port"`
+	APIListenHost      string                 `json:"api_listen_host,omitempty"`
+	PublicAPI          PublicAPIConfig        `json:"public_api,omitempty"`
 	MaxDailyLoss       float64                `json:"max_daily_loss"`
 	MaxDrawdown        float64                `json:"max_drawdown"`
 	StopTradingMinutes int                    `json:"stop_trading_minutes"`
@@ -212,6 +214,9 @@ func LoadConfig(filename string) (*Config, error) {
 
 // loadFromEnvironment 从环境变量加载 API 密钥
 func (c *Config) loadFromEnvironment() {
+	if c.APIListenHost == "" {
+		c.APIListenHost = os.Getenv("NOFX_API_HOST")
+	}
 	for i := range c.Traders {
 		trader := &c.Traders[i]
 
@@ -298,6 +303,11 @@ func (c *Config) loadFromEnvironment() {
 
 // Validate 验证配置有效性
 func (c *Config) Validate() error {
+	host, err := NormalizeAPIListenHost(c.APIListenHost)
+	if err != nil {
+		return err
+	}
+	c.APIListenHost = host
 	if len(c.Traders) == 0 {
 		return fmt.Errorf("至少需要配置一个trader")
 	}
@@ -391,6 +401,9 @@ func (c *Config) Validate() error {
 
 	if c.APIServerPort <= 0 {
 		c.APIServerPort = 8080 // 默认8080端口
+	}
+	if err := c.PublicAPI.Validate(traderIDs, c.APIServerPort); err != nil {
+		return err
 	}
 
 	// 设置杠杆默认值（适配币安子账户限制，最大5倍）

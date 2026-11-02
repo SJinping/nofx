@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"nofx/api"
@@ -138,7 +139,18 @@ func main() {
 	fmt.Println()
 
 	// 创建并启动API服务器
-	apiServer := api.NewServer(traderManager, cfg.APIServerPort)
+	publicCtx, stopPublic := context.WithCancel(context.Background())
+	defer stopPublic()
+	if cfg.PublicAPI.Enabled {
+		publicServer, err := api.NewPublicServer(traderManager, cfg.PublicAPI)
+		if err != nil {
+			log.Fatalf("公开API配置错误: %v", err)
+		}
+		if err := publicServer.Start(publicCtx); err != nil {
+			log.Fatalf("公开API启动失败: %v", err)
+		}
+	}
+	apiServer := api.NewServerWithHost(traderManager, cfg.APIServerPort, cfg.APIListenHost)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("❌ API服务器错误: %v", err)
@@ -154,6 +166,7 @@ func main() {
 
 	// 等待退出信号
 	<-sigChan
+	stopPublic()
 	fmt.Println()
 	fmt.Println()
 	log.Println("📛 收到退出信号，正在停止所有trader...")
