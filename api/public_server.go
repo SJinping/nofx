@@ -22,8 +22,7 @@ import (
 const (
 	publicRefreshInterval = time.Minute
 	publicStaleAfter      = 3 * time.Minute
-	publicMaxHistory      = 20000
-	publicMaxReturnPoints = 1000
+	publicMaxHistory      = maxEquityHistoryLimit
 )
 
 // Public DTOs are intentionally separate from all management API types. Never
@@ -42,8 +41,19 @@ type publicSummary struct {
 }
 
 type publicReturnPoint struct {
-	Timestamp time.Time `json:"timestamp"`
-	ReturnPct float64   `json:"return_pct"`
+	CycleNumber int            `json:"cycle_number"`
+	Timestamp   time.Time      `json:"timestamp"`
+	ReturnPct   float64        `json:"return_pct"`
+	Actions     []publicAction `json:"actions"`
+	// Unrounded, dimensionless equity ratio for rebasing each requested window.
+	// Never retain absolute account amounts or rebase rounded percentages.
+	relativeEquity float64
+}
+
+type publicAction struct {
+	Symbol  string `json:"symbol"`
+	Action  string `json:"action"`
+	Success bool   `json:"success"`
 }
 
 type publicPosition struct {
@@ -54,7 +64,8 @@ type publicPosition struct {
 
 type publicReturnsResponse struct {
 	publicSummary
-	Points []publicReturnPoint `json:"points"`
+	ReturnBasis string              `json:"return_basis"`
+	Points      []publicReturnPoint `json:"points"`
 }
 
 type publicPositionsResponse struct {
@@ -67,8 +78,10 @@ type publicPositionsResponse struct {
 
 // Raw inputs are transient and never retained in the public cache or serialized.
 type publicEquitySample struct {
-	Timestamp time.Time
-	Equity    float64
+	CycleNumber int
+	Timestamp   time.Time
+	Equity      float64
+	Actions     []publicAction
 }
 
 type publicRawSnapshot struct {
@@ -101,7 +114,7 @@ func (s publicTraderSource) Read() (publicRawSnapshot, error) {
 	if err != nil {
 		return publicRawSnapshot{}, err
 	}
-	records, err := s.trader.GetDecisionLogger().GetChartHistory(publicMaxHistory, 0, 0, false)
+	records, err := s.trader.GetDecisionLogger().GetChartHistory(publicMaxHistory, 0, 0, true)
 	if err != nil {
 		return publicRawSnapshot{}, err
 	}
@@ -111,7 +124,11 @@ func (s publicTraderSource) Read() (publicRawSnapshot, error) {
 		Positions:           make([]publicPosition, 0, len(positions)),
 	}
 	for _, r := range records {
-		result.History = append(result.History, publicEquitySample{Timestamp: r.Timestamp, Equity: r.AccountState.TotalBalance})
+		point := publicEquitySample{CycleNumber: r.CycleNumber, Timestamp: r.Timestamp, Equity: r.AccountState.TotalBalance}
+		for _, a := range r.Actions {
+			point.Actions = append(point.Actions, publicAction{Symbol: a.Symbol, Action: publicActionName(a.Action), Success: a.Success})
+		}
+		result.History = append(result.History, point)
 	}
 	for _, p := range positions {
 		symbol, symbolOK := p["symbol"].(string)
@@ -136,11 +153,13 @@ type publicEntry struct {
 	source   publicDataSource
 	snapshot *publicSnapshot // immutable after assignment, protected by PublicServer.mu
 	failed   bool
+	logs     *publicLogsCache
 }
 
 // PublicServer has its own router and loopback listener. It cannot route requests
-// to the management handlers. Requests only read sanitized in-memory snapshots;
-// they never call a trader, exchange, logger, or filesystem.
+// to the management handlers. Market routes only read sanitized in-memory
+// snapshots and never call a trader or exchange. Log routes reuse the existing
+// secure file reader with a narrow DTO and bounded in-memory caching.
 type PublicServer struct {
 	router  *gin.Engine
 	port    int
@@ -180,7 +199,10 @@ func newPublicServer(cfg config.PublicAPIConfig, sources map[string]publicDataSo
 		port: cfg.Port, entries: make(map[string]*publicEntry), now: time.Now,
 	}
 	for _, strategy := range cfg.Strategies {
-		s.entries[strategy.Slug] = &publicEntry{config: strategy, source: sources[strategy.Slug]}
+		s.entries[strategy.Slug] = &publicEntry{
+			config: strategy, source: sources[strategy.Slug],
+			logs: newPublicLogsCache("./decision_logs", strategy.TraderID),
+		}
 		s.order = append(s.order, strategy.Slug)
 	}
 	// A fresh engine, not Server.router or its /api route group. No permissive CORS.
@@ -201,6 +223,9 @@ func newPublicServer(cfg config.PublicAPIConfig, sources map[string]publicDataSo
 	r.GET("/api/public/v1/strategies/:slug/summary", s.handleSummary)
 	r.GET("/api/public/v1/strategies/:slug/returns", s.handleReturns)
 	r.GET("/api/public/v1/strategies/:slug/positions", s.handlePositions)
+	r.GET("/api/public/v1/strategies/:slug/decisions", s.handlePublicDecisions)
+	r.GET("/api/public/v1/strategies/:slug/logs", s.handlePublicLogList)
+	r.GET("/api/public/v1/strategies/:slug/logs/:cycle", s.handlePublicLogDetail)
 	r.NoRoute(func(c *gin.Context) { c.JSON(http.StatusNotFound, gin.H{"error": "not_found"}) })
 	s.router = r
 	return s
@@ -304,11 +329,16 @@ func sanitizePublicSnapshot(cfg config.PublicStrategyConfig, raw publicRawSnapsh
 	}
 	// Sort a copy: callers may share or cache their input history.
 	history := append([]publicEquitySample(nil), raw.History...)
-	sort.Slice(history, func(i, j int) bool { return history[i].Timestamp.Before(history[j].Timestamp) })
+	sort.SliceStable(history, func(i, j int) bool { return history[i].CycleNumber < history[j].CycleNumber })
 	peak, maxDrawdown := 0.0, 0.0
+	basis := 1.0
+	if len(history) > 0 {
+		basis = history[0].Equity
+	}
 	for _, p := range history {
-		pct := (p.Equity/raw.InitialBalance - 1) * 100
-		if p.Timestamp.IsZero() || p.Timestamp.After(raw.AsOf) || !finite(p.Equity) || p.Equity < 0 || !finite(pct) {
+		relative := p.Equity / basis
+		pct := (relative - 1) * 100
+		if p.CycleNumber <= 0 || p.Timestamp.IsZero() || p.Timestamp.After(raw.AsOf) || !finite(p.Equity) || p.Equity <= 0 || !finite(relative) || relative <= 0 || !finite(pct) {
 			return nil, errors.New("invalid history sample")
 		}
 		if p.Equity > peak {
@@ -317,7 +347,14 @@ func sanitizePublicSnapshot(cfg config.PublicStrategyConfig, raw publicRawSnapsh
 		if peak > 0 {
 			maxDrawdown = math.Max(maxDrawdown, (peak-p.Equity)/peak*100)
 		}
-		result.Points = append(result.Points, publicReturnPoint{Timestamp: p.Timestamp.UTC(), ReturnPct: roundPublicPct(pct)})
+		actions := append([]publicAction{}, p.Actions...)
+		for i := range actions {
+			actions[i].Action = publicActionName(actions[i].Action)
+		}
+		result.Points = append(result.Points, publicReturnPoint{
+			CycleNumber: p.CycleNumber, Timestamp: p.Timestamp.UTC(), ReturnPct: roundPublicPct(pct),
+			Actions: actions, relativeEquity: relative,
+		})
 	}
 	for _, p := range result.Positions {
 		if p.Symbol == "" || (p.Side != "long" && p.Side != "short") || !finite(p.PriceChangePct) {
@@ -415,11 +452,11 @@ func (s *PublicServer) handleReturns(c *gin.Context) {
 	if !publicQuery(c, "limit") {
 		return
 	}
-	limit := 500
+	limit := defaultEquityHistoryLimit
 	if raw, exists := c.GetQuery("limit"); exists {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n < 2 || n > publicMaxReturnPoints {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "limit_must_be_between_2_and_1000"})
+		if err != nil || n < 1 || n > publicMaxHistory {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit_must_be_between_1_and_20000"})
 			return
 		}
 		limit = n
@@ -428,21 +465,34 @@ func (s *PublicServer) handleReturns(c *gin.Context) {
 		return
 	}
 	if summary, snapshot, ok := s.lookup(c); ok {
-		c.JSON(http.StatusOK, publicReturnsResponse{publicSummary: summary, Points: samplePublicReturns(snapshot.Points, limit)})
+		c.JSON(http.StatusOK, publicReturnsWindow(summary, snapshot.Points, limit))
 	}
 }
 
-// Evenly sample across the complete retained window, preserving both endpoints.
-// Drawdown is calculated BEFORE sampling, over every retained history point.
-func samplePublicReturns(points []publicReturnPoint, limit int) []publicReturnPoint {
-	if len(points) <= limit {
-		return points
+// Match EquityChart: newest N consecutive cycles, with the first returned
+// cycle as the baseline. Never drop intermediate cycles or their trade markers.
+func publicReturnsWindow(summary publicSummary, points []publicReturnPoint, limit int) publicReturnsResponse {
+	if len(points) > limit {
+		points = points[len(points)-limit:]
+		summary.HistoryLimitReached = true
 	}
-	result := make([]publicReturnPoint, 0, limit)
-	for i := 0; i < limit; i++ {
-		result = append(result, points[i*(len(points)-1)/(limit-1)])
+	result := make([]publicReturnPoint, len(points))
+	summary.ReturnPct, summary.SampledMaxDrawdownPct = nil, nil
+	summary.HistoryFrom, summary.HistoryTo = nil, nil
+	if len(points) > 0 {
+		basis, peak, drawdown := points[0].relativeEquity, 0.0, 0.0
+		for i, point := range points {
+			result[i] = point
+			result[i].ReturnPct = roundPublicPct((point.relativeEquity - basis) / basis * 100)
+			peak = math.Max(peak, point.relativeEquity)
+			drawdown = math.Max(drawdown, (peak-point.relativeEquity)/peak*100)
+		}
+		drawdown = roundPublicPct(drawdown)
+		summary.ReturnPct = &result[len(result)-1].ReturnPct
+		summary.SampledMaxDrawdownPct = &drawdown
+		summary.HistoryFrom, summary.HistoryTo = &result[0].Timestamp, &result[len(result)-1].Timestamp
 	}
-	return result
+	return publicReturnsResponse{publicSummary: summary, ReturnBasis: "window_start", Points: result}
 }
 
 // Reject internal and duplicate query parameters instead of silently accepting

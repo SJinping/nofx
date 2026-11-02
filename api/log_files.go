@@ -135,6 +135,17 @@ func listDecisionLogFiles(root, traderID string) ([]LogEntry, error) {
 // as listing. Invalid inputs/nonregular files wrap fs.ErrInvalid; missing paths
 // preserve fs.ErrNotExist for HTTP error mapping by the caller.
 func readDecisionLogFile(root, traderID, filename string) ([]byte, error) {
+	file, err := openDecisionLogFile(root, traderID, filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
+
+// Shared descriptor-safe opening policy for full management reads and narrow
+// public decoding. The caller owns and must close the returned descriptor.
+func openDecisionLogFile(root, traderID, filename string) (*os.File, error) {
 	if _, _, err := parseDecisionLogFilename(filename); err != nil {
 		return nil, err
 	}
@@ -147,6 +158,5 @@ func readDecisionLogFile(root, traderID, filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	return io.ReadAll(file)
+	return file, nil
 }

@@ -41,10 +41,10 @@ func publicFixture(t *testing.T) (*PublicServer, *fakePublicSource) {
 	f := &fakePublicSource{raw: publicRawSnapshot{
 		AsOf: now, InitialBalance: 10000, Equity: 11234,
 		History: []publicEquitySample{
-			{Timestamp: now.Add(-3 * time.Hour), Equity: 10000},
-			{Timestamp: now.Add(-2 * time.Hour), Equity: 12000},
-			{Timestamp: now.Add(-time.Hour), Equity: 9000},
-			{Timestamp: now, Equity: 11234},
+			{CycleNumber: 1, Timestamp: now.Add(-3 * time.Hour), Equity: 10000, Actions: []publicAction{{Symbol: "BTCUSDT", Action: "open_long", Success: true}}},
+			{CycleNumber: 2, Timestamp: now.Add(-2 * time.Hour), Equity: 12000},
+			{CycleNumber: 3, Timestamp: now.Add(-time.Hour), Equity: 9000, Actions: []publicAction{{Symbol: "BTCUSDT", Action: "close_long", Success: true}}},
+			{CycleNumber: 4, Timestamp: now, Equity: 11234},
 		},
 		Positions: []publicPosition{{Symbol: "BTCUSDT", Side: "long", PriceChangePct: 2.34}},
 	}}
@@ -121,9 +121,13 @@ func TestPublicRoutesUseStrictSchemasAndNeverFetchOnRequest(t *testing.T) {
 				t.Fatalf("wrong normalized metrics: %v", obj)
 			}
 		case base + "/strategy-a/returns":
-			assertPublicKeys(t, obj, append(append([]string{}, publicSummaryKeys...), "points")...)
+			assertPublicKeys(t, obj, append(append([]string{}, publicSummaryKeys...), "points", "return_basis")...)
 			for _, point := range obj["points"].([]interface{}) {
-				assertPublicKeys(t, point.(map[string]interface{}), "timestamp", "return_pct")
+				pointObj := point.(map[string]interface{})
+				assertPublicKeys(t, pointObj, "timestamp", "return_pct", "cycle_number", "actions")
+				for _, action := range pointObj["actions"].([]interface{}) {
+					assertPublicKeys(t, action.(map[string]interface{}), "symbol", "action", "success")
+				}
 			}
 		case base + "/strategy-a/positions":
 			assertPublicKeys(t, obj, "slug", "state", "stale", "as_of", "positions")
@@ -200,7 +204,7 @@ func TestPublicQueryBoundsAndInternalOptionsAreRejected(t *testing.T) {
 	s.refresh(context.Background())
 	base := "/api/public/v1/strategies/strategy-a/returns"
 	for _, query := range []string{
-		"limit=0", "limit=1", "limit=-1", "limit=1001", "limit=all", "limit=", "limit=2&limit=3",
+		"limit=0", "limit=-1", "limit=20001", "limit=all", "limit=", "limit=2&limit=3",
 		"trader_id=PRIVATE_TRADER_ID", "include_actions=true", "from_cycle=1", "filename=../config.json", "foo=%zz", "limit=2;foo=1",
 	} {
 		if w := publicRequest(s, http.MethodGet, base+"?"+query); w.Code != http.StatusBadRequest {
@@ -212,8 +216,8 @@ func TestPublicQueryBoundsAndInternalOptionsAreRejected(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != http.StatusOK || len(response.Points) != 2 || response.Points[0].ReturnPct != 0 || response.Points[1].ReturnPct != 12.34 || *response.SampledMaxDrawdownPct != 25 {
-		t.Fatalf("sampling lost window or changed drawdown: %+v", response)
+	if w.Code != http.StatusOK || len(response.Points) != 2 || response.Points[0].ReturnPct != 0 || response.Points[1].ReturnPct != 24.82 || *response.SampledMaxDrawdownPct != 0 || response.Points[0].CycleNumber != 3 || len(response.Points[0].Actions) != 1 || response.ReturnBasis != "window_start" {
+		t.Fatalf("newest-cycle window, rebasing, or trade marker changed: %+v", response)
 	}
 	for _, route := range []string{"", "/strategy-a/summary", "/strategy-a/positions"} {
 		w := publicRequest(s, http.MethodGet, "/api/public/v1/strategies"+route+"?limit=2")
