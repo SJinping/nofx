@@ -119,7 +119,7 @@ func btcDirectionConstraintPrompt() string {
 }
 
 // buildSystemPrompt 构建 System Prompt。开仓净 RR 规则必须与执行层使用同一组运行时成本假设。
-func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int, assumedTakerFeeRate, assumedSlippageRate float64) string {
+func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int, assumedTakerFeeRate, assumedSlippageRate, minNetRR float64) string {
 	if altcoinMaxPositionEquityMultiple <= 0 {
 		altcoinMaxPositionEquityMultiple = 2.0
 	}
@@ -145,7 +145,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 
 	// === 硬约束（风险控制）===
 	sb.WriteString("# ⚖️ 仓位硬约束（风险控制）\n\n")
-	sb.WriteString(fmt.Sprintf("1. **净风险回报比**: 必须 ≥ %.2f:1（按下方代码同口径公式扣除手续费和滑点后计算）\n", minRiskReward))
+	sb.WriteString(fmt.Sprintf("1. **净风险回报比**: 必须 ≥ %.2f:1（按下方代码同口径公式扣除手续费和滑点后计算）\n", minNetRR))
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
 	sb.WriteString(fmt.Sprintf("3. **单币最大仓位**: 山寨币不超过当前账户净值的 %.2g 倍，BTC/ETH 不超过当前账户净值的 10 倍。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString("   当前账户净值会在用户消息中给出，你需要基于该数值自行判断仓位是否超限。\n")
@@ -155,7 +155,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	// 避免模型按未扣成本的原始 RR 选出会被执行层拒绝的开仓。
 	sb.WriteString("## 开仓净风险回报计算（代码执行层同口径，开仓前必须逐项计算）\n")
 	sb.WriteString("对每个 `open_long` 或 `open_short`，以候选币当前价格 `entry_price`、你输出的 `stop_loss`、`take_profit` 和 `leverage` 计算；不要使用未扣成本的原始 RR 代替净 RR。\n")
-	sb.WriteString(fmt.Sprintf("本周期运行时参数（已由系统注入）：手续费 `taker_fee_rate = %.6f (%.3f%%)`；滑点 `slippage_rate = %.6f (%.3f%%)`；最小净 RR `min_net_rr = %.2f:1`。\n", assumedTakerFeeRate, assumedTakerFeeRate*100, assumedSlippageRate, assumedSlippageRate*100, minRiskReward))
+	sb.WriteString(fmt.Sprintf("本周期运行时参数（已由系统注入）：手续费 `taker_fee_rate = %.6f (%.3f%%)`；滑点 `slippage_rate = %.6f (%.3f%%)`；最小净 RR `min_net_rr = %.2f:1`。\n", assumedTakerFeeRate, assumedTakerFeeRate*100, assumedSlippageRate, assumedSlippageRate*100, minNetRR))
 	sb.WriteString("做多：`raw_risk_pct = (entry_price - stop_loss) / entry_price * 100`；`raw_reward_pct = (take_profit - entry_price) / entry_price * 100`。\n")
 	sb.WriteString("做空：`raw_risk_pct = (stop_loss - entry_price) / entry_price * 100`；`raw_reward_pct = (entry_price - take_profit) / entry_price * 100`。\n")
 	sb.WriteString("`round_trip_cost_roi_pct = 2 * (taker_fee_rate + slippage_rate) * leverage * 100`。\n")
@@ -277,7 +277,7 @@ func buildSystemPrompt(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMa
 	sb.WriteString("- 目标是夏普比率，不是交易频率\n")
 	sb.WriteString("- 做空 = 做多，都是赚钱工具\n")
 	sb.WriteString("- 宁可错过，不做低质量交易\n")
-	sb.WriteString(fmt.Sprintf("扣成本后的净风险回报比 %.2f:1 是硬底线\n", minRiskReward))
+	sb.WriteString(fmt.Sprintf("扣成本后的净风险回报比 %.2f:1 是硬底线\n", minNetRR))
 
 	return sb.String()
 }
@@ -415,8 +415,8 @@ func buildSystemPromptB(_ float64, btcEthLeverage, altcoinLeverage int, altcoinM
 	return sb.String()
 }
 
-// buildSystemPromptShortTerm 专注短期/波动交易的 System Prompt（策略 V）
-func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int) string {
+// buildSystemPromptShortTerm 专注短期/波动交易的 System Prompt（策略 V）。开仓净 RR 规则必须与执行层使用同一组运行时成本假设。
+func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, altcoinMaxPositionEquityMultiple float64, scanIntervalMin int, assumedTakerFeeRate, assumedSlippageRate, minNetRR float64, paperTradingMode bool) string {
 	if altcoinMaxPositionEquityMultiple <= 0 {
 		altcoinMaxPositionEquityMultiple = 2.0
 	}
@@ -488,6 +488,11 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("- 假突破极值外侧应能放置明确止损，目标优先看区间中位或另一侧。\n")
 	sb.WriteString("- 如果回落/回升后已经接近目标位，不要迟到追入。\n\n")
 
+	sb.WriteString("## other（其他可验证 setup，谨慎使用）\n")
+	sb.WriteString("- 仅当机会确实无法归入以上5类时使用，典型如资金费率/OI 驱动的挤仓、强平瀑布后的延续或回补、事件驱动的动量。不要把前5类中形态不完整的机会改名为 other。\n")
+	sb.WriteString("- reasoning 必须写 `setup_type=other`、`setup_logic=<一句话说明靠什么价格行为获利>` 与 `invalidation_condition`；止损仍必须绑定明确的结构失效位。\n")
+	sb.WriteString(fmt.Sprintf("- 代码强制：confidence 需比本轮最低门槛再高 %d；单笔 risk_usd ≤ 净值 %.1f%%（普通 setup 为 %.1f%%）。\n\n", shortTermOtherSetupConfidenceBonus, shortTermOtherSetupMaxRiskPct, shortTermMaxRiskPctPerTrade))
+
 	sb.WriteString("## no_trade（无交易）\n")
 	sb.WriteString("- 信号明显冲突、数据不足、已错过触发点、净 RR 不足、流动性不足、或 BTC 环境与方向强冲突时，应选择 no_trade / wait。\n")
 	sb.WriteString("- **禁止**把「价格在区间中部」单独写成 no_trade 理由；中部只对 range_reversal 不利，对 trend_pullback / 突破后回踩完全可交易。若属于 trend_pullback reclaim、breakout 后第一次回踩确认、failed_breakout 回到区间内，且止损明确、净 RR 达标，可以小仓位执行。\n\n")
@@ -500,7 +505,11 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("- volume、OI、AI300 或 heatmap 是辅助确认，不是四个硬门槛；只有明显反向或阻挡止盈空间时才应降低仓位或 wait，缺失/轻微不一致不应自动否定清晰价格结构。\n")
 	sb.WriteString("- 重点候选缺少完整 OHLCV 或 intraday_atr14，无法判断短线止损距离。\n")
 	sb.WriteString("- 计划开仓的止损/止盈虽然方向正确，但扣除费用和滑点后净 RR 低于系统要求。\n")
-	sb.WriteString("- paper 探索阶段，如果当前无持仓、近期交易样本很少且无明显亏损，遇到 B+ setup（结构清晰、止损可定义、净 RR 达标、confidence ≥68）应优先小仓位试单，而不是反复输出 wait。\n")
+	if paperTradingMode {
+		sb.WriteString("- paper 探索阶段，如果当前无持仓、近期交易样本很少且无明显亏损，遇到 B+ setup（结构清晰、止损可定义、净 RR 达标、confidence 达到本轮最低门槛）应优先小仓位试单，而不是反复输出 wait。\n")
+	} else {
+		sb.WriteString("- 当前为实盘：B+ setup（结构清晰、止损可定义、净 RR 达标、confidence 达到本轮最低门槛）可以小仓位执行，但不要为了积累样本而降低标准试单。\n")
+	}
 	sb.WriteString("- **禁止默认「再等一根K线」**：若 setup_type 可分类、invalidation/止损明确、净 RR ≥ 最低要求，本轮应开仓；不得以「再等一根确认」作为唯一 wait 理由。\n")
 	sb.WriteString("- 仅在以下情况允许 `wait_one_more_candle=yes`：假突破嫌疑强（长影未收稳）、止损被迫过宽导致净 RR 刚不达标想等更好入场、或结构尚未形成（无法分类 setup）。默认应为 `wait_one_more_candle=no`。\n\n")
 
@@ -510,7 +519,11 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("- 做空时，如果 position_in_3m_range < 0.20，只有在 downside breakout_momentum 或弱势反弹失败后才考虑；不要把“低位”本身当作绝对禁止，也不要因此错过刚启动的下破。\n")
 	sb.WriteString("- 中部（约 0.35–0.65）不是否决项：优先找 trend_pullback reclaim、突破后第一次回踩、failed_breakout 收回；只有 range_reversal 才要求贴近边界（通常 <0.25 或 >0.75）。判断重点是结构失效位是否明确、净 RR 是否达标。\n")
 	sb.WriteString("- 若入场点已经错过，优先等回踩；但如果当前价距离触发位仍小（约 ≤0.5×intraday_atr14，或 BTC/ETH ≤0.15%、山寨币 ≤0.25%）、止损不被迫放宽且净 RR 达标，可以 late-entry 小仓位。\n")
-	sb.WriteString("- 不要为了更漂亮的入场价无限等待：如果再等回踩会明显降低成交概率，而当前价格仍满足追价上限、止损和净 RR，paper 阶段应执行小仓位验证。\n\n")
+	if paperTradingMode {
+		sb.WriteString("- 不要为了更漂亮的入场价无限等待：如果再等回踩会明显降低成交概率，而当前价格仍满足追价上限、止损和净 RR，paper 阶段应执行小仓位验证。\n\n")
+	} else {
+		sb.WriteString("- 不要为了更漂亮的入场价无限等待：如果再等回踩会明显降低成交概率，而当前价格仍满足追价上限、止损和净 RR，可以小仓位执行。\n\n")
+	}
 
 	sb.WriteString("# 6️⃣ AI300 / heatmap / OI 的使用规则\n\n")
 	sb.WriteString("- AI300 资金流、order book heatmap、OI 变化是辅助确认信号，不是单独开仓理由，也不是每笔交易的硬性必需条件。\n")
@@ -524,11 +537,12 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString(fmt.Sprintf("单币最大仓位: 山寨币不超过当前账户净值 %.2g 倍，BTC/ETH 不超过当前账户净值 2 倍。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString(fmt.Sprintf("- StrategyV短线仓位上限：BTC/ETH 单笔名义仓位通常不超过净值2倍，山寨币不超过配置的净值 %.2g 倍；单笔 risk_usd 不超过净值1%%。\n", altcoinMaxPositionEquityMultiple))
 	sb.WriteString("- 当保证金使用率 ≥70% 时，不要新增仓位；当短线持仓浮亏接近 -2.5% 或超过90分钟仍未兑现，应优先退出/降风险。\n")
-	sb.WriteString(fmt.Sprintf("- 每笔交易的净风险回报比必须 ≥ %.2f:1；达到最低要求且 setup 清晰即可执行，paper 阶段不要把“理想 3:1”当成硬门槛。\n", minRiskReward))
+	sb.WriteString(fmt.Sprintf("- 每笔交易的净风险回报比必须 ≥ %.2f:1；达到最低要求且 setup 清晰即可执行，不要把“理想 3:1”当成硬门槛。\n", minNetRR))
 	sb.WriteString("- 净 RR 必须使用系统同口径公式，不要只算裸价格 RR：\n")
+	sb.WriteString(fmt.Sprintf("  - 本周期运行时参数（已由系统注入）：手续费 `taker_fee_rate = %.6f (%.3f%%)`；滑点 `slippage_rate = %.6f (%.3f%%)`；最小净 RR `min_net_rr = %.2f:1`。\n", assumedTakerFeeRate, assumedTakerFeeRate*100, assumedSlippageRate, assumedSlippageRate*100, minNetRR))
 	sb.WriteString("  - 多单 raw_risk_pct=(entry-stop_loss)/entry*100；raw_reward_pct=(take_profit-entry)/entry*100。\n")
 	sb.WriteString("  - 空单 raw_risk_pct=(stop_loss-entry)/entry*100；raw_reward_pct=(entry-take_profit)/entry*100。\n")
-	sb.WriteString("  - round_trip_cost_roi_pct=2*(taker_fee+slippage)*leverage*100；默认可按 taker_fee=0.0004、slippage=0.0005 估算。\n")
+	sb.WriteString("  - round_trip_cost_roi_pct=2*(taker_fee_rate+slippage_rate)*leverage*100。\n")
 	sb.WriteString("  - calculated_net_risk_pct=raw_risk_pct*leverage+round_trip_cost_roi_pct。\n")
 	sb.WriteString("  - calculated_net_reward_pct=raw_reward_pct*leverage-round_trip_cost_roi_pct。\n")
 	sb.WriteString("  - calculated_net_rr=calculated_net_reward_pct/calculated_net_risk_pct；若 < 最低要求或净收益 <=0，必须 wait。\n")
@@ -549,17 +563,22 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("- 若已有盈利但动能减弱或接近阻力/支撑，优先考虑 `partial_close` 或 `update_stop_loss`，不一定全平。\n")
 	sb.WriteString("- 如果入场 setup 仍有效且只是正常回踩，不要因为单根 3m 噪声频繁 close。\n")
 	sb.WriteString("- 如果突破后没有 follow-through、跌回/涨回区间内，或 time_stop 接近且仍未兑现，应主动退出或减仓。\n")
-	sb.WriteString(fmt.Sprintf("- update_stop_loss 不能贴现价太近，应至少参考 intraday_atr14 (%dm) 留出噪声空间。\n\n", barIntervalMin))
+	sb.WriteString(fmt.Sprintf("- update_stop_loss 不能贴现价太近，应至少参考 intraday_atr14 (%dm) 留出噪声空间。\n", barIntervalMin))
+	sb.WriteString(fmt.Sprintf("- **最短持仓（代码强制）**：开仓后 %d 分钟内，你的 close/partial_close 会被拒绝（止损已击穿、浮亏超 -8%%、接近强平除外）；%d 分钟后突破失败或无 follow-through 可直接退出，不需要等到更长时间。\n", shortTermMinHoldMinutes, shortTermMinHoldMinutes))
+	sb.WriteString(shortTermAutoTakeProfitPrompt())
+	sb.WriteString("\n")
 
 	sb.WriteString("# 9️⃣ 基于有效绩效的自我调节\n\n")
 	sb.WriteString(performanceGuidancePrompt())
+	sb.WriteString(fmt.Sprintf("**StrategyV 开仓 confidence 门槛（代码强制，与上面三种模式对应）**：正常/绩效重置 ≥ %d；谨慎模式 ≥ %d；防守模式 ≥ %d。下方 BTC 方向约束触发时 ≥ 90；setup_type=other 在本轮门槛上再 +%d。本轮实际门槛见用户消息，低于门槛的开仓会被直接拒绝。\n\n",
+		shortTermMinConfidenceBase, shortTermMinConfidenceCautious, shortTermMinConfidenceDefensive, shortTermOtherSetupConfidenceBonus))
 
 	// === 市场环境与方向约束 ===
-	sb.WriteString(btcDirectionConstraintPrompt())
+	sb.WriteString(shortTermBTCDirectionConstraintPrompt())
 
 	sb.WriteString("# 10. 决策流程\n\n")
 	sb.WriteString("1. 先判断 BTC 环境与 1h/4h 背景。\n")
-	sb.WriteString("2. 对每个重点候选识别 setup_type；无法分类则 no_trade。不要用「区间中部」替代 setup 分类。\n")
+	sb.WriteString("2. 对每个重点候选识别 setup_type；前5类都不符合、且也不满足 other 要求时 no_trade。不要用「区间中部」替代 setup 分类。\n")
 	sb.WriteString("3. 检查入场位置、追单风险、volume/OI/AI300/heatmap 是否支持；确认信号不必全部具备，但不能明显反向。\n")
 	sb.WriteString("4. 计算止损、止盈、time_stop 与扣成本后的净 RR。\n")
 	sb.WriteString("5. 若净 RR、止损有效性或数据完整性不满足，输出 wait；若 setup+止损+净 RR 已达标，本轮执行，不要「再等一根」拖延。若只是缺少某个辅助确认但价格结构清晰，可以小仓位执行。若已有持仓，优先做风险管理。\n\n")
@@ -581,7 +600,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("**字段说明**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
 	sb.WriteString("- 开仓时必填: symbol, leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
-	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, entry_price_used, raw_risk_pct, raw_reward_pct, round_trip_cost_roi_pct, calculated_net_risk_pct, calculated_net_reward_pct, calculated_net_rr, wait_one_more_candle。\n")
+	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, entry_price_used, raw_risk_pct, raw_reward_pct, round_trip_cost_roi_pct, calculated_net_risk_pct, calculated_net_reward_pct, calculated_net_rr, wait_one_more_candle；setup_type=other 时还必须包含 setup_logic。\n")
 	sb.WriteString("- `wait_one_more_candle` 默认写 `no`；只有假突破嫌疑强、止损过宽导致净 RR 刚不达标、或结构未形成时才写 `yes`，并说明缺什么。禁止用它拖延已达标的开仓。\n")
 	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`；`partial_close`: 必须提供 `close_percentage` (0-100)。\n")
 	sb.WriteString("- `symbol`如果有值，必须严格从当前持仓列表、候选币种列表和 StrategyV Watchlist 中选择，不允许虚构币种。\n")
@@ -591,6 +610,36 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString(autoRiskControlPrompt())
 
 	return sb.String()
+}
+
+// shortTermBTCDirectionConstraintPrompt 是 StrategyV 专用的 BTC 方向约束。
+// 代码门槛与 validateBTCDirectionConstraint 一致；V 的 user prompt 不提供恐贪指数和 BTC 日线，因此不引用它们。
+func shortTermBTCDirectionConstraintPrompt() string {
+	var sb strings.Builder
+	sb.WriteString("# 🧭 StrategyV 市场环境与方向约束\n\n")
+	sb.WriteString("用户消息中的 **BTC 4h 市场环境** 标签、BTC 1h/4h 涨跌和 BTC 最近已闭合 3m 结构，是 V 的方向过滤依据。V 不使用恐贪指数和 BTC 日线，不要自行假设这些数据。\n\n")
+
+	sb.WriteString("**代码强制的方向门槛（按 BTC 4h 标签）**：\n")
+	sb.WriteString("- 4h 下跌趋势：山寨币 open_long 需 confidence ≥ 90；BTC/ETH 做多和所有做空按本轮常规门槛。\n")
+	sb.WriteString("- 4h 上涨趋势：任何 open_short 需 confidence ≥ 90。\n")
+	sb.WriteString("- 4h 震荡：多空均按本轮常规门槛。\n\n")
+
+	sb.WriteString("**短线 beta 过滤（按 BTC 1h 与最近已闭合 3m 结构）**：\n")
+	sb.WriteString("- 4h 只决定逆势门槛，不决定 3m 入场。4h 下跌中的 BTC/ETH 反弹做多限于 1h 已企稳的 trend_pullback 或下破收回的 failed_breakout，目标看 3m 区间或 1h 最近阻力，不按趋势反转持仓。\n")
+	sb.WriteString("- 山寨币方向与 BTC 当前 3m 结构冲突时（做多山寨而 BTC 正在跌破 3m 区间下沿，或做空山寨而 BTC 正在放量上破），即使山寨自身结构清晰也应 wait 或缩小仓位。\n")
+	sb.WriteString("- BTC 1h 涨跌幅较大（约 >1%）且方向与你的山寨交易相反时优先 wait；方向一致时可作为确认，但不要在 BTC 已单边走完后追山寨。\n")
+	sb.WriteString("- BTC 3m 横盘缩量时，山寨的独立急拉急跌主要是个币资金驱动，必须结合流动性、资金费率与 OI 判断，不能只看形态。\n\n")
+	return sb.String()
+}
+
+// shortTermAutoTakeProfitPrompt 从 ShortTermAutoTakeProfitConfig 生成说明，保证 prompt 与执行层档位一致。
+func shortTermAutoTakeProfitPrompt() string {
+	cfg := ShortTermAutoTakeProfitConfig()
+	major := autoTakeProfitConfigForSymbol("BTCUSDT", cfg)
+	alt := autoTakeProfitConfigForSymbol("SOLUSDT", cfg)
+	return fmt.Sprintf("- **StrategyV 自动止盈（代码执行，净ROI = 价格变动%%×杠杆 − 往返成本）**：BTC/ETH 净ROI ≥%.0f%% 减仓%.0f%%、≥%.0f%% 再减%.0f%%并启用 trailing（距最佳价 %.2f%%）、≥%.0f%% 全平；山寨币 %.0f%%/%.0f%%/%.0f%%，trailing %.2f%%。第一次自动减仓后剩余仓位止损会移到整笔保本。你的 take_profit 仍是最终目标，自动减仓无需手动触发。\n",
+		major.Stage0Threshold, major.Stage0ClosePct, major.Stage1Threshold, major.Stage1ClosePct, major.TrailingDistancePct, major.FullCloseThreshold,
+		alt.Stage0Threshold, alt.Stage1Threshold, alt.FullCloseThreshold, alt.TrailingDistancePct)
 }
 
 // buildUserPrompt 构建 User Prompt（动态数据）
@@ -1017,7 +1066,10 @@ func buildUserPromptShortTerm(ctx *Context) string {
 
 	sb.WriteString("## StrategyV 短线决策要求\n")
 	sb.WriteString(fmt.Sprintf("- 主要判断窗口：最近 %d 根已闭合 %dm K线（约%d分钟）+ 1h/4h 背景；非重点候选仅提供轻量概览。\n", barCount, barIntervalMin, coverageMin))
-	sb.WriteString("- 先判断 setup_type：trend_pullback | breakout_momentum | range_reversal | exhaustion_reversal | failed_breakout | no_trade。\n")
+	minConfidence := shortTermRequiredConfidence(ctx)
+	sb.WriteString(fmt.Sprintf("- **本轮开仓门槛（代码强制）**：confidence ≥ %d（%s）；setup_type=other ≥ %d；BTC 方向约束触发时 ≥ 90；净 RR ≥ %.2f:1。\n",
+		minConfidence, shortTermConfidenceModeLabel(minConfidence), minConfidence+shortTermOtherSetupConfidenceBonus, minRiskRewardFor(ctx)))
+	sb.WriteString("- 先判断 setup_type：trend_pullback | breakout_momentum | range_reversal | exhaustion_reversal | failed_breakout | other | no_trade。\n")
 	sb.WriteString("- 开仓前必须在 reasoning 中写明：setup_type、why_now、invalidation_condition、expected_holding_minutes、time_stop_minutes、entry_price_used、raw_risk_pct、raw_reward_pct、round_trip_cost_roi_pct、calculated_net_risk_pct、calculated_net_reward_pct、calculated_net_rr、wait_one_more_candle。\n")
 	sb.WriteString("- `position_in_3m_range` 中部不是否决项；range_reversal 才要求贴边。setup+止损+净RR达标时 `wait_one_more_candle=no` 并本轮开仓，禁止默认再等一根。\n")
 	sb.WriteString("- 如果没有清晰触发点（无法分类 setup），输出 wait；不要因为短线策略就强行交易。\n\n")

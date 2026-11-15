@@ -29,10 +29,6 @@ func testAdaptiveContext() *Context {
 }
 
 func TestValidateDecisionAdjustsTooCloseLongStopAndShrinksPosition(t *testing.T) {
-	oldRR := minRiskReward
-	minRiskReward = 2.2
-	defer func() { minRiskReward = oldRR }()
-
 	d := Decision{Symbol: "BTCUSDT", Action: ActionOpenLong, Leverage: 3, PositionSizeUSD: 200, StopLoss: 99.5, TakeProfit: 104, Reasoning: "test"}
 	if err := coreValidateDecision(&d, testAdaptiveContext()); err != nil {
 		t.Fatalf("coreValidateDecision returned error: %v", err)
@@ -56,11 +52,32 @@ func TestValidateDecisionRejectsAdjustedPositionBelow50USDT(t *testing.T) {
 	}
 }
 
-func TestValidateDecisionRejectsWhenAdjustedRRIsTooLow(t *testing.T) {
-	oldRR := minRiskReward
-	minRiskReward = 2.2
-	defer func() { minRiskReward = oldRR }()
+func TestMinRiskRewardIsScopedToEachTraderContext(t *testing.T) {
+	// 调整后止损 99、止盈 104、3x：净RR ≈ 3.24
+	newDecision := func() Decision {
+		return Decision{Symbol: "BTCUSDT", Action: ActionOpenLong, Leverage: 3, PositionSizeUSD: 200, StopLoss: 99.5, TakeProfit: 104, Reasoning: "test"}
+	}
 
+	strictCtx := testAdaptiveContext()
+	strictCtx.MinRiskReward = 3.5
+	looseCtx := testAdaptiveContext()
+	looseCtx.MinRiskReward = 1.5
+
+	strict := newDecision()
+	if err := coreValidateDecision(&strict, strictCtx); err == nil || !strings.Contains(err.Error(), "必须≥3.50:1") {
+		t.Fatalf("expected strict trader to reject at 3.50, got %v", err)
+	}
+	loose := newDecision()
+	if err := coreValidateDecision(&loose, looseCtx); err != nil {
+		t.Fatalf("loose trader should accept the same decision: %v", err)
+	}
+	unset := newDecision()
+	if err := coreValidateDecision(&unset, testAdaptiveContext()); err != nil {
+		t.Fatalf("unset threshold should fall back to default %.2f: %v", DefaultMinRiskReward, err)
+	}
+}
+
+func TestValidateDecisionRejectsWhenAdjustedRRIsTooLow(t *testing.T) {
 	d := Decision{Symbol: "BTCUSDT", Action: ActionOpenLong, Leverage: 3, PositionSizeUSD: 200, StopLoss: 99.5, TakeProfit: 102, Reasoning: "test"}
 	err := coreValidateDecision(&d, testAdaptiveContext())
 	if err == nil || !strings.Contains(err.Error(), "净风险回报比过低") {

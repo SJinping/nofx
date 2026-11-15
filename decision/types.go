@@ -181,6 +181,12 @@ type Context struct {
 	AssumedTakerFeeRate float64 `json:"-"` // 例如 0.0004
 	AssumedSlippageRate float64 `json:"-"` // 例如 0.0005
 
+	// 是否为纸上交易（StrategyV prompt 仅在 paper 下使用探索性试单措辞）
+	PaperTradingMode bool `json:"-"`
+
+	// 当前 trader 的最小净风险回报比（<=0 时使用 DefaultMinRiskReward）
+	MinRiskReward float64 `json:"-"`
+
 	// 止损最小距离配置（从config层传入，零值时使用默认）
 	StopLossDistance StopLossDistanceConfig `json:"-"`
 

@@ -285,7 +285,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 			}
 		}
 
-		// 验证风险回报比（必须≥1:minRiskReward）
+		// 验证风险回报比（必须≥当前 trader 的 min_risk_reward）
 		// ✅ 计算入场价：优先用当前市价（更贴近实盘），取不到才fallback到启发式
 		entryPrice := 0.0
 		if ctx != nil && ctx.MarketDataMap != nil {
@@ -350,10 +350,11 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		}
 		riskRewardRatio := netReward / netRisk
 
-		// 硬约束：净风险回报比必须≥minRiskReward
-		if riskRewardRatio < minRiskReward {
+		// 硬约束：净风险回报比必须≥当前 trader 的门槛
+		minRR := minRiskRewardFor(ctx)
+		if riskRewardRatio < minRR {
 			return fmt.Errorf("净风险回报比过低(%.2f:1)，必须≥%.2f:1 [净风险:%.2f%% 净收益:%.2f%% 成本:%.2f%%] [止损:%.2f 止盈:%.2f 入场:%.2f 杠杆:%dx]",
-				riskRewardRatio, minRiskReward, netRisk, netReward, roundTripCostROIPct, d.StopLoss, d.TakeProfit, entryPrice, d.Leverage)
+				riskRewardRatio, minRR, netRisk, netReward, roundTripCostROIPct, d.StopLoss, d.TakeProfit, entryPrice, d.Leverage)
 		}
 
 		if err := validateRequiredMargin(d, ctx); err != nil {
@@ -899,7 +900,10 @@ func validateBTCDirectionConstraint(d *Decision, ctx *Context) error {
 //  2. 浮亏超过 -8%
 //  3. 距离强平价不足 15%
 func validateMinHoldingTime(d *Decision, ctx *Context) error {
-	minHold := ctx.MinHoldMinutes
+	return validateMinHoldingTimeWith(d, ctx, ctx.MinHoldMinutes)
+}
+
+func validateMinHoldingTimeWith(d *Decision, ctx *Context, minHold int) error {
 	if minHold <= 0 {
 		return nil
 	}

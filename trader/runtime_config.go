@@ -233,7 +233,6 @@ func (rc *RuntimeConfig) Update(patch RuntimeConfigPatch) (scanIntervalChanged b
 	if patch.MinRiskReward != nil && *patch.MinRiskReward > 0 {
 		log.Printf("🔧 运行时配置更新: MinRiskReward %.2f → %.2f", rc.minRiskReward, *patch.MinRiskReward)
 		rc.minRiskReward = *patch.MinRiskReward
-		decision.SetMinRiskReward(*patch.MinRiskReward)
 	}
 	if patch.ScanIntervalMin != nil && *patch.ScanIntervalMin >= 1 {
 		newDur := time.Duration(*patch.ScanIntervalMin) * time.Minute

@@ -296,9 +296,8 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 	if config.InitialBalance <= 0 {
 		return nil, fmt.Errorf("初始金额必须大于0，请在配置中设置InitialBalance")
 	}
-	// 将配置写入决策层全局约束
-	if config.MinRiskReward > 0 {
-		decision.SetMinRiskReward(config.MinRiskReward)
+	if config.MinRiskReward <= 0 {
+		config.MinRiskReward = decision.DefaultMinRiskReward
 	}
 
 	// 初始化决策日志记录器（使用trader ID创建独立目录）
@@ -478,7 +477,7 @@ func (at *AutoTrader) runPositionRiskScan(cfg PositionRiskConfig) error {
 		Positions:           infos,
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
-		AutoTakeProfit:      rc.AutoTakeProfit,
+		AutoTakeProfit:      at.effectiveAutoTakeProfit(rc.AutoTakeProfit),
 	}
 
 	// 决策层会更新最佳价格；真实状态只在此锁内暴露，AI 上下文使用深拷贝。
@@ -1670,11 +1669,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		RecentTrades:        recentTrades,
 		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
-		StopLossDistance:    rcSnap.StopLossDistance, // 从运行时配置读取
-		AutoTakeProfit:      rcSnap.AutoTakeProfit,   // 从运行时配置读取
-		ScanIntervalMin:     rcSnap.ScanIntervalMin,  // 用于 prompt 动态时间
-		MinHoldMinutes:      rcSnap.MinHoldMinutes,   // LLM 最低持仓时间
-		MinOIValueMillions:  rcSnap.MinOIValueMil,    // OI 价值过滤门槛
+		PaperTradingMode:    at.config.PaperTradingMode,
+		MinRiskReward:       rcSnap.MinRiskReward,
+		StopLossDistance:    rcSnap.StopLossDistance,                           // 从运行时配置读取
+		AutoTakeProfit:      at.effectiveAutoTakeProfit(rcSnap.AutoTakeProfit), // 从运行时配置读取；StrategyV 使用专用档位
+		ScanIntervalMin:     rcSnap.ScanIntervalMin,                            // 用于 prompt 动态时间
+		MinHoldMinutes:      rcSnap.MinHoldMinutes,                             // LLM 最低持仓时间
+		MinOIValueMillions:  rcSnap.MinOIValueMil,                              // OI 价值过滤门槛
 		ShortTermWatchlist:  at.snapshotShortTermWatchlist(),
 		EnableRecording:     at.config.EnableRecording,
 		TraderID:            at.config.ID,
@@ -1694,6 +1695,15 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 func (at *AutoTrader) isStrategyV() bool {
 	return at != nil && at.promptStrategy != nil && at.promptStrategy.Name() == "V"
+}
+
+// effectiveAutoTakeProfit 让周期决策、高频风险扫描和部分平仓后的保护单重建使用同一套档位；
+// StrategyV 忽略全局 auto_take_profit（含运行时热更新），A/B 保持原配置。
+func (at *AutoTrader) effectiveAutoTakeProfit(cfg decision.AutoTakeProfitConfig) decision.AutoTakeProfitConfig {
+	if at.isStrategyV() {
+		return decision.ShortTermAutoTakeProfitConfig()
+	}
+	return cfg
 }
 
 func (at *AutoTrader) snapshotShortTermWatchlist() []decision.ShortTermWatchItem {
@@ -2574,7 +2584,7 @@ func (at *AutoTrader) executePartialCloseWithRecord(dec *decision.Decision, acti
 	st.RealizedNetPnL += estimatePartialCloseNetPnL(strings.ToLower(side), st.BaselineEntry, fillPrice, closedQty,
 		at.config.AssumedTakerFeeRate+at.config.AssumedSlippageRate)
 
-	tpCfg := decision.ResolveAutoTakeProfitConfig(dec.Symbol, at.runtimeCfg.Get().AutoTakeProfit)
+	tpCfg := decision.ResolveAutoTakeProfitConfig(dec.Symbol, at.effectiveAutoTakeProfit(at.runtimeCfg.Get().AutoTakeProfit))
 	oldStage := st.Stage
 	if dec.DecisionSource == "auto_take_profit" {
 		st.Stage++

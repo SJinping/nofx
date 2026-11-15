@@ -8,11 +8,8 @@ import (
 )
 
 func TestStrategyASystemPromptInjectsRuntimeNetRiskRewardRules(t *testing.T) {
-	oldMinRiskReward := minRiskReward
-	minRiskReward = 2.35
-	defer func() { minRiskReward = oldMinRiskReward }()
-
 	prompt := (StrategyA{}).BuildSystemPrompt(&Context{
+		MinRiskReward:       2.35,
 		BTCETHLeverage:      5,
 		AltcoinLeverage:     3,
 		AssumedTakerFeeRate: 0.0006,
@@ -49,6 +46,31 @@ func TestStrategyASystemPromptUsesConfiguredZeroCostAssumptions(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt did not preserve configured cost assumption %q", want)
 		}
+	}
+}
+
+func TestStrategyVSystemPromptInjectsRuntimeCostAssumptions(t *testing.T) {
+	prompt := (StrategyV{}).BuildSystemPrompt(&Context{
+		MinRiskReward:       2.1,
+		BTCETHLeverage:      5,
+		AltcoinLeverage:     5,
+		AssumedTakerFeeRate: 0.0006,
+		AssumedSlippageRate: 0.0008,
+		ScanIntervalMin:     3,
+	})
+
+	for _, want := range []string{
+		"taker_fee_rate = 0.000600 (0.060%)",
+		"slippage_rate = 0.000800 (0.080%)",
+		"min_net_rr = 2.10:1",
+		"round_trip_cost_roi_pct=2*(taker_fee_rate+slippage_rate)*leverage*100",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("StrategyV system prompt missing injected cost rule %q", want)
+		}
+	}
+	if strings.Contains(prompt, "taker_fee=0.0004") || strings.Contains(prompt, "slippage=0.0005") {
+		t.Fatalf("StrategyV system prompt must not hardcode cost assumptions")
 	}
 }
 

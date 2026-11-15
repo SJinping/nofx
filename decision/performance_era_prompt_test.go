@@ -11,9 +11,11 @@ func TestPerformanceEraPromptAndSharedStrategyGuidance(t *testing.T) {
 		name string
 		fn   func() string
 	}{
-		{"A", func() string { return buildSystemPrompt(0, 5, 5, 2, 3, 0.0004, 0.0005) }},
+		{"A", func() string { return buildSystemPrompt(0, 5, 5, 2, 3, 0.0004, 0.0005, DefaultMinRiskReward) }},
 		{"B", func() string { return buildSystemPromptB(0, 5, 5, 2, 3) }},
-		{"V", func() string { return buildSystemPromptShortTerm(0, 5, 5, 2, 3) }},
+		{"V", func() string {
+			return buildSystemPromptShortTerm(0, 5, 5, 2, 3, 0.0004, 0.0005, DefaultMinRiskReward, false)
+		}},
 	} {
 		text := build.fn()
 		if !strings.Contains(text, "绩效重置") || !strings.Contains(text, "谨慎模式") || !strings.Contains(text, "防守模式") || strings.Contains(text, "连续观望至少6个周期") {

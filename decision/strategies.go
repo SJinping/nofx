@@ -14,6 +14,7 @@ func (StrategyA) BuildSystemPrompt(ctx *Context) string {
 		ctx.ScanIntervalMin,
 		ctx.AssumedTakerFeeRate,
 		ctx.AssumedSlippageRate,
+		minRiskRewardFor(ctx),
 	)
 }
 
@@ -60,7 +61,17 @@ type StrategyV struct{}
 func (StrategyV) Name() string { return "V" }
 
 func (StrategyV) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPromptShortTerm(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.AltcoinMaxPositionEquityMultiple, ctx.ScanIntervalMin)
+	return buildSystemPromptShortTerm(
+		ctx.Account.TotalEquity,
+		ctx.BTCETHLeverage,
+		ctx.AltcoinLeverage,
+		ctx.AltcoinMaxPositionEquityMultiple,
+		ctx.ScanIntervalMin,
+		ctx.AssumedTakerFeeRate,
+		ctx.AssumedSlippageRate,
+		minRiskRewardFor(ctx),
+		ctx.PaperTradingMode,
+	)
 }
 
 func (StrategyV) BuildUserPrompt(ctx *Context) string {

@@ -47,10 +47,6 @@ func validStrategyVOpenDecision() Decision {
 }
 
 func TestStrategyVRiskCapDoesNotAffectStrategyA(t *testing.T) {
-	oldRR := minRiskReward
-	minRiskReward = 2.2
-	defer func() { minRiskReward = oldRR }()
-
 	d := validStrategyVOpenDecision()
 	d.PositionSizeUSD = 800
 

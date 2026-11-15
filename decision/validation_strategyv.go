@@ -35,15 +35,59 @@ const (
 	shortTermAltMaxStopPct         = 0.0100
 	shortTermAltMaxStopATR         = 1.80
 	shortTermMaxStopAdjustmentRate = 1.33
+
+	// StrategyV 独立于全局 min_hold_minutes：短线需要在突破失败时尽早退出，只拦截开仓后几根K线内的噪声平仓。
+	shortTermMinHoldMinutes = 8
+
+	shortTermOtherSetupConfidenceBonus = 5
+	shortTermOtherSetupMaxRiskPct      = 0.5
 )
 
-var shortTermStopAdjustmentPattern = regexp.MustCompile(`距离 ([0-9]+(?:\.[0-9]+)?)→([0-9]+(?:\.[0-9]+)?)`)
+var (
+	shortTermStopAdjustmentPattern = regexp.MustCompile(`距离 ([0-9]+(?:\.[0-9]+)?)→([0-9]+(?:\.[0-9]+)?)`)
+	shortTermSetupTypePattern      = regexp.MustCompile(`setup_type\s*[=:：]\s*([a-z_]+)`)
+)
+
+// ShortTermAutoTakeProfitConfig 是 StrategyV 专用的自动止盈/trailing 档位。
+// 阈值为净ROI%（价格变动%×杠杆-往返成本%），按 V 的 0.12%–1.0% 短线止损尺度设计；
+// trailing 距离必须小于 V 的最大初始止损，避免 TP2 后回吐超过初始风险。
+func ShortTermAutoTakeProfitConfig() AutoTakeProfitConfig {
+	return AutoTakeProfitConfig{
+		Stage0Threshold:      5.0,
+		Stage0ClosePct:       30.0,
+		Stage1Threshold:      8.0,
+		Stage1ClosePct:       30.0,
+		FullCloseThreshold:   12.0,
+		CooldownMinutes:      6,
+		BreakevenEnabled:     true,
+		BreakevenFloorUSDT:   0,
+		TrailingEnabled:      true,
+		TrailingDistancePct:  0.6,
+		TrailingMinUpdatePct: 0.10,
+		Major: &AutoTakeProfitConfig{
+			Stage0Threshold:      3.0,
+			Stage0ClosePct:       30.0,
+			Stage1Threshold:      5.0,
+			Stage1ClosePct:       30.0,
+			FullCloseThreshold:   8.0,
+			CooldownMinutes:      6,
+			BreakevenEnabled:     true,
+			BreakevenFloorUSDT:   0,
+			TrailingEnabled:      true,
+			TrailingDistancePct:  0.35,
+			TrailingMinUpdatePct: 0.05,
+		},
+	}
+}
 
 // GenerateShortTermAutoDecisions 是 StrategyV 专用的自动风控层。
 // 它先复用原有自动风控/自动止盈；只有原系统未触发时，才追加短线策略特有的
 // 更紧止损、时间止损和高保证金降风险规则。该函数只由 StrategyV 调用，不改变 A/B。
 func GenerateShortTermAutoDecisions(ctx *Context) []Decision {
 	applyShortTermStopLossDistanceConfig(ctx)
+	if ctx != nil {
+		ctx.AutoTakeProfit = ShortTermAutoTakeProfitConfig()
+	}
 
 	if decisions := GenerateAutoDecisions(ctx); len(decisions) > 0 {
 		return decisions
@@ -114,7 +158,7 @@ func applyShortTermStopLossDistanceConfig(ctx *Context) {
 }
 
 // ExtraValidateShortTerm 是 StrategyV 的策略级风控校验。
-// 只挂在 StrategyV.ExtraValidate 上，不写入全局配置、不调用 SetMinRiskReward，因而不会影响其他策略。
+// 只挂在 StrategyV.ExtraValidate 上，不写入全局配置，因而不会影响其他策略。
 func ExtraValidateShortTerm(d *Decision, ctx *Context) error {
 	if d == nil || ctx == nil {
 		return nil
@@ -128,7 +172,7 @@ func ExtraValidateShortTerm(d *Decision, ctx *Context) error {
 	if err := validateBTCDirectionConstraint(d, ctx); err != nil {
 		return err
 	}
-	if err := validateMinHoldingTime(d, ctx); err != nil {
+	if err := validateMinHoldingTimeWith(d, ctx, shortTermMinHoldMinutes); err != nil {
 		return err
 	}
 	return validateShortTermOpenRisk(d, ctx)
@@ -196,6 +240,44 @@ func validateShortTermOpenRisk(d *Decision, ctx *Context) error {
 		return fmt.Errorf("StrategyV短线开仓reasoning必须说明setup_type/why_now/time_stop/invalidation等短线要素，当前reasoning过于粗略")
 	}
 
+	if shortTermSetupType(d) == "other" {
+		if err := validateShortTermOtherSetup(d, ctx, minConfidence); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// shortTermSetupType 优先取结构化字段，其次从 reasoning 的 setup_type=xxx 解析。
+func shortTermSetupType(d *Decision) string {
+	if d == nil {
+		return ""
+	}
+	if s := strings.ToLower(strings.TrimSpace(d.SetupType)); s != "" {
+		return s
+	}
+	if m := shortTermSetupTypePattern.FindStringSubmatch(strings.ToLower(d.Reasoning)); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func validateShortTermOtherSetup(d *Decision, ctx *Context, minConfidence int) error {
+	required := minConfidence + shortTermOtherSetupConfidenceBonus
+	if d.Confidence < required {
+		return fmt.Errorf("StrategyV setup_type=other 需信心度 >= %d（当前 %d）", required, d.Confidence)
+	}
+	r := strings.ToLower(d.Reasoning)
+	if !strings.Contains(r, "setup_logic") || !strings.Contains(r, "invalidation") {
+		return fmt.Errorf("StrategyV setup_type=other 必须在 reasoning 中写明 setup_logic 与 invalidation_condition")
+	}
+	if equity := ctx.Account.TotalEquity; equity > 0 {
+		maxRiskUSD := equity * shortTermOtherSetupMaxRiskPct / 100.0
+		if d.RiskUSD > maxRiskUSD {
+			return fmt.Errorf("StrategyV setup_type=other 单笔风险过大：risk_usd %.2f > %.2f（净值的 %.2f%%）", d.RiskUSD, maxRiskUSD, shortTermOtherSetupMaxRiskPct)
+		}
+	}
 	return nil
 }
 
@@ -256,6 +338,17 @@ func shortTermRequiredConfidence(ctx *Context) int {
 	return minConfidence
 }
 
+func shortTermConfidenceModeLabel(minConfidence int) string {
+	switch minConfidence {
+	case shortTermMinConfidenceDefensive:
+		return "防守模式"
+	case shortTermMinConfidenceCautious:
+		return "谨慎模式"
+	default:
+		return "正常模式"
+	}
+}
+
 func shortTermHoldingMinutes(pos PositionInfo) float64 {
 	if pos.UpdateTime <= 0 {
 		return 0
@@ -277,7 +370,7 @@ func shortTermReasoningHasSetup(reasoning string) bool {
 	if strings.TrimSpace(r) == "" {
 		return false
 	}
-	setupTerms := []string{"setup_type", "trend_pullback", "breakout_momentum", "range_reversal", "exhaustion_reversal", "failed_breakout"}
+	setupTerms := []string{"setup_type", "trend_pullback", "breakout_momentum", "range_reversal", "exhaustion_reversal", "failed_breakout", "other"}
 	hasSetup := false
 	for _, term := range setupTerms {
 		if strings.Contains(r, term) {
@@ -413,8 +506,8 @@ func validateShortTermExecutionPrice(d *Decision, ctx *Context, livePrice float6
 	}
 
 	netRR := netReward / netRisk
-	if netRR < minRiskReward {
-		return fmt.Errorf("StrategyV实时价格下净RR降至 %.2f:1，低于最低 %.2f:1（live=%.8f, SL=%.8f, TP=%.8f, cost=%.4f%%）", netRR, minRiskReward, livePrice, d.StopLoss, d.TakeProfit, roundTripCostROIPct)
+	if minRR := minRiskRewardFor(ctx); netRR < minRR {
+		return fmt.Errorf("StrategyV实时价格下净RR降至 %.2f:1，低于最低 %.2f:1（live=%.8f, SL=%.8f, TP=%.8f, cost=%.4f%%）", netRR, minRR, livePrice, d.StopLoss, d.TakeProfit, roundTripCostROIPct)
 	}
 	return nil
 }

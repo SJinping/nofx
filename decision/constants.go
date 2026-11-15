@@ -56,13 +56,17 @@ func recordError(errType stats.ErrorType, message string, symbol string) {
 	}
 }
 
-var minRiskReward float64 = 2.2
+// DefaultMinRiskReward 是 trader 未配置 min_risk_reward 时使用的最小净风险回报比。
+const DefaultMinRiskReward = 2.2
+
 var minPositionSizeUSD float64 = 20.0 // 最小持仓，防止手续费磨损
 
-// SetMinRiskReward 设置最小风险回报比
-func SetMinRiskReward(v float64) {
-	if v > 0 {
-		minRiskReward = v
+// minRiskRewardFor 返回当前 trader 的最小净风险回报比。
+// 门槛随 Context 注入而不是存为包级变量，避免同一进程内多个 trader 互相覆盖。
+func minRiskRewardFor(ctx *Context) float64 {
+	if ctx != nil && ctx.MinRiskReward > 0 {
+		return ctx.MinRiskReward
 	}
+	return DefaultMinRiskReward
 }
 

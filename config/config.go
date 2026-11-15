@@ -60,7 +60,7 @@ type TraderConfig struct {
 	AssumedTakerFeeRate *float64 `json:"assumed_taker_fee_rate,omitempty"`
 	AssumedSlippageRate *float64 `json:"assumed_slippage_rate,omitempty"`
 
-	// 最小风险回报比（默认 2.2，支持热更新）
+	// 最小净风险回报比（默认 2.2，仅对本 trader 生效，支持热更新）
 	MinRiskReward float64 `json:"min_risk_reward,omitempty"`
 
 	// 新增：Prompt策略选择（A 或 B）
@@ -154,7 +154,6 @@ type Config struct {
 	Leverage           LeverageConfig         `json:"leverage"`                    // 杠杆配置
 	LeverageClip       LeverageClipConfig     `json:"leverage_clip,omitempty"`     // 杠杆裁剪配置
 	MarginValidation   MarginValidationConfig `json:"margin_validation,omitempty"` // 保证金预检配置
-	MinRiskReward      float64                `json:"min_risk_reward"`             // 最小风险回报比
 	StopLossDistance   StopLossDistanceConfig `json:"stop_loss_distance"`          // 止损最小距离配置
 	AutoTakeProfit     AutoTakeProfitConfig   `json:"auto_take_profit"`            // 自动止盈配置
 	PositionRisk       PositionRiskConfig     `json:"position_risk,omitempty"`     // 独立高频仓位风险扫描

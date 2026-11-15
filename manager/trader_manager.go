@@ -483,9 +483,20 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 		}
 	}
 
-	// min_risk_reward 是全局字段
+	// min_risk_reward 是 per-trader 字段（启动时只读取 traders[].min_risk_reward）
 	if patch.MinRiskReward != nil {
-		raw["min_risk_reward"] = *patch.MinRiskReward
+		if traders, ok := raw["traders"].([]interface{}); ok {
+			for _, t := range traders {
+				traderMap, ok := t.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				id, _ := traderMap["id"].(string)
+				if traderID == "" || id == traderID {
+					traderMap["min_risk_reward"] = *patch.MinRiskReward
+				}
+			}
+		}
 	}
 
 	// peak_hour_pause 是 per-trader 字段
