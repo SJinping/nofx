@@ -61,7 +61,7 @@ func TestStrategyAUserPromptPreservesOriginalThesisWithoutMandatoryHold(t *testi
 			if strings.Count(prompt, original) != 1 {
 				t.Fatal("original entry thesis must be preserved exactly once")
 			}
-			for _, want := range []string{"信心度 78", "止损 80000.0000", "目标 84000.0000", "不要求继续完整持仓", "预期获利过程", "当前支持证据"} {
+			for _, want := range []string{"信心度 78", "止损 80000", "目标 84000", "不要求继续完整持仓", "预期获利过程", "当前支持证据"} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("user prompt missing %q", want)
 				}

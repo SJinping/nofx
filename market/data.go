@@ -892,8 +892,8 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 func Format(data *Data) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("current_price = %.2f, current_ema20 = %.3f, current_macd = %.3f, current_rsi (7 period) = %.3f\n\n",
-		data.CurrentPrice, data.CurrentEMA20, data.CurrentMACD, data.CurrentRSI7))
+	sb.WriteString(fmt.Sprintf("current_price = %s, current_ema20 = %s, current_macd = %s, current_rsi (7 period) = %.3f\n\n",
+		FormatPrice(data.CurrentPrice), FormatIndicator(data.CurrentEMA20), FormatIndicator(data.CurrentMACD), data.CurrentRSI7))
 
 	sb.WriteString(fmt.Sprintf("In addition, here is the latest %s open interest and funding rate for perps:\n\n",
 		data.Symbol))
@@ -909,15 +909,15 @@ func Format(data *Data) string {
 		sb.WriteString("Intraday series (3‑minute intervals, oldest → latest):\n\n")
 
 		if len(data.IntradaySeries.MidPrices) > 0 {
-			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))
+			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatPriceSlice(data.IntradaySeries.MidPrices)))
 		}
 
 		// 可选：更细粒度OHLCV（仅在TopN重数据时填充）
 		if len(data.IntradaySeries.Opens) > 0 && len(data.IntradaySeries.Closes) > 0 {
-			sb.WriteString(fmt.Sprintf("Open: %s\n\n", formatFloatSlice(data.IntradaySeries.Opens)))
-			sb.WriteString(fmt.Sprintf("High: %s\n\n", formatFloatSlice(data.IntradaySeries.Highs)))
-			sb.WriteString(fmt.Sprintf("Low: %s\n\n", formatFloatSlice(data.IntradaySeries.Lows)))
-			sb.WriteString(fmt.Sprintf("Close: %s\n\n", formatFloatSlice(data.IntradaySeries.Closes)))
+			sb.WriteString(fmt.Sprintf("Open: %s\n\n", formatPriceSlice(data.IntradaySeries.Opens)))
+			sb.WriteString(fmt.Sprintf("High: %s\n\n", formatPriceSlice(data.IntradaySeries.Highs)))
+			sb.WriteString(fmt.Sprintf("Low: %s\n\n", formatPriceSlice(data.IntradaySeries.Lows)))
+			sb.WriteString(fmt.Sprintf("Close: %s\n\n", formatPriceSlice(data.IntradaySeries.Closes)))
 		}
 		if len(data.IntradaySeries.Volumes) > 0 {
 			sb.WriteString(fmt.Sprintf("Volume: %s\n\n", formatFloatSlice(data.IntradaySeries.Volumes)))
@@ -932,11 +932,11 @@ func Format(data *Data) string {
 		}
 
 		if len(data.IntradaySeries.EMA20Values) > 0 {
-			sb.WriteString(fmt.Sprintf("EMA indicators (20‑period): %s\n\n", formatFloatSlice(data.IntradaySeries.EMA20Values)))
+			sb.WriteString(fmt.Sprintf("EMA indicators (20‑period): %s\n\n", formatIndicatorSlice(data.IntradaySeries.EMA20Values)))
 		}
 
 		if len(data.IntradaySeries.MACDValues) > 0 {
-			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.IntradaySeries.MACDValues)))
+			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatIndicatorSlice(data.IntradaySeries.MACDValues)))
 		}
 
 		if len(data.IntradaySeries.RSI7Values) > 0 {
@@ -951,23 +951,23 @@ func Format(data *Data) string {
 	if data.LongerTermContext != nil {
 		sb.WriteString("Longer‑term context (4‑hour timeframe):\n\n")
 
-		sb.WriteString(fmt.Sprintf("20‑Period EMA: %.3f vs. 50‑Period EMA: %.3f\n\n",
-			data.LongerTermContext.EMA20, data.LongerTermContext.EMA50))
+		sb.WriteString(fmt.Sprintf("20‑Period EMA: %s vs. 50‑Period EMA: %s\n\n",
+			FormatIndicator(data.LongerTermContext.EMA20), FormatIndicator(data.LongerTermContext.EMA50)))
 
-		sb.WriteString(fmt.Sprintf("3‑Period ATR: %.3f vs. 14‑Period ATR: %.3f\n\n",
-			data.LongerTermContext.ATR3, data.LongerTermContext.ATR14))
+		sb.WriteString(fmt.Sprintf("3‑Period ATR: %s vs. 14‑Period ATR: %s\n\n",
+			FormatIndicator(data.LongerTermContext.ATR3), FormatIndicator(data.LongerTermContext.ATR14)))
 
 		sb.WriteString(fmt.Sprintf("Current Volume: %.3f vs. Average Volume: %.3f\n\n",
 			data.LongerTermContext.CurrentVolume, data.LongerTermContext.AverageVolume))
 
 		// 2025。12.1 新增两个指标作为基础策略
 		if data.LongerTermContext.RecentHigh > 0 && data.LongerTermContext.RecentLow > 0 {
-			sb.WriteString(fmt.Sprintf("Recent High (4h): %.3f | Recent Low (4h): %.3f\n\n",
-				data.LongerTermContext.RecentHigh, data.LongerTermContext.RecentLow))
+			sb.WriteString(fmt.Sprintf("Recent High (4h): %s | Recent Low (4h): %s\n\n",
+				FormatPrice(data.LongerTermContext.RecentHigh), FormatPrice(data.LongerTermContext.RecentLow)))
 		}
 
 		if len(data.LongerTermContext.MACDValues) > 0 {
-			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.LongerTermContext.MACDValues)))
+			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatIndicatorSlice(data.LongerTermContext.MACDValues)))
 		}
 
 		if len(data.LongerTermContext.RSI14Values) > 0 {
@@ -978,18 +978,18 @@ func Format(data *Data) string {
 	// 可选：更长日内结构（1h）
 	if data.MidTermContext != nil {
 		sb.WriteString("Mid‑term context (1‑hour timeframe):\n\n")
-		sb.WriteString(fmt.Sprintf("20‑Period EMA: %.3f vs. 50‑Period EMA: %.3f\n\n",
-			data.MidTermContext.EMA20, data.MidTermContext.EMA50))
-		sb.WriteString(fmt.Sprintf("3‑Period ATR: %.3f vs. 14‑Period ATR: %.3f\n\n",
-			data.MidTermContext.ATR3, data.MidTermContext.ATR14))
+		sb.WriteString(fmt.Sprintf("20‑Period EMA: %s vs. 50‑Period EMA: %s\n\n",
+			FormatIndicator(data.MidTermContext.EMA20), FormatIndicator(data.MidTermContext.EMA50)))
+		sb.WriteString(fmt.Sprintf("3‑Period ATR: %s vs. 14‑Period ATR: %s\n\n",
+			FormatIndicator(data.MidTermContext.ATR3), FormatIndicator(data.MidTermContext.ATR14)))
 		sb.WriteString(fmt.Sprintf("Current Volume: %.3f vs. Average Volume: %.3f\n\n",
 			data.MidTermContext.CurrentVolume, data.MidTermContext.AverageVolume))
 		if data.MidTermContext.RecentHigh > 0 && data.MidTermContext.RecentLow > 0 {
-			sb.WriteString(fmt.Sprintf("Recent High (1h): %.3f | Recent Low (1h): %.3f\n\n",
-				data.MidTermContext.RecentHigh, data.MidTermContext.RecentLow))
+			sb.WriteString(fmt.Sprintf("Recent High (1h): %s | Recent Low (1h): %s\n\n",
+				FormatPrice(data.MidTermContext.RecentHigh), FormatPrice(data.MidTermContext.RecentLow)))
 		}
 		if len(data.MidTermContext.MACDValues) > 0 {
-			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatFloatSlice(data.MidTermContext.MACDValues)))
+			sb.WriteString(fmt.Sprintf("MACD indicators: %s\n\n", formatIndicatorSlice(data.MidTermContext.MACDValues)))
 		}
 		if len(data.MidTermContext.RSI14Values) > 0 {
 			sb.WriteString(fmt.Sprintf("RSI indicators (14‑Period): %s\n\n", formatFloatSlice(data.MidTermContext.RSI14Values)))
@@ -1017,14 +1017,14 @@ func Format(data *Data) string {
 		if len(h.LargeBids) > 0 {
 			sb.WriteString("    Support walls:")
 			for _, b := range h.LargeBids {
-				sb.WriteString(fmt.Sprintf(" %.2f(%.0fU)", b.Price, b.Volume))
+				sb.WriteString(fmt.Sprintf(" %s(%.0fU)", FormatPrice(b.Price), b.Volume))
 			}
 			sb.WriteString("\n")
 		}
 		if len(h.LargeAsks) > 0 {
 			sb.WriteString("    Resistance walls:")
 			for _, a := range h.LargeAsks {
-				sb.WriteString(fmt.Sprintf(" %.2f(%.0fU)", a.Price, a.Volume))
+				sb.WriteString(fmt.Sprintf(" %s(%.0fU)", FormatPrice(a.Price), a.Volume))
 			}
 			sb.WriteString("\n")
 		}

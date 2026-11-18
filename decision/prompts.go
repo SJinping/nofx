@@ -657,9 +657,9 @@ func buildUserPrompt(ctx *Context) string {
 
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
+		sb.WriteString(fmt.Sprintf("**BTC**: %s (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %s | RSI: %.2f\n",
+			market.FormatPrice(btcData.CurrentPrice), btcData.PriceChange1h, btcData.PriceChange4h,
+			market.FormatIndicator(btcData.CurrentMACD), btcData.CurrentRSI7))
 		if envLabel := formatBTCEnvironment(ctx); envLabel != "" {
 			sb.WriteString(envLabel)
 		}
@@ -697,10 +697,10 @@ func buildUserPrompt(ctx *Context) string {
 				}
 			}
 
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 浮盈亏%+.2f USDT (%+.2f%%) | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n",
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%s 当前价%s | 浮盈亏%+.2f USDT (%+.2f%%) | 杠杆%dx | 保证金%.0f | 强平价%s%s\n",
 				i+1, pos.Symbol, strings.ToUpper(pos.Side),
-				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnL, pos.UnrealizedPnLPct,
-				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+				market.FormatPrice(pos.EntryPrice), market.FormatPrice(pos.MarkPrice), pos.UnrealizedPnL, pos.UnrealizedPnLPct,
+				pos.Leverage, pos.MarginUsed, market.FormatPrice(pos.LiquidationPrice), holdingDuration))
 			sb.WriteString(formatPositionRiskState(ctx, pos))
 			sb.WriteString("\n")
 
@@ -805,7 +805,7 @@ func formatPositionRiskState(ctx *Context, pos PositionInfo) string {
 	}
 	stopInfo := "无"
 	if currentStop > 0 {
-		stopInfo = fmt.Sprintf("%.4f（距止损%.2f%% / %.2fR）", currentStop, distanceStopPct, distanceStopR)
+		stopInfo = fmt.Sprintf("%s（距止损%.2f%% / %.2fR）", market.FormatPrice(currentStop), distanceStopPct, distanceStopR)
 	}
 	return fmt.Sprintf("**仓位风险**: 初始风险=%.2f USDT (1R) | 当前=%+.2fR | MFE=%.2fR | 从MFE回撤=%.2fR | 已实现净收益估算=%+.2f USDT | Stage=%d | protected_stop=%s | trailing=%t。AI只能维持或加强该保护，不能放宽。\n",
 		initialRiskUSD, currentR, mfeR, drawdownR, realizedNet, stage, stopInfo, trailing)
@@ -819,10 +819,10 @@ func formatEntryThesis(pos PositionInfo) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**入场论据** (信心度 %d", pos.EntryConfidence))
 	if pos.EntryStopLoss > 0 {
-		sb.WriteString(fmt.Sprintf(", 止损 %.4f", pos.EntryStopLoss))
+		sb.WriteString(fmt.Sprintf(", 止损 %s", market.FormatPrice(pos.EntryStopLoss)))
 	}
 	if pos.EntryTakeProfit > 0 {
-		sb.WriteString(fmt.Sprintf(", 目标 %.4f", pos.EntryTakeProfit))
+		sb.WriteString(fmt.Sprintf(", 目标 %s", market.FormatPrice(pos.EntryTakeProfit)))
 	}
 	sb.WriteString("):\n")
 	sb.WriteString(pos.EntryReasoning)
@@ -839,8 +839,8 @@ func extraUserPromptForStrategyB(marketData *market.Data, scanIntervalMin int) s
 	var sb strings.Builder
 	if marketData.IntradayATR14 > 0 {
 		sb.WriteString(fmt.Sprintf(
-			"intraday_atr14 (%dm) = %.4f\n\n",
-			market.ShortTermBarIntervalMinutes, marketData.IntradayATR14,
+			"intraday_atr14 (%dm) = %s\n\n",
+			market.ShortTermBarIntervalMinutes, market.FormatIndicator(marketData.IntradayATR14),
 		))
 	}
 
@@ -850,8 +850,8 @@ func extraUserPromptForStrategyB(marketData *market.Data, scanIntervalMin int) s
 
 	if marketData.VolatilityPct > 0 {
 		sb.WriteString(fmt.Sprintf(
-			"normalized_volatility (ATR14/price) = %.4f\n\n",
-			marketData.VolatilityPct,
+			"normalized_volatility (ATR14/price) = %s\n\n",
+			market.FormatIndicator(marketData.VolatilityPct),
 		))
 	}
 
@@ -873,8 +873,8 @@ func extraUserPromptForStrategyB(marketData *market.Data, scanIntervalMin int) s
 
 		if lt.Support > 0 && lt.Resistance > 0 {
 			sb.WriteString(fmt.Sprintf(
-				"4h_support_resistance = [%.3f, %.3f]\n\n",
-				lt.Support, lt.Resistance,
+				"4h_support_resistance = [%s, %s]\n\n",
+				market.FormatPrice(lt.Support), market.FormatPrice(lt.Resistance),
 			))
 
 			// ===== 位置感/空间感（用于避免在区间上沿追多、下沿追空）=====
@@ -898,8 +898,8 @@ func extraUserPromptForStrategyB(marketData *market.Data, scanIntervalMin int) s
 				if lt.ATR14 > 0 {
 					distToResATR := (lt.Resistance - price) / lt.ATR14
 					distToSupATR := (price - lt.Support) / lt.ATR14
-					sb.WriteString(fmt.Sprintf("dist_to_resistance_atr (ATR14=%.3f) = %.3f\n\n", lt.ATR14, distToResATR))
-					sb.WriteString(fmt.Sprintf("dist_to_support_atr (ATR14=%.3f) = %.3f\n\n", lt.ATR14, distToSupATR))
+					sb.WriteString(fmt.Sprintf("dist_to_resistance_atr (ATR14=%s) = %.3f\n\n", market.FormatIndicator(lt.ATR14), distToResATR))
+					sb.WriteString(fmt.Sprintf("dist_to_support_atr (ATR14=%s) = %.3f\n\n", market.FormatIndicator(lt.ATR14), distToSupATR))
 				}
 			}
 		}
@@ -923,9 +923,9 @@ func buildUserPromptB(ctx *Context) string {
 
 	// BTC 市场
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("**BTC**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI: %.2f\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
+		sb.WriteString(fmt.Sprintf("**BTC**: %s (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %s | RSI: %.2f\n",
+			market.FormatPrice(btcData.CurrentPrice), btcData.PriceChange1h, btcData.PriceChange4h,
+			market.FormatIndicator(btcData.CurrentMACD), btcData.CurrentRSI7))
 		if envLabel := formatBTCEnvironment(ctx); envLabel != "" {
 			sb.WriteString(envLabel)
 		}
@@ -963,10 +963,10 @@ func buildUserPromptB(ctx *Context) string {
 				}
 			}
 
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%s 当前价%s | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%s%s\n\n",
 				i+1, pos.Symbol, strings.ToUpper(pos.Side),
-				pos.EntryPrice, pos.MarkPrice, pos.UnrealizedPnLPct,
-				pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+				market.FormatPrice(pos.EntryPrice), market.FormatPrice(pos.MarkPrice), pos.UnrealizedPnLPct,
+				pos.Leverage, pos.MarginUsed, market.FormatPrice(pos.LiquidationPrice), holdingDuration))
 
 			// 使用FormatMarketData输出完整市场数据
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
@@ -1035,9 +1035,9 @@ func buildUserPromptShortTerm(ctx *Context) string {
 		ctx.CurrentTime, ctx.CallCount, ctx.RuntimeMinutes))
 
 	if btcData, hasBTC := ctx.MarketDataMap["BTCUSDT"]; hasBTC {
-		sb.WriteString(fmt.Sprintf("**BTC市场锚点**: %.2f (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %.4f | RSI7: %.2f\n",
-			btcData.CurrentPrice, btcData.PriceChange1h, btcData.PriceChange4h,
-			btcData.CurrentMACD, btcData.CurrentRSI7))
+		sb.WriteString(fmt.Sprintf("**BTC市场锚点**: %s (1h: %+.2f%%, 4h: %+.2f%%) | MACD: %s | RSI7: %.2f\n",
+			market.FormatPrice(btcData.CurrentPrice), btcData.PriceChange1h, btcData.PriceChange4h,
+			market.FormatIndicator(btcData.CurrentMACD), btcData.CurrentRSI7))
 		if envLabel := formatBTCEnvironment(ctx); envLabel != "" {
 			sb.WriteString(envLabel)
 		}
@@ -1087,9 +1087,9 @@ func buildUserPromptShortTerm(ctx *Context) string {
 					holdingDuration = fmt.Sprintf(" | 持仓时长%d小时%d分钟", durationMin/60, durationMin%60)
 				}
 			}
-			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%.4f 当前价%.4f | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%.4f%s\n\n",
-				i+1, pos.Symbol, strings.ToUpper(pos.Side), pos.EntryPrice, pos.MarkPrice,
-				pos.UnrealizedPnLPct, pos.Leverage, pos.MarginUsed, pos.LiquidationPrice, holdingDuration))
+			sb.WriteString(fmt.Sprintf("%d. %s %s | 入场价%s 当前价%s | 盈亏%+.2f%% | 杠杆%dx | 保证金%.0f | 强平价%s%s\n\n",
+				i+1, pos.Symbol, strings.ToUpper(pos.Side), market.FormatPrice(pos.EntryPrice), market.FormatPrice(pos.MarkPrice),
+				pos.UnrealizedPnLPct, pos.Leverage, pos.MarginUsed, market.FormatPrice(pos.LiquidationPrice), holdingDuration))
 			if marketData, ok := ctx.MarketDataMap[pos.Symbol]; ok {
 				sb.WriteString(formatShortTermMarketData(marketData, ctx.ScanIntervalMin, true))
 			}
@@ -1143,9 +1143,9 @@ func buildUserPromptShortTerm(ctx *Context) string {
 			continue
 		}
 		displayedLight++
-		sb.WriteString(fmt.Sprintf("%d. %s%s | price %.4f | 1h %+.2f%% | 4h %+.2f%% | MACD %.4f | RSI7 %.1f | %s\n",
-			displayedLight, coin.Symbol, shortTermSourceTags(coin), marketData.CurrentPrice,
-			marketData.PriceChange1h, marketData.PriceChange4h, marketData.CurrentMACD,
+		sb.WriteString(fmt.Sprintf("%d. %s%s | price %s | 1h %+.2f%% | 4h %+.2f%% | MACD %s | RSI7 %.1f | %s\n",
+			displayedLight, coin.Symbol, shortTermSourceTags(coin), market.FormatPrice(marketData.CurrentPrice),
+			marketData.PriceChange1h, marketData.PriceChange4h, market.FormatIndicator(marketData.CurrentMACD),
 			marketData.CurrentRSI7, formatShortTermSetupSnapshot(marketData)))
 	}
 	if displayedLight == 0 {
@@ -1187,8 +1187,8 @@ func formatShortTermWatchlist(ctx *Context) string {
 			sb.WriteString(fmt.Sprintf("   invalidation: %s\n", item.InvalidationCondition))
 		}
 		if item.TriggerPrice > 0 || item.InvalidationPrice > 0 || item.SuggestedStopLoss > 0 || item.SuggestedTakeProfit > 0 {
-			sb.WriteString(fmt.Sprintf("   prices: trigger=%.4f invalidation=%.4f suggested_sl=%.4f suggested_tp=%.4f\n",
-				item.TriggerPrice, item.InvalidationPrice, item.SuggestedStopLoss, item.SuggestedTakeProfit))
+			sb.WriteString(fmt.Sprintf("   prices: trigger=%s invalidation=%s suggested_sl=%s suggested_tp=%s\n",
+				market.FormatPrice(item.TriggerPrice), market.FormatPrice(item.InvalidationPrice), market.FormatPrice(item.SuggestedStopLoss), market.FormatPrice(item.SuggestedTakeProfit)))
 		}
 		if item.LastReasoning != "" {
 			sb.WriteString(fmt.Sprintf("   last_reason: %s\n", item.LastReasoning))
@@ -1224,8 +1224,8 @@ func formatShortTermMarketData(data *market.Data, scanIntervalMin int, detailed 
 		scanIntervalMin = 3
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("current_price = %.4f | 1h %+.2f%% | 4h %+.2f%% | MACD %.4f | RSI7 %.2f\n",
-		data.CurrentPrice, data.PriceChange1h, data.PriceChange4h, data.CurrentMACD, data.CurrentRSI7))
+	sb.WriteString(fmt.Sprintf("current_price = %s | 1h %+.2f%% | 4h %+.2f%% | MACD %s | RSI7 %.2f\n",
+		market.FormatPrice(data.CurrentPrice), data.PriceChange1h, data.PriceChange4h, market.FormatIndicator(data.CurrentMACD), data.CurrentRSI7))
 	sb.WriteString(formatShortTermSetupSnapshot(data) + "\n")
 	sb.WriteString(extraUserPromptForStrategyB(data, scanIntervalMin))
 
@@ -1292,8 +1292,8 @@ func formatShortTermSetupSnapshot(data *market.Data) string {
 		}
 	}
 
-	return fmt.Sprintf("setup_snapshot: points=%d | change=%+.2f%% | range=[%.4f, %.4f] | position_in_3m_range=%.2f | %s | macd_slope=%s | rsi7=%.1f | %s | intraday_atr14=%.4f",
-		len(closes), changePct, low, high, posInRange, volumeMsg, macdSlope, rsiNow, emaSide, data.IntradayATR14)
+	return fmt.Sprintf("setup_snapshot: points=%d | change=%+.2f%% | range=[%s, %s] | position_in_3m_range=%.2f | %s | macd_slope=%s | rsi7=%.1f | %s | intraday_atr14=%s",
+		len(closes), changePct, market.FormatPrice(low), market.FormatPrice(high), posInRange, volumeMsg, macdSlope, rsiNow, emaSide, market.FormatIndicator(data.IntradayATR14))
 }
 
 func maxMinFromSeries(highs, lows, fallback []float64) (float64, float64) {
@@ -1369,10 +1369,10 @@ func formatEntryThesisShortTerm(pos PositionInfo) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("**入场论据** (信心度 %d", pos.EntryConfidence))
 	if pos.EntryStopLoss > 0 {
-		sb.WriteString(fmt.Sprintf(", 止损 %.4f", pos.EntryStopLoss))
+		sb.WriteString(fmt.Sprintf(", 止损 %s", market.FormatPrice(pos.EntryStopLoss)))
 	}
 	if pos.EntryTakeProfit > 0 {
-		sb.WriteString(fmt.Sprintf(", 目标 %.4f", pos.EntryTakeProfit))
+		sb.WriteString(fmt.Sprintf(", 目标 %s", market.FormatPrice(pos.EntryTakeProfit)))
 	}
 	sb.WriteString("):\n")
 	sb.WriteString(pos.EntryReasoning)
@@ -1457,9 +1457,9 @@ func formatRecentTrades(trades []logger.TradeOutcome) string {
 		case "auto_take_profit":
 			sourceLabel = "系统自动止盈"
 		}
-		sb.WriteString(fmt.Sprintf("  %d. %s %s | 开%.4f→平%.4f | 盈亏%+.2f%% (%.2f USDT) | 持仓%s | 平仓来源: %s\n",
+		sb.WriteString(fmt.Sprintf("  %d. %s %s | 开%s→平%s | 盈亏%+.2f%% (%.2f USDT) | 持仓%s | 平仓来源: %s\n",
 			i+1, t.Symbol, strings.ToUpper(t.Side),
-			t.OpenPrice, t.ClosePrice,
+			market.FormatPrice(t.OpenPrice), market.FormatPrice(t.ClosePrice),
 			t.PnLPct, t.PnL,
 			t.Duration,
 			sourceLabel,
