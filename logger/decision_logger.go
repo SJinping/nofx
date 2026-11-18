@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"nofx/mcp"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,18 +17,23 @@ import (
 
 // DecisionRecord 决策记录
 type DecisionRecord struct {
-	Timestamp      time.Time          `json:"timestamp"`       // 决策时间
-	CycleNumber    int                `json:"cycle_number"`    // 周期编号
-	InputPrompt    string             `json:"input_prompt"`    // 发送给AI的输入prompt
-	CoTTrace       string             `json:"cot_trace"`       // AI思维链（输出）
-	DecisionJSON   string             `json:"decision_json"`   // 决策JSON
-	AccountState   AccountSnapshot    `json:"account_state"`   // 账户状态快照
-	Positions      []PositionSnapshot `json:"positions"`       // 持仓快照
-	CandidateCoins []string           `json:"candidate_coins"` // 候选币种列表
-	Decisions      []DecisionAction   `json:"decisions"`       // 执行的决策
-	ExecutionLog   []string           `json:"execution_log"`   // 执行日志
-	Success        bool               `json:"success"`         // 是否成功
-	ErrorMessage   string             `json:"error_message"`   // 错误信息（如果有）
+	Timestamp       time.Time          `json:"timestamp"`       // 决策时间
+	CycleNumber     int                `json:"cycle_number"`    // 周期编号
+	InputPrompt     string             `json:"input_prompt"`    // 发送给AI的输入prompt
+	CoTTrace        string             `json:"cot_trace"`       // AI思维链（输出）
+	DecisionJSON    string             `json:"decision_json"`   // 决策JSON
+	AccountState    AccountSnapshot    `json:"account_state"`   // 账户状态快照
+	Positions       []PositionSnapshot `json:"positions"`       // 持仓快照
+	CandidateCoins  []string           `json:"candidate_coins"` // 候选币种列表
+	Decisions       []DecisionAction   `json:"decisions"`       // 执行的决策
+	ExecutionLog    []string           `json:"execution_log"`   // 执行日志
+	Success         bool               `json:"success"`         // 是否成功
+	ErrorMessage    string             `json:"error_message"`   // 错误信息（如果有）
+	LLMModel        string             `json:"llm_model,omitempty"`
+	LLMResponseID   string             `json:"llm_response_id,omitempty"`
+	LLMFinishReason string             `json:"llm_finish_reason,omitempty"`
+	LLMUsage        *mcp.TokenUsage    `json:"llm_usage,omitempty"`
+	RawAIResponse   string             `json:"raw_ai_response,omitempty"`
 }
 
 // AccountSnapshot 账户状态快照

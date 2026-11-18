@@ -308,12 +308,16 @@ type Decision struct {
 
 // FullDecision AI的完整决策（包含思维链）
 type FullDecision struct {
-	UserPrompt  string          `json:"user_prompt"` // 发送给AI的输入prompt
-	CoTTrace    string          `json:"cot_trace"`   // 思维链分析（AI输出）
-	Decisions   []Decision      `json:"decisions"`   // 具体决策列表
-	Timestamp   time.Time       `json:"timestamp"`
-	LLMCostUSDT float64         `json:"llm_cost_usdt,omitempty"` // 本次 LLM 调用费用（USDT）
-	LLMUsage    *mcp.TokenUsage `json:"llm_usage,omitempty"`     // 本次 LLM token 用量
+	UserPrompt      string          `json:"user_prompt"` // 发送给AI的输入prompt
+	CoTTrace        string          `json:"cot_trace"`   // 思维链分析（AI输出）
+	Decisions       []Decision      `json:"decisions"`   // 具体决策列表
+	Timestamp       time.Time       `json:"timestamp"`
+	LLMCostUSDT     float64         `json:"llm_cost_usdt,omitempty"` // 本次 LLM 调用费用（USDT）
+	LLMUsage        *mcp.TokenUsage `json:"llm_usage,omitempty"`     // 本次 LLM token 用量
+	LLMModel        string          `json:"llm_model,omitempty"`
+	LLMResponseID   string          `json:"llm_response_id,omitempty"`
+	LLMFinishReason string          `json:"llm_finish_reason,omitempty"`
+	RawAIResponse   string          `json:"raw_ai_response,omitempty"`
 }
 
 // PromptStrategy 可插拔策略接口

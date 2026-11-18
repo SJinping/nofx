@@ -24,9 +24,12 @@ import (
 // AutoTraderConfig 自动交易配置（简化版 - AI全权决策）
 type AutoTraderConfig struct {
 	// Trader标识
-	ID      string // Trader唯一标识（用于日志目录等）
-	Name    string // Trader显示名称
-	AIModel string // AI模型: "qwen" 或 "deepseek"
+	ID           string // Trader唯一标识（用于日志目录等）
+	Name         string // Trader显示名称
+	AIModel      string // AI模型: "qwen" 或 "deepseek"
+	ModelName    string
+	ModelOptions mcp.ModelOptions
+	OpenAIKey    string
 
 	// 交易平台选择
 	Exchange string // "binance", "hyperliquid" 或 "aster"
@@ -206,7 +209,10 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 
 	// 初始化 AI 客户端（每个 trader 独立实例，互不干扰）
 	var aiClient *mcp.Client
-	if config.AIModel == "custom" {
+	if config.AIModel == "openai" {
+		aiClient = mcp.NewOpenAIClient(config.OpenAIKey, config.ModelName)
+		log.Printf("🤖 [%s] 使用OpenAI (模型: %s)", config.Name, aiClient.GetModel())
+	} else if config.AIModel == "custom" {
 		aiClient = mcp.NewCustomClient(config.CustomAPIURL, config.CustomAPIKey, config.CustomModelName)
 		log.Printf("🤖 [%s] 使用自定义AI API: %s (模型: %s)", config.Name, config.CustomAPIURL, config.CustomModelName)
 	} else if config.UseQwen || config.AIModel == "qwen" {
@@ -223,6 +229,12 @@ func NewAutoTrader(config AutoTraderConfig) (*AutoTrader, error) {
 			modelInfo = "deepseek-reasoner (默认)"
 		}
 		log.Printf("🤖 [%s] 使用DeepSeek AI (模型: %s)", config.Name, modelInfo)
+	}
+	if config.ModelName != "" {
+		aiClient.SetModel(config.ModelName)
+	}
+	if err := aiClient.SetModelOptions(config.ModelOptions); err != nil {
+		return nil, fmt.Errorf("AI model options: %w", err)
 	}
 
 	// 初始化币种池API
@@ -1132,8 +1144,12 @@ func (at *AutoTrader) runCycle() error {
 
 	// 记录 LLM 调用费用（即使决策解析失败，token 已消耗）
 	if engeinDecision != nil && engeinDecision.LLMUsage != nil {
+		model := engeinDecision.LLMModel
+		if model == "" {
+			model = at.aiClient.GetModel()
+		}
 		at.llmCostTracker.RecordCall("decision", &mcp.CallResult{
-			Model: at.aiClient.GetModel(),
+			Model: model,
 			Usage: *engeinDecision.LLMUsage,
 		})
 		if engeinDecision.LLMCostUSDT > 0 {
@@ -1145,6 +1161,11 @@ func (at *AutoTrader) runCycle() error {
 	if engeinDecision != nil {
 		record.InputPrompt = engeinDecision.UserPrompt
 		record.CoTTrace = engeinDecision.CoTTrace
+		record.LLMModel = engeinDecision.LLMModel
+		record.LLMResponseID = engeinDecision.LLMResponseID
+		record.LLMFinishReason = engeinDecision.LLMFinishReason
+		record.LLMUsage = engeinDecision.LLMUsage
+		record.RawAIResponse = engeinDecision.RawAIResponse
 		if len(engeinDecision.Decisions) > 0 {
 			decisionJSON, _ := json.MarshalIndent(engeinDecision.Decisions, "", "  ")
 			record.DecisionJSON = string(decisionJSON)

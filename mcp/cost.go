@@ -5,12 +5,19 @@ import "strings"
 // ModelPricing 模型定价（单位：USDT / 百万 tokens）
 // DeepSeek 中文页面为人民币，按 1 USDT ≈ 7.25 CNY 换算
 type ModelPricing struct {
-	InputCacheMiss float64 // 输入 token（缓存未命中）
-	InputCacheHit  float64 // 输入 token（缓存命中）
-	Output         float64 // 输出 token
+	InputCacheMiss       float64 // 输入 token（缓存未命中）
+	InputCacheHit        float64 // 输入 token（缓存命中）
+	Output               float64 // 输出 token
+	InputCacheWrite30m   float64
+	InputCacheWrite12h   float64
+	LongContextThreshold int
 }
 
 var defaultPricing = map[string]ModelPricing{
+	// OpenAI Standard USD rates, checked 2026-11-18. Reasoning is already
+	// included in completion tokens. https://developers.openai.com/api/docs/pricing
+	"gpt-6.2-sol": {InputCacheMiss: 2, InputCacheHit: 0.1, InputCacheWrite30m: 2.5, InputCacheWrite12h: 5, Output: 10, LongContextThreshold: 272000},
+	"gpt-6.1-sol": {InputCacheMiss: 2, InputCacheHit: 0.1, InputCacheWrite30m: 2.5, InputCacheWrite12h: 5, Output: 10, LongContextThreshold: 272000},
 	// DeepSeek V4-Flash (deepseek-reasoner/deepseek-chat 均映射到此)
 	// CNY: 输入缓存未命中 ¥1, 缓存命中 ¥0.02, 输出 ¥2
 	// deepseek全时段统一计费，注意后期要改成按高峰时段和平峰时段单独计费
@@ -73,14 +80,41 @@ func CalcCostUSDT(model string, usage TokenUsage) float64 {
 
 	cacheHit := usage.CacheHitTokens
 	cacheMiss := usage.CacheMissTokens
+	w30, w12 := usage.CacheWrite30mTokens, usage.CacheWrite12hTokens
+	if usage.CacheWriteTokens > w30+w12 {
+		w30 += usage.CacheWriteTokens - w30 - w12
+	}
 	// 如果 API 没有返回 cache 分拆字段，用 prompt_tokens 作为 cache miss
-	if cacheHit == 0 && cacheMiss == 0 && usage.PromptTokens > 0 {
-		cacheMiss = usage.PromptTokens
+	if cacheMiss == 0 && usage.PromptTokens > cacheHit+w30+w12 {
+		cacheMiss = usage.PromptTokens - cacheHit - w30 - w12
+	}
+	write30, write12 := p.InputCacheWrite30m, p.InputCacheWrite12h
+	if write30 == 0 {
+		write30 = p.InputCacheMiss
+	}
+	if write12 == 0 {
+		write12 = p.InputCacheMiss
 	}
 
 	inputCost := float64(cacheMiss)*p.InputCacheMiss/1_000_000 +
-		float64(cacheHit)*p.InputCacheHit/1_000_000
+		float64(cacheHit)*p.InputCacheHit/1_000_000 +
+		float64(w30)*write30/1_000_000 + float64(w12)*write12/1_000_000
 	outputCost := float64(usage.CompletionTokens) * p.Output / 1_000_000
+	if p.LongContextThreshold > 0 && usage.PromptTokens > p.LongContextThreshold {
+		inputCost *= 2
+		outputCost *= 1.5
+	}
+	// These tier multipliers apply to OpenAI pricing profiles only.
+	if p.LongContextThreshold > 0 {
+		switch usage.ServiceTier {
+		case "fast", "priority":
+			inputCost *= 2
+			outputCost *= 2
+		case "flex":
+			inputCost *= 0.5
+			outputCost *= 0.5
+		}
+	}
 
 	return inputCost + outputCost
 }

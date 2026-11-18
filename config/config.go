@@ -3,16 +3,22 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"nofx/mcp"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // TraderConfig 单个trader的配置
 type TraderConfig struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	AIModel string `json:"ai_model"` // "qwen" or "deepseek"
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	AIModel      string           `json:"ai_model"`             // provider: qwen, deepseek, custom, openai
+	ModelName    string           `json:"model_name,omitempty"` // generic model override; legacy fields remain supported
+	ModelOptions mcp.ModelOptions `json:"model_options,omitempty"`
 
 	// 交易平台选择（二选一）
 	Exchange string `json:"exchange"` // "binance" or "hyperliquid"
@@ -33,6 +39,7 @@ type TraderConfig struct {
 	// AI配置
 	QwenKey     string `json:"qwen_key,omitempty"`
 	DeepSeekKey string `json:"deepseek_key,omitempty"`
+	OpenAIKey   string `json:"openai_api_key,omitempty"`
 
 	// 模型名称（可选，不填则使用默认值）
 	// DeepSeek 默认: deepseek-reasoner, Qwen 默认: qwen3.5-plus
@@ -182,6 +189,10 @@ func LoadConfig(filename string) (*Config, error) {
 	}
 
 	// 从环境变量读取 API 密钥（如果配置文件中为空）
+	// Load beside the selected config; exported environment variables win.
+	if err := godotenv.Load(filepath.Join(filepath.Dir(filename), ".env")); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("加载 .env 失败: %w", err)
+	}
 	config.loadFromEnvironment()
 
 	// 设置默认值：如果use_default_coins未设置（为false）且没有配置coin_pool_api_url，则默认使用默认币种列表
@@ -218,6 +229,9 @@ func (c *Config) loadFromEnvironment() {
 	}
 	for i := range c.Traders {
 		trader := &c.Traders[i]
+		if trader.AIModel == "openai" && trader.OpenAIKey == "" {
+			trader.OpenAIKey = os.Getenv("OPENAI_API_KEY")
+		}
 
 		// DeepSeek API Key
 		if trader.DeepSeekKey == "" {
@@ -324,8 +338,11 @@ func (c *Config) Validate() error {
 		if trader.Name == "" {
 			return fmt.Errorf("trader[%d]: Name不能为空", i)
 		}
-		if trader.AIModel != "qwen" && trader.AIModel != "deepseek" && trader.AIModel != "custom" {
-			return fmt.Errorf("trader[%d]: ai_model必须是 'qwen', 'deepseek' 或 'custom'", i)
+		if trader.AIModel != "qwen" && trader.AIModel != "deepseek" && trader.AIModel != "custom" && trader.AIModel != "openai" {
+			return fmt.Errorf("trader[%d]: ai_model必须是 'qwen', 'deepseek', 'custom' 或 'openai'", i)
+		}
+		if err := trader.ModelOptions.Validate(); err != nil {
+			return fmt.Errorf("trader[%d]: model_options: %w", i, err)
 		}
 
 		// 验证交易平台配置
@@ -365,6 +382,9 @@ func (c *Config) Validate() error {
 		if trader.AIModel == "deepseek" && trader.DeepSeekKey == "" {
 			return fmt.Errorf("trader[%d]: 使用DeepSeek时必须配置deepseek_key", i)
 		}
+		if trader.AIModel == "openai" && strings.TrimSpace(trader.OpenAIKey) == "" {
+			return fmt.Errorf("trader[%d]: 使用OpenAI时必须配置OPENAI_API_KEY或openai_api_key", i)
+		}
 		if trader.AIModel == "custom" {
 			if trader.CustomAPIURL == "" {
 				return fmt.Errorf("trader[%d]: 使用自定义API时必须配置custom_api_url", i)
@@ -372,7 +392,7 @@ func (c *Config) Validate() error {
 			if trader.CustomAPIKey == "" {
 				return fmt.Errorf("trader[%d]: 使用自定义API时必须配置custom_api_key", i)
 			}
-			if trader.CustomModelName == "" {
+			if trader.CustomModelName == "" && trader.ModelName == "" {
 				return fmt.Errorf("trader[%d]: 使用自定义API时必须配置custom_model_name", i)
 			}
 		}

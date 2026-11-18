@@ -1,12 +1,7 @@
 package mcp
 
 import (
-	"bytes"
-	"crypto/tls"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +14,7 @@ const (
 	ProviderDeepSeek Provider = "deepseek"
 	ProviderQwen     Provider = "qwen"
 	ProviderCustom   Provider = "custom"
+	ProviderOpenAI   Provider = "openai"
 )
 
 // Config AI API配置
@@ -31,23 +27,30 @@ type Config struct {
 	Timeout    time.Duration
 	UseFullURL bool // 是否使用完整URL（不添加/chat/completions）
 	MaxTokens  int
+	Options    ModelOptions
 }
 
 // TokenUsage LLM API 返回的 token 用量统计
 type TokenUsage struct {
-	PromptTokens      int `json:"prompt_tokens"`
-	CompletionTokens  int `json:"completion_tokens"`
-	TotalTokens       int `json:"total_tokens"`
-	CacheHitTokens    int `json:"prompt_cache_hit_tokens"`
-	CacheMissTokens   int `json:"prompt_cache_miss_tokens"`
-	ReasoningTokens   int `json:"reasoning_tokens"`
+	PromptTokens        int    `json:"prompt_tokens"`
+	CompletionTokens    int    `json:"completion_tokens"`
+	TotalTokens         int    `json:"total_tokens"`
+	CacheHitTokens      int    `json:"prompt_cache_hit_tokens"`
+	CacheMissTokens     int    `json:"prompt_cache_miss_tokens"`
+	ReasoningTokens     int    `json:"reasoning_tokens"`
+	CacheWriteTokens    int    `json:"cache_write_tokens,omitempty"`
+	CacheWrite30mTokens int    `json:"cache_write_30m_tokens,omitempty"`
+	CacheWrite12hTokens int    `json:"cache_write_12h_tokens,omitempty"`
+	ServiceTier         string `json:"service_tier,omitempty"`
 }
 
 // CallResult LLM 调用结果（内容 + token 用量）
 type CallResult struct {
-	Content string
-	Usage   TokenUsage
-	Model   string
+	Content    string
+	Usage      TokenUsage
+	Model      string
+	ResponseID string
+	Status     string
 }
 
 // Client 独立的 AI 客户端实例（线程安全）。
@@ -62,7 +65,7 @@ func NewClient() *Client {
 	return &Client{
 		cfg: Config{
 			Timeout:   120 * time.Second,
-			MaxTokens: 5000,
+			MaxTokens: 10000,
 		},
 	}
 }
@@ -80,7 +83,7 @@ func NewDeepSeekClient(apiKey, modelName string) *Client {
 			BaseURL:   "https://api.deepseek.com/v1",
 			Model:     model,
 			Timeout:   120 * time.Second,
-			MaxTokens: 5000,
+			MaxTokens: 10000,
 		},
 	}
 }
@@ -99,7 +102,7 @@ func NewQwenClient(apiKey, secretKey, modelName string) *Client {
 			BaseURL:   "https://dashscope.aliyuncs.com/compatible-mode/v1",
 			Model:     model,
 			Timeout:   120 * time.Second,
-			MaxTokens: 5000,
+			MaxTokens: 10000,
 		},
 	}
 }
@@ -112,7 +115,7 @@ func NewCustomClient(apiURL, apiKey, modelName string) *Client {
 			APIKey:    apiKey,
 			Model:     modelName,
 			Timeout:   120 * time.Second,
-			MaxTokens: 5000,
+			MaxTokens: 10000,
 		},
 	}
 	if strings.HasSuffix(apiURL, "#") {
@@ -160,174 +163,16 @@ func (c *Client) CallWithMessages(systemPrompt, userPrompt string) (string, erro
 // CallWithMessagesDetailed 使用 system + user prompt 调用AI API，返回完整结果（含 token 用量）
 func (c *Client) CallWithMessagesDetailed(systemPrompt, userPrompt string) (*CallResult, error) {
 	c.mu.RLock()
-	cfg := c.cfg // 取快照
+	cfg := c.cfg // options are immutable snapshots after SetModelOptions
 	c.mu.RUnlock()
 
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("AI API密钥未设置")
 	}
 
-	maxRetries := 1
-	var lastErr error
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		if attempt > 1 {
-			fmt.Printf("⚠️  AI API调用失败，正在重试 (%d/%d)...\n", attempt, maxRetries)
-		}
-
-		result, err := doCall(cfg, systemPrompt, userPrompt)
-		if err == nil {
-			if attempt > 1 {
-				fmt.Printf("✓ AI API重试成功\n")
-			}
-			return result, nil
-		}
-
-		lastErr = err
-		if !isRetryableError(err) {
-			return nil, err
-		}
-
-		if attempt < maxRetries {
-			waitTime := time.Duration(attempt) * 2 * time.Second
-			fmt.Printf("⏳ 等待%v后重试...\n", waitTime)
-			time.Sleep(waitTime)
-		}
-	}
-
-	return nil, fmt.Errorf("重试%d次后仍然失败: %w", maxRetries, lastErr)
-}
-
-// doCall 单次调用AI API（纯函数，无副作用）
-func doCall(cfg Config, systemPrompt, userPrompt string) (*CallResult, error) {
-	messages := []map[string]string{}
-
-	if systemPrompt != "" {
-		messages = append(messages, map[string]string{
-			"role":    "system",
-			"content": systemPrompt,
-		})
-	}
-
-	messages = append(messages, map[string]string{
-		"role":    "user",
-		"content": userPrompt,
-	})
-
-	requestBody := map[string]interface{}{
-		"model":       cfg.Model,
-		"messages":    messages,
-		"temperature": 0.5,
-		"max_tokens":  cfg.MaxTokens,
-	}
-
-	jsonData, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("序列化请求失败: %w", err)
-	}
-
-	var url string
-	if cfg.UseFullURL {
-		url = cfg.BaseURL
-	} else {
-		url = fmt.Sprintf("%s/chat/completions", cfg.BaseURL)
-	}
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	switch cfg.Provider {
-	case ProviderDeepSeek:
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
-	case ProviderQwen:
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
-	default:
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.APIKey))
-	}
-
-	transport := &http.Transport{
-		Proxy:           nil,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-	}
-	client := &http.Client{
-		Timeout:   cfg.Timeout,
-		Transport: transport,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("发送请求失败: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API返回错误 (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-		Usage struct {
-			PromptTokens    int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens     int `json:"total_tokens"`
-			CacheHitTokens  int `json:"prompt_cache_hit_tokens"`
-			CacheMissTokens int `json:"prompt_cache_miss_tokens"`
-			CompletionTokensDetails struct {
-				ReasoningTokens int `json:"reasoning_tokens"`
-			} `json:"completion_tokens_details"`
-		} `json:"usage"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
-	}
-
-	if len(result.Choices) == 0 {
-		return nil, fmt.Errorf("API返回空响应")
-	}
-
-	return &CallResult{
-		Content: result.Choices[0].Message.Content,
-		Usage: TokenUsage{
-			PromptTokens:     result.Usage.PromptTokens,
-			CompletionTokens: result.Usage.CompletionTokens,
-			TotalTokens:      result.Usage.TotalTokens,
-			CacheHitTokens:   result.Usage.CacheHitTokens,
-			CacheMissTokens:  result.Usage.CacheMissTokens,
-			ReasoningTokens:  result.Usage.CompletionTokensDetails.ReasoningTokens,
-		},
-		Model: cfg.Model,
-	}, nil
-}
-
-// isRetryableError 判断错误是否可重试
-func isRetryableError(err error) bool {
-	errStr := err.Error()
-	retryableErrors := []string{
-		"EOF",
-		"timeout",
-		"connection reset",
-		"connection refused",
-		"temporary failure",
-		"no such host",
-	}
-	for _, retryable := range retryableErrors {
-		if strings.Contains(errStr, retryable) {
-			return true
-		}
-	}
-	return false
+	// One attempt: a transport failure can occur after generation has started.
+	// Retrying silently could charge twice or generate a different decision.
+	return doCall(cfg, systemPrompt, userPrompt)
 }
 
 // ========== 全局兼容函数（供 cmd 工具和回测使用）==========
@@ -338,6 +183,8 @@ var defaultClient = NewClient()
 func SetDeepSeekAPIKey(apiKey string, modelName string) {
 	defaultClient.mu.Lock()
 	defer defaultClient.mu.Unlock()
+	defaultClient.cfg.Options = defaultModelOptions(ProviderDeepSeek)
+	defaultClient.cfg.UseFullURL = false
 	defaultClient.cfg.Provider = ProviderDeepSeek
 	defaultClient.cfg.APIKey = apiKey
 	defaultClient.cfg.BaseURL = "https://api.deepseek.com/v1"
@@ -352,6 +199,8 @@ func SetDeepSeekAPIKey(apiKey string, modelName string) {
 func SetQwenAPIKey(apiKey, secretKey string, modelName string) {
 	defaultClient.mu.Lock()
 	defer defaultClient.mu.Unlock()
+	defaultClient.cfg.Options = defaultModelOptions(ProviderQwen)
+	defaultClient.cfg.UseFullURL = false
 	defaultClient.cfg.Provider = ProviderQwen
 	defaultClient.cfg.APIKey = apiKey
 	defaultClient.cfg.SecretKey = secretKey
@@ -367,6 +216,7 @@ func SetQwenAPIKey(apiKey, secretKey string, modelName string) {
 func SetCustomAPI(apiURL, apiKey, modelName string) {
 	defaultClient.mu.Lock()
 	defer defaultClient.mu.Unlock()
+	defaultClient.cfg.Options = defaultModelOptions(ProviderCustom)
 	defaultClient.cfg.Provider = ProviderCustom
 	defaultClient.cfg.APIKey = apiKey
 	if strings.HasSuffix(apiURL, "#") {

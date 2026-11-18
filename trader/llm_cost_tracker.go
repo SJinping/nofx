@@ -15,19 +15,19 @@ type LLMCostEntry struct {
 	Time     time.Time      `json:"time"`
 	Source   string         `json:"source"` // "decision" / "open_guard" / "post_trade_review"
 	Model    string         `json:"model"`
-	CostUSDT float64       `json:"cost_usdt"`
+	CostUSDT float64        `json:"cost_usdt"`
 	Usage    mcp.TokenUsage `json:"usage"`
 }
 
 // LLMCostSnapshot 费用追踪器的只读快照（用于 API 响应）
 type LLMCostSnapshot struct {
-	TotalCostUSDT       float64  `json:"total_cost_usdt"`
-	TotalCalls          int      `json:"total_calls"`
-	AvgCostPerCall      float64  `json:"avg_cost_per_call_usdt"`
-	TotalPromptTokens   int64    `json:"total_prompt_tokens"`
-	TotalOutputTokens   int64    `json:"total_output_tokens"`
-	TotalCacheHitTokens int64    `json:"total_cache_hit_tokens"`
-	CacheHitRate        float64  `json:"cache_hit_rate"`
+	TotalCostUSDT       float64        `json:"total_cost_usdt"`
+	TotalCalls          int            `json:"total_calls"`
+	AvgCostPerCall      float64        `json:"avg_cost_per_call_usdt"`
+	TotalPromptTokens   int64          `json:"total_prompt_tokens"`
+	TotalOutputTokens   int64          `json:"total_output_tokens"`
+	TotalCacheHitTokens int64          `json:"total_cache_hit_tokens"`
+	CacheHitRate        float64        `json:"cache_hit_rate"`
 	RecentCalls         []LLMCostEntry `json:"recent_calls,omitempty"`
 }
 
@@ -120,7 +120,8 @@ func (t *LLMCostTracker) Snapshot() LLMCostSnapshot {
 		snap.AvgCostPerCall = t.totalCostUSDT / float64(t.totalCalls)
 	}
 
-	totalInput := t.totalCacheHit + t.totalCacheMiss
+	// Prompt tokens include cache writes as well as ordinary input and reads.
+	totalInput := t.totalPromptTokens
 	if totalInput > 0 {
 		snap.CacheHitRate = float64(t.totalCacheHit) / float64(totalInput)
 	}

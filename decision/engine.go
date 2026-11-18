@@ -59,26 +59,10 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	// 在用户提示前加上策略标识，便于日志对比
 	userPrompt = fmt.Sprintf("**策略版本**: %s\n\n%s", strategy.Name(), userPrompt)
 
-	// 5. 调用AI API（使用 system + user prompt），获取完整结果含 token 用量
-	callResult, err := callAIDetailed(ctx, systemPrompt, userPrompt)
+	decision, err := requestAndParseDecision(ctx, systemPrompt, userPrompt)
 	if err != nil {
-		errType := stats.ClassifyLLMError(err.Error())
-		recordError(errType, err.Error(), "")
-		return nil, fmt.Errorf("调用AI API失败: %w", err)
+		return decision, err
 	}
-
-	// 6. 解析AI响应
-	decision, err := parseFullDecisionResponse(callResult.Content, ctx)
-	if err != nil {
-		errType := stats.ClassifyDecisionParseError(err.Error())
-		recordError(errType, err.Error(), "")
-		return nil, fmt.Errorf("解析AI响应失败: %w", err)
-	}
-
-	decision.Timestamp = time.Now()
-	decision.UserPrompt = userPrompt
-	decision.LLMCostUSDT = mcp.CalcCostUSDT(callResult.Model, callResult.Usage)
-	decision.LLMUsage = &callResult.Usage
 
 	// StrategyV only: re-fetch a near-real-time price after the LLM response.
 	// Unsafe opens are downgraded to wait, preserving valid risk-reduction
@@ -91,6 +75,56 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	}
 
 	return decision, nil
+}
+
+// requestAndParseDecision is shared by live decisions and text replays.
+func requestAndParseDecision(ctx *Context, systemPrompt, userPrompt string) (*FullDecision, error) {
+	// 5. 调用AI API（使用 system + user prompt），获取完整结果含 token 用量
+	callResult, err := callAIDetailed(ctx, systemPrompt, userPrompt)
+	audit := llmDecisionAudit(userPrompt, callResult)
+	if callResult == nil && err == nil {
+		err = fmt.Errorf("AI client returned no result")
+	}
+	if err != nil {
+		errType := stats.ClassifyLLMError(err.Error())
+		recordError(errType, err.Error(), "")
+		return audit, fmt.Errorf("调用AI API失败: %w", err)
+	}
+
+	// 6. 解析AI响应
+	decision, err := parseFullDecisionResponse(callResult.Content, ctx)
+	if err != nil {
+		errType := stats.ClassifyDecisionParseError(err.Error())
+		recordError(errType, err.Error(), "")
+		return audit, fmt.Errorf("解析AI响应失败: %w", err)
+	}
+
+	decision.Timestamp = time.Now()
+	decision.UserPrompt = userPrompt
+	decision.LLMCostUSDT = mcp.CalcCostUSDT(callResult.Model, callResult.Usage)
+	decision.LLMUsage = &callResult.Usage
+	decision.LLMModel = audit.LLMModel
+	decision.LLMResponseID = audit.LLMResponseID
+	decision.LLMFinishReason = audit.LLMFinishReason
+	decision.RawAIResponse = audit.RawAIResponse
+
+	return decision, nil
+}
+
+// Preserve the submitted input and billed usage even when content is empty,
+// truncated, refused, or cannot be parsed. Failed calls never carry actions.
+func llmDecisionAudit(userPrompt string, result *mcp.CallResult) *FullDecision {
+	d := &FullDecision{UserPrompt: userPrompt, Timestamp: time.Now()}
+	if result != nil {
+		d.CoTTrace = result.Content
+		d.RawAIResponse = result.Content
+		d.LLMUsage = &result.Usage
+		d.LLMModel = result.Model
+		d.LLMResponseID = result.ResponseID
+		d.LLMFinishReason = result.Status
+		d.LLMCostUSDT = mcp.CalcCostUSDT(result.Model, result.Usage)
+	}
+	return d
 }
 
 func shouldSkipLLMNoMarketData(ctx *Context) bool {
@@ -215,25 +249,7 @@ func GetFullDecisionFromText(ctx *Context, systemPrompt, userPrompt string) (*Fu
 	// 4. 否则构建System/User Prompt，让LLM决策
 	// 不需要，由参数传入
 
-	// 5. 调用AI API（使用 system + user prompt）
-	aiResponse, err := callAI(ctx, systemPrompt, userPrompt)
-	if err != nil {
-		errType := stats.ClassifyLLMError(err.Error())
-		recordError(errType, err.Error(), "")
-		return nil, fmt.Errorf("调用AI API失败: %w", err)
-	}
-
-	// 6. 解析AI响应
-	decision, err := parseFullDecisionResponse(aiResponse, ctx)
-	if err != nil {
-		errType := stats.ClassifyDecisionParseError(err.Error())
-		recordError(errType, err.Error(), "")
-		return nil, fmt.Errorf("解析AI响应失败: %w", err)
-	}
-
-	decision.Timestamp = time.Now()
-	decision.UserPrompt = userPrompt // 保存输入prompt
-	return decision, nil
+	return requestAndParseDecision(ctx, systemPrompt, userPrompt)
 }
 
 // callAI 优先使用 ctx 中的 AI 客户端实例，否则回退到全局默认

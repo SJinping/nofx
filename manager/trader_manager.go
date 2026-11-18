@@ -60,6 +60,9 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		ID:                               cfg.ID,
 		Name:                             cfg.Name,
 		AIModel:                          cfg.AIModel,
+		ModelName:                        cfg.ModelName,
+		ModelOptions:                     cfg.ModelOptions,
+		OpenAIKey:                        cfg.OpenAIKey,
 		Exchange:                         cfg.Exchange,
 		BinanceTestnet:                   binanceTestnet,
 		BinanceAPIKey:                    cfg.BinanceAPIKey,
@@ -465,6 +468,11 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 				}
 				id, _ := traderMap["id"].(string)
 				if traderID == "" || id == traderID {
+					// Generic model names take precedence for every provider.
+					if name, _ := traderMap["model_name"].(string); name != "" {
+						traderMap["model_name"] = *patch.AIModel
+						continue
+					}
 					// 从 trader 实例获取 provider
 					provider := mcp.ProviderDeepSeek // 默认
 					if at, exists := tm.traders[id]; exists {
@@ -477,6 +485,8 @@ func (tm *TraderManager) persistConfigPatch(patch trader.RuntimeConfigPatch, tra
 						traderMap["qwen_model"] = *patch.AIModel
 					case mcp.ProviderCustom:
 						traderMap["custom_model_name"] = *patch.AIModel
+					case mcp.ProviderOpenAI:
+						traderMap["model_name"] = *patch.AIModel
 					}
 				}
 			}

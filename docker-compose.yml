@@ -24,6 +24,7 @@ services:
       - BINANCE_TESTNET_SECRET_KEY=${BINANCE_TESTNET_SECRET_KEY}
       - DEEPSEEK_OPENAI_KEY=${DEEPSEEK_OPENAI_KEY}
       - QWEN_OPENAI_API_KEY=${QWEN_OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     networks:
       - nofx-network
     healthcheck:
