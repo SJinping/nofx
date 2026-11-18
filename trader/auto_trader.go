@@ -2850,8 +2850,19 @@ func (at *AutoTrader) SetPromptStrategy(strategy decision.PromptStrategy) {
 // GetStatus 获取系统状态（用于API）
 func (at *AutoTrader) GetStatus() map[string]interface{} {
 	aiProvider := "DeepSeek"
-	if at.config.UseQwen {
+	switch {
+	case at.aiClient != nil && at.aiClient.GetProvider() == mcp.ProviderOpenAI:
+		aiProvider = "OpenAI"
+	case at.aiClient != nil && at.aiClient.GetProvider() == mcp.ProviderQwen:
 		aiProvider = "Qwen"
+	case at.aiClient != nil && at.aiClient.GetProvider() == mcp.ProviderCustom:
+		aiProvider = "Custom"
+	case at.config.UseQwen || at.aiModel == "qwen":
+		aiProvider = "Qwen"
+	case at.aiModel == "openai":
+		aiProvider = "OpenAI"
+	case at.aiModel == "custom":
+		aiProvider = "Custom"
 	}
 
 	result := map[string]interface{}{
