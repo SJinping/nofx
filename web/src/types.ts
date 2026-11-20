@@ -69,6 +69,7 @@ export type ChartAction = Omit<DecisionAction, 'error'> & { decision_source?: st
 
 export interface EquityHistoryPoint {
   timestamp: string;
+  timestamp_ms?: number;
   total_equity: number;
   available_balance: number;
   total_pnl: number;

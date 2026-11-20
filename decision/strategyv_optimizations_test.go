@@ -71,7 +71,7 @@ func TestStrategyVOtherSetupRequiresHigherBarAndSmallerRisk(t *testing.T) {
 	ctx := testStrategyVRiskContext(StrategyV{})
 	base := validStrategyVOpenDecision()
 	base.Reasoning = "setup_type=other; setup_logic=资金费率极端后挤空回补; why_now=放量收回; time_stop_minutes=30; invalidation_condition=跌破挤仓起点"
-	base.RiskUSD = 5
+	base.PositionSizeUSD = 500
 
 	ok := base
 	if err := validateShortTermOpenRisk(&ok, ctx); err != nil {
@@ -91,7 +91,8 @@ func TestStrategyVOtherSetupRequiresHigherBarAndSmallerRisk(t *testing.T) {
 	}
 
 	tooRisky := base
-	tooRisky.RiskUSD = 8
+	tooRisky.PositionSizeUSD = 800
+	tooRisky.RiskUSD = 0
 	if err := validateShortTermOpenRisk(&tooRisky, ctx); err == nil || !strings.Contains(err.Error(), "单笔风险过大") {
 		t.Fatalf("expected other-setup risk rejection, got %v", err)
 	}

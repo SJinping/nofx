@@ -10,12 +10,13 @@ import (
 func TestIndexedEquityCacheQueryIsolationAndClone(t *testing.T) {
 	c := NewEquityHistoryCache(20000, time.Minute)
 	calls := 0
+	recorded := time.Date(2026, 11, 20, 16, 5, 6, 123000000, time.FixedZone("UTC+8", 8*60*60))
 	fetch := func(limit, from, to int, actions bool) ([]logger.ChartRecord, error) {
 		calls++
 		if limit != 2 || from != 4 || to != 8 {
 			t.Fatalf("query lost before source filtering: %d %d %d", limit, from, to)
 		}
-		p := logger.ChartRecord{CycleNumber: 8, Success: true, AccountState: logger.AccountSnapshot{TotalBalance: 120, TotalUnrealizedProfit: 20}}
+		p := logger.ChartRecord{Timestamp: recorded, CycleNumber: 8, Success: true, AccountState: logger.AccountSnapshot{TotalBalance: 120, TotalUnrealizedProfit: 20}}
 		if actions {
 			p.Actions = []logger.ChartAction{{Action: "open_long", Success: true, Price: 42}}
 		}
@@ -25,6 +26,9 @@ func TestIndexedEquityCacheQueryIsolationAndClone(t *testing.T) {
 	p, err := c.GetIndexed("a", fetch, 100, q)
 	if err != nil || len(p) != 1 || p[0].TotalPnLPct != 20 || len(p[0].Actions) != 1 {
 		t.Fatalf("wrong points: %+v %v", p, err)
+	}
+	if p[0].TimestampMS != recorded.UnixMilli() || p[0].Timestamp != "2026-11-20 16:05:06" {
+		t.Fatalf("lost sample instant or changed legacy timestamp: %+v", p[0])
 	}
 	p[0].Actions[0].Price = 0
 	p, err = c.GetIndexed("a", fetch, 100, q)

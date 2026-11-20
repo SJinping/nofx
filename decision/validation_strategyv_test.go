@@ -1,6 +1,8 @@
 package decision
 
 import (
+	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -95,5 +97,49 @@ func TestStrategyVAutoStopBypassesMinHoldValidation(t *testing.T) {
 	validateDecisions(decisions, ctx)
 	if decisions[0].ValidationError != "" {
 		t.Fatalf("auto stop rejected: %v", decisions[0].ValidationError)
+	}
+}
+
+func TestStrategyVRepricesNetRiskAtExecution(t *testing.T) {
+	ctx := testStrategyVRiskContext(StrategyV{})
+	ctx.AssumedTakerFeeRate, ctx.AssumedSlippageRate = .0005, .0004
+	d := validStrategyVOpenDecision()
+	d.PositionSizeUSD, d.RiskUSD = 840, 0
+	if err := validateShortTermOpenRisk(&d, ctx); err != nil || math.Abs(d.RiskUSD-9.912) > 1e-8 {
+		t.Fatalf("snapshot risk=%f err=%v", d.RiskUSD, err)
+	}
+	if err := validateShortTermExecutionPrice(&d, ctx, 100.05); err == nil || !strings.Contains(err.Error(), "单笔风险过大") {
+		t.Fatalf("expected live risk > 10 USDT despite acceptable RR: %v", err)
+	}
+}
+
+func TestStrategyVBreakoutReferenceExcludesTrigger(t *testing.T) {
+	s := &market.IntradayData{Highs: []float64{101, 102, 110}, Lows: []float64{99, 100, 101}, Closes: []float64{100, 101, 109}}
+	got := formatShortTermSetupSnapshot(&market.Data{IntradaySeries: s})
+	for _, want := range []string{"range=[99, 110]", "pre_trigger_range=[99, 102]", "trigger_close=109"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestStrategyVExampleUsesConfiguredCostsAndThreshold(t *testing.T) {
+	out := shortTermDecisionExamples(5, .0005, .0004, 2.1)
+	blocks := strings.Split(out, "```json\n")
+	if len(blocks) != 3 {
+		t.Fatalf("expected two independent examples: %s", out)
+	}
+	for i, action := range []string{ActionOpenLong, ActionWait} {
+		var ds []Decision
+		err := json.Unmarshal([]byte(strings.Split(blocks[i+1], "\n```")[0]), &ds)
+		if err != nil || len(ds) != 1 || ds[0].Action != action {
+			t.Fatalf("example %d: %v %v", i, ds, err)
+		}
+		if i == 0 && (math.Abs(ds[0].RiskUSD-.58) > 1e-8 || !strings.Contains(ds[0].Reasoning, "calculated_net_rr=2.793103")) {
+			t.Fatalf("incorrect risk or RR: %+v", ds[0])
+		}
+	}
+	if strings.Contains(shortTermDecisionExamples(5, .0005, .0004, 3), "open_long") {
+		t.Fatal("below-threshold example recommended opening")
 	}
 }

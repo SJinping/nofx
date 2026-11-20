@@ -13,6 +13,7 @@ const (
 
 type EquityPoint struct {
 	Timestamp        string               `json:"timestamp"`
+	TimestampMS      int64                `json:"timestamp_ms,omitempty"`
 	TotalEquity      float64              `json:"total_equity"`
 	AvailableBalance float64              `json:"available_balance"`
 	TotalPnL         float64              `json:"total_pnl"`
@@ -90,7 +91,20 @@ func (c *EquityHistoryCache) GetIndexed(traderID string, fetch equityIndexFetche
 		if initialBalance > 0 {
 			pct = r.AccountState.TotalUnrealizedProfit / initialBalance * 100
 		}
-		p := EquityPoint{Timestamp: r.Timestamp.Format("2006-01-02 15:04:05"), TotalEquity: r.AccountState.TotalBalance, AvailableBalance: r.AccountState.AvailableBalance, TotalPnL: r.AccountState.TotalUnrealizedProfit, TotalPnLPct: pct, PositionCount: r.AccountState.PositionCount, MarginUsedPct: r.AccountState.MarginUsedPct, CycleNumber: r.CycleNumber, SourceFile: r.SourceFile}
+		p := EquityPoint{
+			Timestamp:        r.Timestamp.Format("2006-01-02 15:04:05"),
+			TotalEquity:      r.AccountState.TotalBalance,
+			AvailableBalance: r.AccountState.AvailableBalance,
+			TotalPnL:         r.AccountState.TotalUnrealizedProfit,
+			TotalPnLPct:      pct,
+			PositionCount:    r.AccountState.PositionCount,
+			MarginUsedPct:    r.AccountState.MarginUsedPct,
+			CycleNumber:      r.CycleNumber,
+			SourceFile:       r.SourceFile,
+		}
+		if !r.Timestamp.IsZero() {
+			p.TimestampMS = r.Timestamp.UnixMilli()
+		}
 		if q.IncludeActions {
 			p.Actions = r.Actions
 		}

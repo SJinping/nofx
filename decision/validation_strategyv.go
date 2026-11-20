@@ -207,10 +207,6 @@ func validateShortTermOpenRisk(d *Decision, ctx *Context) error {
 			return fmt.Errorf("StrategyV短线单笔名义仓位过大：%.2f USDT > %.2f USDT（%s短线仓位上限）", d.PositionSizeUSD, maxNotional, d.Symbol)
 		}
 
-		maxRiskUSD := equity * shortTermMaxRiskPctPerTrade / 100.0
-		if d.RiskUSD > 0 && d.RiskUSD > maxRiskUSD {
-			return fmt.Errorf("StrategyV短线单笔风险过大：risk_usd %.2f > %.2f（净值 %.2f 的 %.2f%%）", d.RiskUSD, maxRiskUSD, equity, shortTermMaxRiskPctPerTrade)
-		}
 	}
 
 	md := ctx.MarketDataMap[d.Symbol]
@@ -241,12 +237,12 @@ func validateShortTermOpenRisk(d *Decision, ctx *Context) error {
 	}
 
 	if shortTermSetupType(d) == "other" {
-		if err := validateShortTermOtherSetup(d, ctx, minConfidence); err != nil {
+		if err := validateShortTermOtherSetup(d, minConfidence); err != nil {
 			return err
 		}
 	}
 
-	return nil
+	return checkShortTermRiskBudget(d, ctx, md.CurrentPrice)
 }
 
 // shortTermSetupType 优先取结构化字段，其次从 reasoning 的 setup_type=xxx 解析。
@@ -263,7 +259,7 @@ func shortTermSetupType(d *Decision) string {
 	return ""
 }
 
-func validateShortTermOtherSetup(d *Decision, ctx *Context, minConfidence int) error {
+func validateShortTermOtherSetup(d *Decision, minConfidence int) error {
 	required := minConfidence + shortTermOtherSetupConfidenceBonus
 	if d.Confidence < required {
 		return fmt.Errorf("StrategyV setup_type=other 需信心度 >= %d（当前 %d）", required, d.Confidence)
@@ -272,12 +268,7 @@ func validateShortTermOtherSetup(d *Decision, ctx *Context, minConfidence int) e
 	if !strings.Contains(r, "setup_logic") || !strings.Contains(r, "invalidation") {
 		return fmt.Errorf("StrategyV setup_type=other 必须在 reasoning 中写明 setup_logic 与 invalidation_condition")
 	}
-	if equity := ctx.Account.TotalEquity; equity > 0 {
-		maxRiskUSD := equity * shortTermOtherSetupMaxRiskPct / 100.0
-		if d.RiskUSD > maxRiskUSD {
-			return fmt.Errorf("StrategyV setup_type=other 单笔风险过大：risk_usd %.2f > %.2f（净值的 %.2f%%）", d.RiskUSD, maxRiskUSD, shortTermOtherSetupMaxRiskPct)
-		}
-	}
+
 	return nil
 }
 
@@ -486,19 +477,11 @@ func validateShortTermExecutionPrice(d *Decision, ctx *Context, livePrice float6
 		return fmt.Errorf("StrategyV实时价格下无法计算有效RR：risk=%.4f%% reward=%.4f%%", riskPercent, rewardPercent)
 	}
 
-	taker := 0.0004
-	slippage := 0.0005
-	if ctx.AssumedTakerFeeRate >= 0 {
-		taker = ctx.AssumedTakerFeeRate
-	}
-	if ctx.AssumedSlippageRate >= 0 {
-		slippage = ctx.AssumedSlippageRate
-	}
 	leverage := float64(d.Leverage)
 	if leverage < 1 {
 		leverage = 1
 	}
-	roundTripCostROIPct := 2.0 * (taker + slippage) * leverage * 100.0
+	roundTripCostROIPct := shortTermRoundTripCost(ctx) * leverage * 100.0
 	netRisk := riskPercent*leverage + roundTripCostROIPct
 	netReward := rewardPercent*leverage - roundTripCostROIPct
 	if netReward <= 0 {
@@ -509,5 +492,35 @@ func validateShortTermExecutionPrice(d *Decision, ctx *Context, livePrice float6
 	if minRR := minRiskRewardFor(ctx); netRR < minRR {
 		return fmt.Errorf("StrategyV实时价格下净RR降至 %.2f:1，低于最低 %.2f:1（live=%.8f, SL=%.8f, TP=%.8f, cost=%.4f%%）", netRR, minRR, livePrice, d.StopLoss, d.TakeProfit, roundTripCostROIPct)
 	}
+	return checkShortTermRiskBudget(d, ctx, livePrice)
+}
+
+func shortTermRoundTripCost(ctx *Context) float64 {
+	taker := defaultAssumedTakerFeeRate
+	slippage := defaultAssumedSlippageRate
+	if ctx.AssumedTakerFeeRate >= 0 {
+		taker = ctx.AssumedTakerFeeRate
+	}
+	if ctx.AssumedSlippageRate >= 0 {
+		slippage = ctx.AssumedSlippageRate
+	}
+	return 2 * (taker + slippage)
+}
+
+// Nominal size already includes leverage. Include fees and slippage on both legs.
+func checkShortTermRiskBudget(d *Decision, ctx *Context, entry float64) error {
+	if !(ctx.Account.TotalEquity > 0 && entry > 0 && d.StopLoss > 0 && d.PositionSizeUSD > 0) {
+		return fmt.Errorf("StrategyV缺少有效净值、仓位或价格，无法核验单笔风险")
+	}
+	limitPct := shortTermMaxRiskPctPerTrade
+	if shortTermSetupType(d) == "other" {
+		limitPct = shortTermOtherSetupMaxRiskPct
+	}
+	risk := d.PositionSizeUSD * (math.Abs(entry-d.StopLoss)/entry + shortTermRoundTripCost(ctx))
+	limit := ctx.Account.TotalEquity * limitPct / 100
+	if !(risk <= limit) {
+		return fmt.Errorf("StrategyV单笔风险过大：按入场价和成本复算 %.4f > %.4f USDT（净值的 %.2f%%）", risk, limit, limitPct)
+	}
+	d.RiskUSD = risk
 	return nil
 }
