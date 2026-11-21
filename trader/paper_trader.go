@@ -176,16 +176,15 @@ func (pt *PaperTrader) GetPositions() ([]map[string]interface{}, error) {
 
 // OpenLong 开多仓（模拟）
 func (pt *PaperTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	return pt.openPosition(symbol, "long", quantity, leverage)
+	return pt.openPositionWithPriceCheck(symbol, "long", quantity, leverage, nil)
 }
 
 // OpenShort 开空仓（模拟）
 func (pt *PaperTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	return pt.openPosition(symbol, "short", quantity, leverage)
+	return pt.openPositionWithPriceCheck(symbol, "short", quantity, leverage, nil)
 }
 
-// openPosition 开仓（内部方法）
-func (pt *PaperTrader) openPosition(symbol, side string, quantity float64, leverage int) (map[string]interface{}, error) {
+func (pt *PaperTrader) openPositionWithPriceCheck(symbol, side string, quantity float64, leverage int, sizeAtPrice openSizeAtPrice) (map[string]interface{}, error) {
 	pt.mutex.Lock()
 	defer pt.mutex.Unlock()
 
@@ -193,6 +192,13 @@ func (pt *PaperTrader) openPosition(symbol, side string, quantity float64, lever
 	marketPrice, err := pt.realTrader.GetMarketPrice(symbol)
 	if err != nil {
 		return nil, fmt.Errorf("获取市价失败: %w", err)
+	}
+
+	if sizeAtPrice != nil {
+		quantity, err = sizeAtPrice(marketPrice)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 应用滑点：开多=买入，开空=卖出

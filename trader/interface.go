@@ -91,3 +91,10 @@ type Trader interface {
 	// incomeType 为空时返回所有类型；常用值: "FUNDING_FEE", "COMMISSION", "REALIZED_PNL"
 	ListIncome(symbol string, incomeType string, startTimeMs, endTimeMs int64, limit int) ([]IncomeRecord, error)
 }
+
+// openSizeAtPrice lets a strategy validate the order quote and calculate its size.
+type openSizeAtPrice func(price float64) (float64, error)
+
+type priceCheckedOpener interface {
+	openPositionWithPriceCheck(symbol, side string, quantity float64, leverage int, sizeAtPrice openSizeAtPrice) (map[string]interface{}, error)
+}

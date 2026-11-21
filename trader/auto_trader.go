@@ -80,10 +80,11 @@ type AutoTraderConfig struct {
 	LeverageClip                     decision.LeverageClipConfig
 
 	// 风险控制（仅作为提示，AI可自主决定）
-	MaxDailyLoss    float64       // 最大日亏损百分比（提示）
-	MaxDrawdown     float64       // 最大回撤百分比（提示）
-	StopTradingTime time.Duration // 触发风控后暂停时长
-	MinRiskReward   float64       // 最小风险回报比
+	MaxDailyLoss       float64       // 最大日亏损百分比（提示）
+	MaxDrawdown        float64       // 最大回撤百分比（提示）
+	StopTradingTime    time.Duration // 触发风控后暂停时长
+	MinPositionSizeUSD float64       // 最小开仓名义金额，USDT
+	MinRiskReward      float64       // 最小风险回报比
 
 	// 纸上交易模式
 	PaperTradingMode         bool     // 是否启用纸上交易模式（只做策略分析，不实际下单）
@@ -1692,6 +1693,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		AssumedSlippageRate: at.config.AssumedSlippageRate,
 		PaperTradingMode:    at.config.PaperTradingMode,
 		MinRiskReward:       rcSnap.MinRiskReward,
+		MinPositionSizeUSD:  at.config.MinPositionSizeUSD,
 		StopLossDistance:    rcSnap.StopLossDistance,                           // 从运行时配置读取
 		AutoTakeProfit:      at.effectiveAutoTakeProfit(rcSnap.AutoTakeProfit), // 从运行时配置读取；StrategyV 使用专用档位
 		ScanIntervalMin:     rcSnap.ScanIntervalMin,                            // 用于 prompt 动态时间
@@ -2051,33 +2053,64 @@ func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, dec *decision
 	}
 	log.Printf("  %s 开%s仓: %s", icon, sideName, dec.Symbol)
 
-	// ⚠️ 关键：检查是否已有同币种同方向持仓，如果有则拒绝开仓（防止仓位叠加超限）
+	minSize := ctx.MinOpenPositionSizeUSD()
+	if dec.PositionSizeUSD < minSize {
+		return fmt.Errorf("执行前名义仓位 %.2f USDT 低于开仓下限 %.2f USDT", dec.PositionSizeUSD, minSize)
+	}
+
+	strategyV := ctx != nil && ctx.PromptStrategy != nil && ctx.PromptStrategy.Name() == "V"
 	positions, err := at.trader.GetPositions()
-	if err == nil {
-		for _, pos := range positions {
-			if pos["symbol"] == dec.Symbol && pos["side"] == side {
-				return fmt.Errorf("❌ %s 已有%s仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_%s 决策", dec.Symbol, sideName, side)
+	if err != nil && strategyV {
+		return fmt.Errorf("StrategyV执行前无法确认持仓: %w", err)
+	}
+	for _, pos := range positions {
+		if pos["symbol"] != dec.Symbol {
+			continue
+		}
+		if pos["side"] == side {
+			return fmt.Errorf("❌ %s 已有%s仓，拒绝开仓以防止仓位叠加超限。如需换仓，请先给出 close_%s 决策", dec.Symbol, sideName, side)
+		}
+		// Binance and Hyperliquid cancel symbol orders during preparation. Keep the
+		// opposite position's protection intact even if the final price rejects the new order.
+		switch at.trader.(type) {
+		case *FuturesTrader, *HyperliquidTrader:
+			if strategyV {
+				return fmt.Errorf("StrategyV %s 已有反向持仓，不能清理该币种保护单", dec.Symbol)
 			}
 		}
 	}
 
-	// 获取当前价格。开仓需要用价格计算下单数量，因此仍是硬依赖。
-	currentPrice, err := at.trader.GetMarketPrice(dec.Symbol)
-	if err != nil {
-		return err
+	var currentPrice, quantity float64
+	sizeAtPrice := func(price float64) (float64, error) {
+		actionRecord.Price = price
+		if strategyV {
+			if err := decision.ValidateShortTermExecutionPrice(dec, ctx, price); err != nil {
+				return 0, err
+			}
+		}
+		currentPrice = price
+		quantity = dec.PositionSizeUSD / currentPrice
+		actionRecord.Quantity = quantity
+		return quantity, nil
 	}
 
-	// 计算数量
-	quantity := dec.PositionSizeUSD / currentPrice
-	actionRecord.Quantity = quantity
-	actionRecord.Price = currentPrice
-
-	// 开仓
 	var order map[string]interface{}
-	if side == "long" {
-		order, err = at.trader.OpenLong(dec.Symbol, quantity, dec.Leverage)
+	if opener, ok := at.trader.(priceCheckedOpener); strategyV && ok {
+		order, err = opener.openPositionWithPriceCheck(dec.Symbol, side, 0, dec.Leverage, sizeAtPrice)
 	} else {
-		order, err = at.trader.OpenShort(dec.Symbol, quantity, dec.Leverage)
+		price, priceErr := at.trader.GetMarketPrice(dec.Symbol)
+		if priceErr != nil {
+			return priceErr
+		}
+		qty, sizeErr := sizeAtPrice(price)
+		if sizeErr != nil {
+			return sizeErr
+		}
+		if side == "long" {
+			order, err = at.trader.OpenLong(dec.Symbol, qty, dec.Leverage)
+		} else {
+			order, err = at.trader.OpenShort(dec.Symbol, qty, dec.Leverage)
+		}
 	}
 	if err != nil {
 		return err

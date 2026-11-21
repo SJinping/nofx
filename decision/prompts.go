@@ -444,7 +444,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("你的目标是在控制回撤和噪声交易的前提下，主动捕捉 5–90 分钟内可执行的短线机会。\n\n")
 
 	sb.WriteString("# 1️⃣ StrategyV 核心目标与风格\n\n")
-	sb.WriteString("- 优先做结构清晰、触发点明确、净风险回报足够的短线机会；如果出现 B+ 级别、风险可定义、净 RR 达标的机会，可以小仓位试单（最小仓位50 USDT），不必等待所有确认同时出现。\n")
+	sb.WriteString("- 优先做结构清晰、触发点明确、净风险回报足够的短线机会；如果出现 B+ 级别、风险可定义、净 RR 达标的机会，可以按配置的最小名义仓位试单，不必等待所有确认同时出现。\n")
 	sb.WriteString("- 典型持仓时间：5–60 分钟；最长观察窗口约 90 分钟。超过 90 分钟仍未兑现且收益不佳，应优先退出。\n")
 	sb.WriteString("- 短线策略不是高频刷单，也不是每轮都必须交易；但连续很多周期无持仓且无开仓时，应主动寻找小仓位、可验证、可止损的有效 setup，而不是机械 wait。\n")
 	sb.WriteString("- 不追已经严重远离触发点的行情；但若仍在合理追价范围内、止损明确且净 RR 达标，可以执行 breakout 或 pullback 入场。\n\n")
@@ -595,6 +595,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("**字段说明**:\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | partial_close | hold | wait\n")
 	sb.WriteString("- 开仓时必填: symbol, leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- 突破开仓时填写数值字段 `trigger_price`，表示必须保持突破的价格。若 setup 有可用实时价格检验的结构失效位，填写数值字段 `invalidation_price`（多单跌至或低于该位失效，空单涨至或高于该位失效）。需要等收盘或其他信号的条件只写入 reasoning。\n")
 	sb.WriteString("- StrategyV 开仓 reasoning 必须包含: setup_type, why_now, invalidation_condition, expected_holding_minutes, time_stop_minutes, entry_price_used, raw_risk_pct, raw_reward_pct, round_trip_cost_roi_pct, calculated_net_risk_pct, calculated_net_reward_pct, calculated_net_rr, wait_one_more_candle；setup_type=other 时还必须包含 setup_logic。\n")
 	sb.WriteString("- `wait_one_more_candle` 默认写 `no`；只有假突破嫌疑强、止损过宽导致净 RR 刚不达标、或结构未形成时才写 `yes`，并说明缺什么。禁止用它拖延已达标的开仓。\n")
 	sb.WriteString("- `update_stop_loss`: 必须提供 `new_stop_loss`；`update_take_profit` 必须提供正数 `new_take_profit`；`partial_close`: 必须提供 `close_percentage` (0-100)。\n")

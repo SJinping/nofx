@@ -1,5 +1,11 @@
 package decision
 
+import "fmt"
+
+func minPositionSizePrompt(ctx *Context) string {
+	return fmt.Sprintf("\n**开仓最小名义仓位**：position_size_usd 必须至少为 %g USDT。\n", ctx.MinOpenPositionSizeUSD())
+}
+
 // StrategyA 默认策略：复用现有 buildSystemPrompt / buildUserPrompt
 type StrategyA struct{}
 
@@ -15,7 +21,7 @@ func (StrategyA) BuildSystemPrompt(ctx *Context) string {
 		ctx.AssumedTakerFeeRate,
 		ctx.AssumedSlippageRate,
 		minRiskRewardFor(ctx),
-	)
+	) + minPositionSizePrompt(ctx)
 }
 
 func (StrategyA) BuildUserPrompt(ctx *Context) string {
@@ -39,7 +45,7 @@ type StrategyB struct{}
 func (StrategyB) Name() string { return "B" }
 
 func (StrategyB) BuildSystemPrompt(ctx *Context) string {
-	return buildSystemPromptB(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.AltcoinMaxPositionEquityMultiple, ctx.ScanIntervalMin)
+	return buildSystemPromptB(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage, ctx.AltcoinMaxPositionEquityMultiple, ctx.ScanIntervalMin) + minPositionSizePrompt(ctx)
 }
 
 func (StrategyB) BuildUserPrompt(ctx *Context) string {
@@ -71,7 +77,7 @@ func (StrategyV) BuildSystemPrompt(ctx *Context) string {
 		ctx.AssumedSlippageRate,
 		minRiskRewardFor(ctx),
 		ctx.PaperTradingMode,
-	)
+	) + minPositionSizePrompt(ctx)
 }
 
 func (StrategyV) BuildUserPrompt(ctx *Context) string {

@@ -277,7 +277,7 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	return result, nil
 }
 
-// SetLeverage 设置杠杆（智能判断+冷却期）
+// SetLeverage 设置杠杆
 func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 	// 先尝试获取当前杠杆（从持仓信息）
 	currentLeverage := 0
@@ -316,9 +316,9 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 
 	log.Printf("  ✓ %s 杠杆已切换为 %dx", symbol, leverage)
 
-	// 切换杠杆后等待5秒（避免冷却期错误）
-	log.Printf("  ⏱ 等待5秒冷却期...")
-	time.Sleep(5 * time.Second)
+	// 固定的杠杆切换等待暂时禁用。
+	// log.Printf("  ⏱ 等待5秒冷却期...")
+	// time.Sleep(5 * time.Second)
 
 	return nil
 }
@@ -357,52 +357,15 @@ func (t *FuturesTrader) SetMarginType(symbol string, marginType futures.MarginTy
 
 // OpenLong 开多仓
 func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// 先取消该币种的所有委托单（清理旧的止损止盈单）
-	if err := t.CancelAllOrders(symbol); err != nil {
-		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
-	}
-
-	// 设置逐仓模式（在取消挂单后立即执行，避免挂单干扰）
-	if err := t.SetMarginType(symbol, futures.MarginTypeIsolated); err != nil {
-		return nil, err
-	}
-
-	// 设置杠杆
-	if err := t.SetLeverage(symbol, leverage); err != nil {
-		return nil, err
-	}
-
-	// 格式化数量到正确精度
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建市价买入订单
-	order, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(futures.SideTypeBuy).
-		PositionSide(futures.PositionSideTypeLong).
-		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		Do(context.Background())
-
-	if err != nil {
-		return nil, fmt.Errorf("开多仓失败: %w", err)
-	}
-
-	log.Printf("✓ 开多仓成功: %s 数量: %s", symbol, quantityStr)
-	log.Printf("  订单ID: %d", order.OrderID)
-
-	result := make(map[string]interface{})
-	result["orderId"] = order.OrderID
-	result["symbol"] = order.Symbol
-	result["status"] = order.Status
-	return result, nil
+	return t.openPositionWithPriceCheck(symbol, "long", quantity, leverage, nil)
 }
 
 // OpenShort 开空仓
 func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	return t.openPositionWithPriceCheck(symbol, "short", quantity, leverage, nil)
+}
+
+func (t *FuturesTrader) openPositionWithPriceCheck(symbol, side string, quantity float64, leverage int, sizeAtPrice openSizeAtPrice) (map[string]interface{}, error) {
 	// 先取消该币种的所有委托单（清理旧的止损止盈单）
 	if err := t.CancelAllOrders(symbol); err != nil {
 		log.Printf("  ⚠ 取消旧委托单失败（可能没有委托单）: %v", err)
@@ -418,26 +381,41 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		return nil, err
 	}
 
-	// 格式化数量到正确精度
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return nil, err
+	orderSide, positionSide, sideName := futures.SideTypeBuy, futures.PositionSideTypeLong, "多"
+	if side == "short" {
+		orderSide, positionSide, sideName = futures.SideTypeSell, futures.PositionSideTypeShort, "空"
 	}
 
-	// 创建市价卖出订单
+	precision, err := t.GetSymbolPrecision(symbol)
+	if err != nil {
+		precision = 3 // 与 FormatQuantity 的默认精度一致
+	}
+	if sizeAtPrice != nil {
+		price, err := t.GetMarketPrice(symbol)
+		if err != nil {
+			return nil, err
+		}
+		quantity, err = sizeAtPrice(price)
+		if err != nil {
+			return nil, err
+		}
+	}
+	quantityStr := strconv.FormatFloat(quantity, 'f', precision, 64)
+
+	// 创建市价开仓订单
 	order, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
-		Side(futures.SideTypeSell).
-		PositionSide(futures.PositionSideTypeShort).
+		Side(orderSide).
+		PositionSide(positionSide).
 		Type(futures.OrderTypeMarket).
 		Quantity(quantityStr).
 		Do(context.Background())
 
 	if err != nil {
-		return nil, fmt.Errorf("开空仓失败: %w", err)
+		return nil, fmt.Errorf("开%s仓失败: %w", sideName, err)
 	}
 
-	log.Printf("✓ 开空仓成功: %s 数量: %s", symbol, quantityStr)
+	log.Printf("✓ 开%s仓成功: %s 数量: %s", sideName, symbol, quantityStr)
 	log.Printf("  订单ID: %d", order.OrderID)
 
 	result := make(map[string]interface{})

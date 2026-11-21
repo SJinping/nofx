@@ -522,68 +522,15 @@ func (t *AsterTrader) GetPositions() ([]map[string]interface{}, error) {
 
 // OpenLong 开多单
 func (t *AsterTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// 先设置杠杆
-	if err := t.SetLeverage(symbol, leverage); err != nil {
-		return nil, fmt.Errorf("设置杠杆失败: %w", err)
-	}
-
-	// 获取当前价格
-	price, err := t.GetMarketPrice(symbol)
-	if err != nil {
-		return nil, err
-	}
-
-	// 使用限价单模拟市价单（价格设置得稍高一些以确保成交）
-	limitPrice := price * 1.01
-
-	// 格式化价格和数量到正确精度
-	formattedPrice, err := t.formatPrice(symbol, limitPrice)
-	if err != nil {
-		return nil, err
-	}
-	formattedQty, err := t.formatQuantity(symbol, quantity)
-	if err != nil {
-		return nil, err
-	}
-
-	// 获取精度信息
-	prec, err := t.getPrecision(symbol)
-	if err != nil {
-		return nil, err
-	}
-
-	// 转换为字符串，使用正确的精度格式
-	priceStr := t.formatFloatWithPrecision(formattedPrice, prec.PricePrecision)
-	qtyStr := t.formatFloatWithPrecision(formattedQty, prec.QuantityPrecision)
-
-	log.Printf("  📏 精度处理: 价格 %.8f -> %s (精度=%d), 数量 %.8f -> %s (精度=%d)",
-		limitPrice, priceStr, prec.PricePrecision, quantity, qtyStr, prec.QuantityPrecision)
-
-	params := map[string]interface{}{
-		"symbol":       symbol,
-		"positionSide": "BOTH",
-		"type":         "LIMIT",
-		"side":         "BUY",
-		"timeInForce":  "GTC",
-		"quantity":     qtyStr,
-		"price":        priceStr,
-	}
-
-	body, err := t.request("POST", "/fapi/v3/order", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	return result, nil
+	return t.openPositionWithPriceCheck(symbol, "long", quantity, leverage, nil)
 }
 
 // OpenShort 开空单
 func (t *AsterTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	return t.openPositionWithPriceCheck(symbol, "short", quantity, leverage, nil)
+}
+
+func (t *AsterTrader) openPositionWithPriceCheck(symbol, side string, quantity float64, leverage int, sizeAtPrice openSizeAtPrice) (map[string]interface{}, error) {
 	// 先设置杠杆
 	if err := t.SetLeverage(symbol, leverage); err != nil {
 		return nil, fmt.Errorf("设置杠杆失败: %w", err)
@@ -594,9 +541,19 @@ func (t *AsterTrader) OpenShort(symbol string, quantity float64, leverage int) (
 	if err != nil {
 		return nil, err
 	}
+	if sizeAtPrice != nil {
+		quantity, err = sizeAtPrice(price)
+		if err != nil {
+			return nil, err
+		}
+	}
 
-	// 使用限价单模拟市价单（价格设置得稍低一些以确保成交）
-	limitPrice := price * 0.99
+	// 使用限价单模拟市价单。
+	orderSide, priceMultiplier := "BUY", 1.01
+	if side == "short" {
+		orderSide, priceMultiplier = "SELL", 0.99
+	}
+	limitPrice := price * priceMultiplier
 
 	// 格式化价格和数量到正确精度
 	formattedPrice, err := t.formatPrice(symbol, limitPrice)
@@ -625,7 +582,7 @@ func (t *AsterTrader) OpenShort(symbol string, quantity float64, leverage int) (
 		"symbol":       symbol,
 		"positionSide": "BOTH",
 		"type":         "LIMIT",
-		"side":         "SELL",
+		"side":         orderSide,
 		"timeInForce":  "GTC",
 		"quantity":     qtyStr,
 		"price":        priceStr,

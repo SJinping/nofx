@@ -108,7 +108,7 @@ func TestStrategyVRepricesNetRiskAtExecution(t *testing.T) {
 	if err := validateShortTermOpenRisk(&d, ctx); err != nil || math.Abs(d.RiskUSD-9.912) > 1e-8 {
 		t.Fatalf("snapshot risk=%f err=%v", d.RiskUSD, err)
 	}
-	if err := validateShortTermExecutionPrice(&d, ctx, 100.05); err == nil || !strings.Contains(err.Error(), "单笔风险过大") {
+	if err := ValidateShortTermExecutionPrice(&d, ctx, 100.05); err == nil || !strings.Contains(err.Error(), "单笔风险过大") {
 		t.Fatalf("expected live risk > 10 USDT despite acceptable RR: %v", err)
 	}
 }
@@ -141,5 +141,31 @@ func TestStrategyVExampleUsesConfiguredCostsAndThreshold(t *testing.T) {
 	}
 	if strings.Contains(shortTermDecisionExamples(5, .0005, .0004, 3), "open_long") {
 		t.Fatal("below-threshold example recommended opening")
+	}
+}
+
+func TestStrategyVRejectsStaleShortBeforeOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		price   float64
+		trigger float64
+		want    string
+	}{
+		{name: "valid setup", price: 100, trigger: 100.05},
+		{name: "stop too close", price: 100.15, want: "实时止损距离过近"},
+		{name: "breakout invalidated", price: 100.06, trigger: 100.05, want: "实时突破失效"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := testStrategyVRiskContext(StrategyV{})
+			d := validStrategyVOpenDecision()
+			d.Action, d.StopLoss, d.TakeProfit, d.TriggerPrice = ActionOpenShort, 100.5, 98, tc.trigger
+			err := ValidateShortTermExecutionPrice(&d, ctx, tc.price)
+			if tc.want == "" && err != nil {
+				t.Fatalf("valid open rejected: %v", err)
+			}
+			if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
+		})
 	}
 }

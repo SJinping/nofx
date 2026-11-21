@@ -195,6 +195,15 @@ func (t *HyperliquidTrader) SetLeverage(symbol string, leverage int) error {
 
 // OpenLong 开多仓
 func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	return t.openPositionWithPriceCheck(symbol, "long", quantity, leverage, nil)
+}
+
+// OpenShort 开空仓
+func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	return t.openPositionWithPriceCheck(symbol, "short", quantity, leverage, nil)
+}
+
+func (t *HyperliquidTrader) openPositionWithPriceCheck(symbol, side string, quantity float64, leverage int, sizeAtPrice openSizeAtPrice) (map[string]interface{}, error) {
 	// 先取消该币种的所有委托单
 	if err := t.CancelAllOrders(symbol); err != nil {
 		log.Printf("  ⚠ 取消旧委托单失败: %v", err)
@@ -213,19 +222,29 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 	if err != nil {
 		return nil, err
 	}
+	if sizeAtPrice != nil {
+		quantity, err = sizeAtPrice(price)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// ⚠️ 关键：根据币种精度要求，四舍五入数量
 	roundedQuantity := t.roundToSzDecimals(coin, quantity)
 	log.Printf("  📏 数量精度处理: %.8f -> %.8f (szDecimals=%d)", quantity, roundedQuantity, t.getSzDecimals(coin))
 
-	// ⚠️ 关键：价格也需要处理为5位有效数字
-	aggressivePrice := t.roundPriceToSigfigs(price * 1.01)
-	log.Printf("  💰 价格精度处理: %.8f -> %.8f (5位有效数字)", price*1.01, aggressivePrice)
+	priceMultiplier, sideName := 1.01, "多"
+	if side == "short" {
+		priceMultiplier, sideName = 0.99, "空"
+	}
+	limitPrice := price * priceMultiplier
+	aggressivePrice := t.roundPriceToSigfigs(limitPrice)
+	log.Printf("  💰 价格精度处理: %.8f -> %.8f (5位有效数字)", limitPrice, aggressivePrice)
 
-	// 创建市价买入订单（使用IOC limit order with aggressive price）
+	// 创建开仓订单（使用IOC limit order with aggressive price）
 	order := hyperliquid.CreateOrderRequest{
 		Coin:  coin,
-		IsBuy: true,
+		IsBuy: side == "long",
 		Size:  roundedQuantity, // 使用四舍五入后的数量
 		Price: aggressivePrice, // 使用处理后的价格
 		OrderType: hyperliquid.OrderType{
@@ -238,71 +257,13 @@ func (t *HyperliquidTrader) OpenLong(symbol string, quantity float64, leverage i
 
 	_, err = t.exchange.Order(t.ctx, order, nil)
 	if err != nil {
-		return nil, fmt.Errorf("开多仓失败: %w", err)
+		return nil, fmt.Errorf("开%s仓失败: %w", sideName, err)
 	}
 
-	log.Printf("✓ 开多仓成功: %s 数量: %.4f", symbol, roundedQuantity)
+	log.Printf("✓ 开%s仓成功: %s 数量: %.4f", sideName, symbol, roundedQuantity)
 
 	result := make(map[string]interface{})
 	result["orderId"] = 0 // Hyperliquid没有返回order ID
-	result["symbol"] = symbol
-	result["status"] = "FILLED"
-
-	return result, nil
-}
-
-// OpenShort 开空仓
-func (t *HyperliquidTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// 先取消该币种的所有委托单
-	if err := t.CancelAllOrders(symbol); err != nil {
-		log.Printf("  ⚠ 取消旧委托单失败: %v", err)
-	}
-
-	// 设置杠杆
-	if err := t.SetLeverage(symbol, leverage); err != nil {
-		return nil, err
-	}
-
-	// Hyperliquid symbol格式
-	coin := convertSymbolToHyperliquid(symbol)
-
-	// 获取当前价格
-	price, err := t.GetMarketPrice(symbol)
-	if err != nil {
-		return nil, err
-	}
-
-	// ⚠️ 关键：根据币种精度要求，四舍五入数量
-	roundedQuantity := t.roundToSzDecimals(coin, quantity)
-	log.Printf("  📏 数量精度处理: %.8f -> %.8f (szDecimals=%d)", quantity, roundedQuantity, t.getSzDecimals(coin))
-
-	// ⚠️ 关键：价格也需要处理为5位有效数字
-	aggressivePrice := t.roundPriceToSigfigs(price * 0.99)
-	log.Printf("  💰 价格精度处理: %.8f -> %.8f (5位有效数字)", price*0.99, aggressivePrice)
-
-	// 创建市价卖出订单
-	order := hyperliquid.CreateOrderRequest{
-		Coin:  coin,
-		IsBuy: false,
-		Size:  roundedQuantity, // 使用四舍五入后的数量
-		Price: aggressivePrice, // 使用处理后的价格
-		OrderType: hyperliquid.OrderType{
-			Limit: &hyperliquid.LimitOrderType{
-				Tif: hyperliquid.TifIoc,
-			},
-		},
-		ReduceOnly: false,
-	}
-
-	_, err = t.exchange.Order(t.ctx, order, nil)
-	if err != nil {
-		return nil, fmt.Errorf("开空仓失败: %w", err)
-	}
-
-	log.Printf("✓ 开空仓成功: %s 数量: %.4f", symbol, roundedQuantity)
-
-	result := make(map[string]interface{})
-	result["orderId"] = 0
 	result["symbol"] = symbol
 	result["status"] = "FILLED"
 

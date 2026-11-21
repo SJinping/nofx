@@ -286,18 +286,19 @@ func loadRecordedContexts(dir string) ([]*RecordedContext, error) {
 // recordToContext 将录制数据转换为决策上下文
 func recordToContext(record *RecordedContext, strategy PromptStrategy) *Context {
 	ctx := &Context{
-		CurrentTime:     record.CurrentTime,
-		RuntimeMinutes:  record.RuntimeMinutes,
-		CallCount:       record.CallCount,
-		Account:         record.Account,
-		Positions:       record.Positions,
-		CandidateCoins:  record.CandidateCoins,
-		MarketDataMap:   record.MarketData,
-		OITopDataMap:    record.OITopData,
-		BTCETHLeverage:  record.BTCETHLeverage,
-		AltcoinLeverage: record.AltcoinLeverage,
-		PromptStrategy:  strategy,
-		EnableRecording: false, // 回测时不录制
+		CurrentTime:        record.CurrentTime,
+		RuntimeMinutes:     record.RuntimeMinutes,
+		CallCount:          record.CallCount,
+		Account:            record.Account,
+		Positions:          record.Positions,
+		CandidateCoins:     record.CandidateCoins,
+		MarketDataMap:      record.MarketData,
+		OITopDataMap:       record.OITopData,
+		BTCETHLeverage:     record.BTCETHLeverage,
+		AltcoinLeverage:    record.AltcoinLeverage,
+		MinPositionSizeUSD: record.MinPositionSizeUSD,
+		PromptStrategy:     strategy,
+		EnableRecording:    false, // 回测时不录制
 	}
 
 	if record.Performance != nil {

@@ -70,6 +70,9 @@ type TraderConfig struct {
 	// 最小净风险回报比（默认 2.2，仅对本 trader 生效，支持热更新）
 	MinRiskReward float64 `json:"min_risk_reward,omitempty"`
 
+	// 最小开仓名义金额（USDT）。省略或为 0 时使用默认 50。
+	MinPositionSizeUSD float64 `json:"min_position_size_usd,omitempty"`
+
 	// 新增：Prompt策略选择（A 或 B）
 	PromptStrategy string `json:"prompt_strategy,omitempty"`
 
@@ -412,6 +415,9 @@ func (c *Config) Validate() error {
 		}
 		if trader.AssumedSlippageRate != nil && *trader.AssumedSlippageRate < 0 {
 			return fmt.Errorf("trader[%d]: assumed_slippage_rate 必须≥0（不填则使用默认）", i)
+		}
+		if trader.MinPositionSizeUSD < 0 {
+			return fmt.Errorf("trader[%d]: min_position_size_usd 必须大于0（为0或不填时使用默认）", i)
 		}
 		if trader.ScanIntervalMinutes <= 0 {
 			trader.ScanIntervalMinutes = 3 // 默认3分钟

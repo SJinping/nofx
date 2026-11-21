@@ -84,3 +84,27 @@ func TestValidateDecisionRejectsWhenAdjustedRRIsTooLow(t *testing.T) {
 		t.Fatalf("expected RR rejection after stop adjustment, got %v", err)
 	}
 }
+
+func TestConfiguredMinimumIsSharedByPromptAndOpeningChecks(t *testing.T) {
+	ctx := testAdaptiveContext()
+	smallOpen := Decision{Symbol: "BTCUSDT", Action: ActionOpenLong, Leverage: 3, PositionSizeUSD: 40, StopLoss: 99, TakeProfit: 104}
+	if err := coreValidateDecision(&smallOpen, ctx); err == nil || !strings.Contains(err.Error(), "50.00") {
+		t.Fatalf("expected the default minimum to reject a 40 USDT open, got %v", err)
+	}
+
+	ctx.MinPositionSizeUSD = 35
+	for _, strategy := range []PromptStrategy{StrategyA{}, StrategyB{}, StrategyV{}} {
+		if !strings.Contains(strategy.BuildSystemPrompt(ctx), "position_size_usd 必须至少为 35 USDT") {
+			t.Errorf("missing configured minimum in Strategy%s prompt", strategy.Name())
+		}
+	}
+	if err := coreValidateDecision(&smallOpen, ctx); err != nil {
+		t.Fatalf("configured minimum rejected a 40 USDT open: %v", err)
+	}
+
+	adjustedOpen := smallOpen
+	adjustedOpen.PositionSizeUSD, adjustedOpen.StopLoss = 80, 99.5
+	if err := coreValidateDecision(&adjustedOpen, ctx); err != nil || adjustedOpen.PositionSizeUSD != 40 {
+		t.Fatalf("expected a valid 40 USDT position after adjustment, got %.2f, %v", adjustedOpen.PositionSizeUSD, err)
+	}
+}

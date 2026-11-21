@@ -147,7 +147,11 @@ func applyShortTermStopLossDistanceConfig(ctx *Context) {
 	if ctx == nil {
 		return
 	}
-	ctx.StopLossDistance = StopLossDistanceConfig{
+	ctx.StopLossDistance = shortTermStopLossDistanceConfig()
+}
+
+func shortTermStopLossDistanceConfig() StopLossDistanceConfig {
+	return StopLossDistanceConfig{
 		MajorMinPct:  shortTermMajorMinStopPct,
 		MajorATRMult: shortTermMajorMinStopATR,
 		MajorVolMult: 0,
@@ -379,23 +383,18 @@ func guardShortTermDecisionsAtRealtimePrice(decisions []Decision, ctx *Context) 
 	var guardErrors []error
 	for i := range decisions {
 		d := &decisions[i]
-		if d.Action != ActionOpenLong && d.Action != ActionOpenShort {
+		if d.ValidationError != "" || (d.Action != ActionOpenLong && d.Action != ActionOpenShort) {
 			continue
 		}
 
 		livePrice, err := market.GetRealtimePrice(d.Symbol)
 		if err == nil {
-			err = validateShortTermExecutionPrice(d, ctx, livePrice)
+			err = ValidateShortTermExecutionPrice(d, ctx, livePrice)
 		}
 		if err != nil {
 			guardErr := fmt.Errorf("决策 #%d %s: %w", i+1, d.Symbol, err)
 			guardErrors = append(guardErrors, guardErr)
 			convertShortTermOpenToWait(d, guardErr.Error())
-			continue
-		}
-
-		if md := ctx.MarketDataMap[d.Symbol]; md != nil {
-			md.CurrentPrice = livePrice
 		}
 	}
 	return guardErrors
@@ -424,14 +423,15 @@ func convertShortTermOpenToWait(d *Decision, guardReason string) {
 	}
 }
 
-func validateShortTermExecutionPrice(d *Decision, ctx *Context, livePrice float64) error {
+// ValidateShortTermExecutionPrice checks a StrategyV entry against its original market snapshot.
+func ValidateShortTermExecutionPrice(d *Decision, ctx *Context, livePrice float64) error {
 	if d == nil || ctx == nil {
 		return fmt.Errorf("StrategyV执行前价格校验缺少决策或上下文")
 	}
 	if d.Action != ActionOpenLong && d.Action != ActionOpenShort {
 		return nil
 	}
-	if livePrice <= 0 {
+	if !(livePrice > 0) || math.IsInf(livePrice, 0) {
 		return fmt.Errorf("StrategyV执行前实时价格无效: %.8f", livePrice)
 	}
 
@@ -473,8 +473,21 @@ func validateShortTermExecutionPrice(d *Decision, ctx *Context, livePrice float6
 		riskPercent = (d.StopLoss - livePrice) / livePrice * 100
 		rewardPercent = (livePrice - d.TakeProfit) / livePrice * 100
 	}
-	if riskPercent <= 0 || rewardPercent <= 0 {
-		return fmt.Errorf("StrategyV实时价格下无法计算有效RR：risk=%.4f%% reward=%.4f%%", riskPercent, rewardPercent)
+	stopConfig := shortTermStopLossDistanceConfig()
+	minStopDist := stopLossMinDistance(d.Symbol, livePrice, md, &stopConfig)
+	stopDist := math.Abs(livePrice - d.StopLoss)
+	if stopDist+livePrice*1e-12 < minStopDist {
+		return fmt.Errorf("StrategyV实时止损距离过近：%s 实时价 %.8f 止损 %.8f 距离 %.8f < 最小距离 %.8f", d.Symbol, livePrice, d.StopLoss, stopDist, minStopDist)
+	}
+
+	invalidationPrice := d.InvalidationPrice
+	if invalidationPrice > 0 && ((d.Action == ActionOpenLong && livePrice <= invalidationPrice) ||
+		(d.Action == ActionOpenShort && livePrice >= invalidationPrice)) {
+		return fmt.Errorf("StrategyV实时入场条件失效：%s 实时价 %.8f 已收回关键价位 %.8f", d.Symbol, livePrice, invalidationPrice)
+	}
+	if shortTermSetupType(d) == "breakout_momentum" && d.TriggerPrice > 0 &&
+		((d.Action == ActionOpenLong && livePrice <= d.TriggerPrice) || (d.Action == ActionOpenShort && livePrice >= d.TriggerPrice)) {
+		return fmt.Errorf("StrategyV实时突破失效：%s 实时价 %.8f 已收回突破位 %.8f", d.Symbol, livePrice, d.TriggerPrice)
 	}
 
 	leverage := float64(d.Leverage)

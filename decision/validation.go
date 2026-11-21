@@ -61,9 +61,7 @@ func stopLossMinDistance(symbol string, currentPrice float64, md *market.Data, s
 	return minDist
 }
 
-const minAdjustedPositionSizeUSD = 50.0
-
-func maybeAdjustOpenStopLossToMinDistance(d *Decision, entryPrice, minDist float64) (bool, error) {
+func maybeAdjustOpenStopLossToMinDistance(d *Decision, entryPrice, minDist, minPositionSizeUSD float64) (bool, error) {
 	if d == nil || entryPrice <= 0 || minDist <= 0 {
 		return false, nil
 	}
@@ -96,9 +94,9 @@ func maybeAdjustOpenStopLossToMinDistance(d *Decision, entryPrice, minDist float
 	}
 
 	adjustedPositionSize := originalPositionSize * originalDist / minDist
-	if adjustedPositionSize < minAdjustedPositionSizeUSD {
+	if adjustedPositionSize < minPositionSizeUSD {
 		return false, fmt.Errorf("止损过近且自适应缩仓后仓位过小：symbol=%s 原仓位=%.2f USDT 原距离=%.4f 调整后距离=%.4f 调整后仓位=%.2f USDT，必须≥%.2f USDT",
-			d.Symbol, originalPositionSize, originalDist, minDist, adjustedPositionSize, minAdjustedPositionSizeUSD)
+			d.Symbol, originalPositionSize, originalDist, minDist, adjustedPositionSize, minPositionSizeUSD)
 	}
 
 	d.StopLoss = adjustedStopLoss
@@ -258,6 +256,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		if d.Leverage <= 0 || d.Leverage > maxLeverage {
 			return fmt.Errorf("杠杆必须在1-%d之间（%s，当前配置上限%d倍）: %d", maxLeverage, d.Symbol, maxLeverage, d.Leverage)
 		}
+		minPositionSizeUSD := ctx.MinOpenPositionSizeUSD()
 		if d.PositionSizeUSD < minPositionSizeUSD {
 			return fmt.Errorf("仓位大小必须大于或等于%.2f: %.2f", minPositionSizeUSD, d.PositionSizeUSD)
 		}
@@ -308,7 +307,7 @@ func coreValidateDecision(d *Decision, ctx *Context) error {
 		if ctx != nil && ctx.MarketDataMap != nil {
 			if md, ok := ctx.MarketDataMap[d.Symbol]; ok && md != nil && md.CurrentPrice > 0 && entryPrice > 0 {
 				minDist := stopLossMinDistance(d.Symbol, entryPrice, md, &ctx.StopLossDistance)
-				if _, err := maybeAdjustOpenStopLossToMinDistance(d, entryPrice, minDist); err != nil {
+				if _, err := maybeAdjustOpenStopLossToMinDistance(d, entryPrice, minDist, minPositionSizeUSD); err != nil {
 					return err
 				}
 			}

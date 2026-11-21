@@ -25,9 +25,10 @@ type RecordedContext struct {
 	OITopData  map[string]*OITopData   `json:"oi_top_data"`
 
 	// 配置和绩效
-	BTCETHLeverage  int                  `json:"btc_eth_leverage"`
-	AltcoinLeverage int                  `json:"altcoin_leverage"`
-	Performance     *PerformanceSnapshot `json:"performance,omitempty"`
+	BTCETHLeverage     int                  `json:"btc_eth_leverage"`
+	AltcoinLeverage    int                  `json:"altcoin_leverage"`
+	MinPositionSizeUSD float64              `json:"min_position_size_usd,omitempty"`
+	Performance        *PerformanceSnapshot `json:"performance,omitempty"`
 }
 
 // PerformanceSnapshot 绩效快照（避免使用interface{}）
@@ -41,16 +42,17 @@ type PerformanceSnapshot struct {
 func saveContextToFile(ctx *Context, traderID string) error {
 	// 转换为可序列化的结构
 	record := &RecordedContext{
-		CurrentTime:     ctx.CurrentTime,
-		RuntimeMinutes:  ctx.RuntimeMinutes,
-		CallCount:       ctx.CallCount,
-		Account:         ctx.Account,
-		Positions:       ctx.Positions,
-		CandidateCoins:  ctx.CandidateCoins,
-		MarketData:      ctx.MarketDataMap, // ✅ 保存市场数据
-		OITopData:       ctx.OITopDataMap,  // ✅ 保存OI数据
-		BTCETHLeverage:  ctx.BTCETHLeverage,
-		AltcoinLeverage: ctx.AltcoinLeverage,
+		CurrentTime:        ctx.CurrentTime,
+		RuntimeMinutes:     ctx.RuntimeMinutes,
+		CallCount:          ctx.CallCount,
+		Account:            ctx.Account,
+		Positions:          ctx.Positions,
+		CandidateCoins:     ctx.CandidateCoins,
+		MarketData:         ctx.MarketDataMap, // ✅ 保存市场数据
+		OITopData:          ctx.OITopDataMap,  // ✅ 保存OI数据
+		BTCETHLeverage:     ctx.BTCETHLeverage,
+		AltcoinLeverage:    ctx.AltcoinLeverage,
+		MinPositionSizeUSD: ctx.MinOpenPositionSizeUSD(),
 	}
 
 	// 提取Performance（如果有）
