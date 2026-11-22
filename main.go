@@ -6,6 +6,7 @@ import (
 	"log"
 	"nofx/api"
 	"nofx/config"
+	"nofx/internal/reconcile"
 	"nofx/logger"
 	"nofx/manager"
 	"nofx/market"
@@ -13,6 +14,7 @@ import (
 	"nofx/stats"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -150,7 +152,9 @@ func main() {
 			log.Fatalf("公开API启动失败: %v", err)
 		}
 	}
+	reconciliation := reconcile.New(filepath.Join(filepath.Dir(configFile), "data", "reconciliation"), cfg)
 	apiServer := api.NewServerWithHost(traderManager, cfg.APIServerPort, cfg.APIListenHost)
+	apiServer.SetReconciliation(reconciliation)
 	go func() {
 		if err := apiServer.Start(); err != nil {
 			log.Printf("❌ API服务器错误: %v", err)
@@ -163,6 +167,7 @@ func main() {
 
 	// 启动所有trader
 	traderManager.StartAll()
+	go reconciliation.Run(publicCtx)
 
 	// 等待退出信号
 	<-sigChan

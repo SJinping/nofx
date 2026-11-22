@@ -837,6 +837,11 @@ func (tm *TradeMemory) AnalyzeCompletedTrades(tradeLimit int) *logger.Performanc
 	return analyzeTradeHistory(history, tradeLimit)
 }
 
+// AnalyzeCompletedHistory calculates display statistics from an immutable history snapshot.
+func AnalyzeCompletedHistory(history []*TradeRecord, tradeLimit int) *logger.PerformanceAnalysis {
+	return analyzeTradeHistory(append([]*TradeRecord(nil), history...), tradeLimit)
+}
+
 func analyzeTradeHistory(history []*TradeRecord, tradeLimit int) *logger.PerformanceAnalysis {
 	analysis := &logger.PerformanceAnalysis{RecentTrades: []logger.TradeOutcome{}, SymbolStats: make(map[string]*logger.SymbolPerformance)}
 	if len(history) == 0 {
@@ -939,13 +944,18 @@ func analyzeTradeHistory(history []*TradeRecord, tradeLimit int) *logger.Perform
 // It intentionally reports no open lots: live positions are supplied separately by
 // the API from the exchange snapshot.
 func (tm *TradeMemory) CompletedSymbolStats() map[string]*logger.SymbolTradeStats {
-	stats := make(map[string]*logger.SymbolTradeStats)
 	if tm == nil {
-		return stats
+		return SummarizeCompletedHistory(nil)
 	}
 	tm.mu.Lock()
 	history := append([]*TradeRecord(nil), tm.history...)
 	tm.mu.Unlock()
+	return SummarizeCompletedHistory(history)
+}
+
+// SummarizeCompletedHistory groups completed trades by symbol.
+func SummarizeCompletedHistory(history []*TradeRecord) map[string]*logger.SymbolTradeStats {
+	stats := make(map[string]*logger.SymbolTradeStats)
 	for _, trade := range history {
 		if trade == nil || trade.Symbol == "" || trade.CloseTime.IsZero() {
 			continue

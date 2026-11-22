@@ -2,6 +2,8 @@ import useSWR from 'swr';
 import { useLanguage } from '../contexts/LanguageContext';
 import { t } from '../i18n/translations';
 import { api } from '../lib/api';
+import type { ReconciliationStatus } from '../types';
+import { ReconciliationNotice } from './ReconciliationNotice';
 
 interface TradeOutcome {
   symbol: string;
@@ -39,6 +41,7 @@ interface PerformanceAnalysis {
   symbol_stats: { [key: string]: SymbolPerformance };
   best_symbol: string;
   worst_symbol: string;
+  reconciliation?: ReconciliationStatus;
 }
 
 interface AILearningProps {
@@ -50,7 +53,7 @@ export default function AILearning({ traderId }: AILearningProps) {
   const { data: performance, error } = useSWR<PerformanceAnalysis>(
     traderId ? `performance-${traderId}` : 'performance',
     () => api.getPerformance(traderId),
-    { refreshInterval: 10000 }
+    { refreshInterval: 60000 }
   );
 
   if (error) {
@@ -76,6 +79,7 @@ export default function AILearning({ traderId }: AILearningProps) {
           <span className="text-xl">🧠</span>
           <h2 className="text-lg font-bold" style={{ color: '#EAECEF' }}>{t('aiLearning', language)}</h2>
         </div>
+        <ReconciliationNotice info={performance.reconciliation} />
         <div style={{ color: '#848E9C' }}>
           {t('noCompleteData', language)}
         </div>
@@ -83,6 +87,7 @@ export default function AILearning({ traderId }: AILearningProps) {
     );
   }
 
+  const winRate = (performance.win_rate || 0) * 100;
   const symbolStats = performance.symbol_stats || {};
   const symbolStatsList = Object.values(symbolStats).filter(stat => stat != null).sort(
     (a, b) => (b.total_pn_l || 0) - (a.total_pn_l || 0)
@@ -90,6 +95,7 @@ export default function AILearning({ traderId }: AILearningProps) {
 
   return (
     <div className="space-y-8">
+      <ReconciliationNotice info={performance.reconciliation} />
       {/* 标题区 - 优化设计 */}
       <div className="relative rounded-2xl p-6 overflow-hidden" style={{
         background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(99, 102, 241, 0.1) 50%, rgba(30, 35, 41, 0.8) 100%)',
@@ -147,26 +153,26 @@ export default function AILearning({ traderId }: AILearningProps) {
 
         {/* 胜率 */}
         <div className="rounded-2xl p-5 relative overflow-hidden group hover:scale-105 transition-transform" style={{
-          background: (performance.win_rate || 0) >= 50
+          background: winRate >= 50
             ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(30, 35, 41, 0.8) 100%)'
             : 'linear-gradient(135deg, rgba(248, 113, 113, 0.2) 0%, rgba(30, 35, 41, 0.8) 100%)',
-          border: `1px solid ${(performance.win_rate || 0) >= 50 ? 'rgba(16, 185, 129, 0.4)' : 'rgba(248, 113, 113, 0.4)'}`,
-          boxShadow: `0 4px 16px ${(performance.win_rate || 0) >= 50 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(248, 113, 113, 0.2)'}`
+          border: `1px solid ${winRate >= 50 ? 'rgba(16, 185, 129, 0.4)' : 'rgba(248, 113, 113, 0.4)'}`,
+          boxShadow: `0 4px 16px ${winRate >= 50 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(248, 113, 113, 0.2)'}`
         }}>
           <div className="absolute top-0 right-0 w-24 h-24 rounded-full opacity-20" style={{
-            background: `radial-gradient(circle, ${(performance.win_rate || 0) >= 50 ? '#10B981' : '#F87171'} 0%, transparent 70%)`,
+            background: `radial-gradient(circle, ${winRate >= 50 ? '#10B981' : '#F87171'} 0%, transparent 70%)`,
             filter: 'blur(20px)'
           }} />
           <div className="relative">
             <div className="text-xs font-semibold mb-3 uppercase tracking-wider" style={{
-              color: (performance.win_rate || 0) >= 50 ? '#6EE7B7' : '#FCA5A5'
+              color: winRate >= 50 ? '#6EE7B7' : '#FCA5A5'
             }}>
               {t('winRate', language)}
             </div>
             <div className="text-4xl font-bold mono mb-1" style={{
-              color: (performance.win_rate || 0) >= 50 ? '#10B981' : '#F87171'
+              color: winRate >= 50 ? '#10B981' : '#F87171'
             }}>
-              {(performance.win_rate || 0).toFixed(1)}%
+              {winRate.toFixed(1)}%
             </div>
             <div className="text-xs" style={{ color: '#94A3B8' }}>
               {performance.winning_trades || 0}W / {performance.losing_trades || 0}L
@@ -271,7 +277,7 @@ export default function AILearning({ traderId }: AILearningProps) {
               )}
             </div>
 
-            {performance.sharpe_ratio !== undefined && (
+            {performance.reconciliation?.source !== 'binance' && performance.sharpe_ratio !== undefined && (
               <div className="rounded-xl p-4" style={{
                 background: 'rgba(0, 0, 0, 0.4)',
                 border: '1px solid rgba(139, 92, 246, 0.3)'

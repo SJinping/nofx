@@ -9,8 +9,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"nofx/internal/reconcile"
+	"nofx/logger"
 	"nofx/manager"
 	"nofx/market"
+	"nofx/memory"
 	traderpkg "nofx/trader"
 	"os"
 	"sort"
@@ -24,11 +27,12 @@ import (
 
 // Server HTTP API服务器
 type Server struct {
-	router        *gin.Engine
-	traderManager *manager.TraderManager
-	port          int
-	listenHost    string
-	equityCache   *EquityHistoryCache
+	router         *gin.Engine
+	traderManager  *manager.TraderManager
+	port           int
+	listenHost     string
+	equityCache    *EquityHistoryCache
+	reconciliation *reconcile.Service
 }
 
 // NewServer 创建API服务器
@@ -59,6 +63,11 @@ func NewServerWithHost(traderManager *manager.TraderManager, port int, host stri
 	s.setupRoutes()
 
 	return s
+}
+
+// SetReconciliation supplies the display ledger before the server starts.
+func (s *Server) SetReconciliation(service *reconcile.Service) {
+	s.reconciliation = service
 }
 
 // corsMiddleware CORS中间件
@@ -215,8 +224,9 @@ type tradedSymbolsSummary struct {
 }
 
 type tradedSymbolsResponse struct {
-	Symbols []tradedSymbolSummaryItem `json:"symbols"`
-	Summary tradedSymbolsSummary      `json:"summary"`
+	Symbols        []tradedSymbolSummaryItem `json:"symbols"`
+	Summary        tradedSymbolsSummary      `json:"summary"`
+	Reconciliation *reconcile.Metadata       `json:"reconciliation,omitempty"`
 }
 
 // ===== Exchange (Orders-based) =====
@@ -529,7 +539,13 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 		return
 	}
 
-	cachedStats := trader.GetCompletedSymbolStats()
+	history, meta := s.reconciliation.History(traderID)
+	var cachedStats map[string]*logger.SymbolTradeStats
+	if history != nil {
+		cachedStats = memory.SummarizeCompletedHistory(history)
+	} else {
+		cachedStats = trader.GetCompletedSymbolStats()
+	}
 
 	items := make(map[string]*tradedSymbolSummaryItem)
 	for _, cs := range cachedStats {
@@ -601,7 +617,7 @@ func (s *Server) handleTradedSymbols(c *gin.Context) {
 	}
 
 	// 汇总 items -> slice + status/unrealized/total/winrate/avg
-	var resp tradedSymbolsResponse
+	resp := tradedSymbolsResponse{Reconciliation: meta}
 	resp.Symbols = make([]tradedSymbolSummaryItem, 0, len(items))
 
 	totalRealized := 0.0
@@ -1314,11 +1330,18 @@ func (s *Server) handlePerformance(c *gin.Context) {
 		tradeLimit = 500
 	}
 
-	// 已完成交易只能从统一账本读取：交易所条件单平仓不会新增 AI cycle，
-	// 因而不能回放有限 decision log 来统计。
-	performance := trader.AnalyzeCompletedTrades(tradeLimit)
+	history, meta := s.reconciliation.History(traderID)
+	var performance *logger.PerformanceAnalysis
+	if history != nil {
+		performance = memory.AnalyzeCompletedHistory(history, tradeLimit)
+	} else {
+		performance = trader.AnalyzeCompletedTrades(tradeLimit)
+	}
 
-	c.JSON(http.StatusOK, performance)
+	c.JSON(http.StatusOK, struct {
+		*logger.PerformanceAnalysis
+		Reconciliation *reconcile.Metadata `json:"reconciliation,omitempty"`
+	}{performance, meta})
 }
 
 // handleCloseAllPositions 平掉所有模型的所有持仓

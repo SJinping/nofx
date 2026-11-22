@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import type { ExchangeOrderStats, ExchangeOrdersResponse, TradedSymbol, TradedSymbolsResponse } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import type React from 'react';
+import { ReconciliationNotice } from './ReconciliationNotice';
 
 // 翻译映射
 const translations: Record<string, Record<string, string>> = {
@@ -88,7 +89,6 @@ interface TradedSymbolsListProps {
 
 export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsListProps) {
   const { language } = useLanguage();
-  const t = (key: string) => translations[language]?.[key] || key;
   
   const [filter, setFilter] = useState<FilterType>('all');
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
@@ -96,10 +96,13 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
   const { data, error, isLoading } = useSWR<TradedSymbolsResponse>(
     traderId ? `traded-symbols-${traderId}` : null,
     () => api.getTradedSymbols(traderId),
-    { refreshInterval: 10000 }
+    { refreshInterval: 60000 }
   );
+  const t = (key: string) => key === 'realizedPnL' && data?.reconciliation?.source === 'binance'
+    ? (language === 'zh' ? '已平仓净盈亏' : 'Closed net P&L')
+    : translations[language]?.[key] || key;
 
-  // 交易所订单汇总只作为展开详情/辅助信息，不覆盖本地 realized PnL 主口径。
+  // 交易所订单汇总用于展开详情，主表由统一的币种统计接口提供。
   const rawBaseSymbols = data?.symbols || [];
   const baseSymbols = rawBaseSymbols.filter((s) => isValidExchangeSymbol(s.symbol));
   const baseSummary = data?.summary;
@@ -130,7 +133,7 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
   const { data: exchangeOrders, isLoading: ordersLoading, error: ordersError } = useSWR<ExchangeOrdersResponse>(
     traderId && expandedSymbol ? `exchange-orders-${traderId}-${expandedSymbol}` : null,
     () => api.getExchangeOrders(traderId, expandedSymbol as string),
-    { refreshInterval: 30000 }
+    { refreshInterval: 60000 }
   );
 
   if (isLoading) {
@@ -246,6 +249,7 @@ export function TradedSymbolsList({ traderId, onSymbolClick }: TradedSymbolsList
           ))}
         </div>
       </div>
+      <ReconciliationNotice info={data?.reconciliation} />
 
       {/* 汇总信息 */}
       {summary && summary.total_symbols > 0 && (

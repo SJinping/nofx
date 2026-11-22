@@ -195,9 +195,20 @@ export interface TradedSymbolsSummary {
   total_win_rate: number;
 }
 
+export interface ReconciliationStatus {
+  source: 'local' | 'binance';
+  status: 'pending' | 'ready' | 'stale' | 'unavailable';
+  from?: string;
+  through?: string;
+  unmatched_closes?: number;
+  unallocated_funding?: number;
+  non_usdt_commission?: boolean;
+}
+
 export interface TradedSymbolsResponse {
   symbols: TradedSymbol[];
   summary: TradedSymbolsSummary;
+  reconciliation?: ReconciliationStatus;
 }
 
 // ===== Exchange (Orders-based) =====
