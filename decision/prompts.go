@@ -554,6 +554,7 @@ func buildSystemPromptShortTerm(_ float64, btcEthLeverage, altcoinLeverage int, 
 	sb.WriteString("- 如果系统需要把 stop_loss 自动拉宽到最小距离，拉宽幅度不应超过原始止损距离的1.33倍；若需要更大幅度拉宽，说明入场位置不好，应等待更好 entry，而不是强行改写 setup。\n")
 	sb.WriteString("- 当止损被拉宽或本身较宽时，必须同步降低 `position_size_usd`，保持单笔名义风险可控，并重新计算扣除手续费/滑点后的净 RR。\n")
 	sb.WriteString(fmt.Sprintf("- take_profit 应优先参考最近已闭合 %dm range high/low、1h 支撑阻力、heatmap 大墙与 ATR 空间。\n", barIntervalMin))
+	sb.WriteString("- 若提供第一道障碍，先核对到该处的扣费后净RR。若止盈设在其后且到障碍的净RR不足，明确给出已出现的穿越或延续证据，否则 wait。用目标距离与对应30/45分钟历史波幅分位作交叉检查；分位描述波幅，不是胜率，历史缺失时用现有结构和ATR判断。\n")
 	sb.WriteString("- trend_pullback：止损放在回踩低/高点外侧，目标看前高/前低或 1h 关键位。\n")
 	sb.WriteString("- breakout_momentum：止损放在突破位内侧或突破K低/高点外侧；若止损过宽导致 RR 不足则 wait。\n")
 	sb.WriteString("- range_reversal：止损放在区间边界外侧，目标优先看区间中位或另一侧。\n")
@@ -1241,6 +1242,21 @@ func formatShortTermMarketData(data *market.Data, scanIntervalMin int, detailed 
 		market.FormatPrice(data.CurrentPrice), data.PriceChange1h, data.PriceChange4h, market.FormatIndicator(data.CurrentMACD), data.CurrentRSI7))
 	sb.WriteString(formatShortTermSetupSnapshot(data) + "\n")
 	sb.WriteString(extraUserPromptForStrategyB(data, scanIntervalMin))
+
+	if targets := data.ShortTermTargets; targets != nil {
+		if level := targets.FirstObstacle(data.CurrentPrice, true); level != nil {
+			fmt.Fprintf(&sb, "第一阻力 %s (%s)\n", market.FormatPrice(level.Price), level.Timeframe)
+		}
+		if level := targets.FirstObstacle(data.CurrentPrice, false); level != nil {
+			fmt.Fprintf(&sb, "第一支撑 %s (%s)\n", market.FormatPrice(level.Price), level.Timeframe)
+		}
+		if len(targets.History) == 0 {
+			fmt.Fprintf(&sb, "历史可达性暂缺（%s）\n", targets.HistoryStatus)
+		}
+		for _, h := range targets.History {
+			fmt.Fprintf(&sb, "历史%d分钟 %s 有利波幅 P50 %.2f / P90 %.2f × 3m ATR (n=%d)\n", h.Minutes, h.Side, h.MedianATR, h.P90ATR, h.Samples)
+		}
+	}
 
 	if detailed {
 		sb.WriteString("短线原始市场数据（用于判断突破/回踩/假突破/衰竭）：\n")

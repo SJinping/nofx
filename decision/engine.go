@@ -21,9 +21,15 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 
 	// 数据录制，方便离线回测
 	if ctx.EnableRecording {
-		if err := saveContextToFile(ctx, ctx.TraderID); err != nil {
-			// 录制失败不影响主流程，仅打印日志
-			log.Printf("⚠️  数据录制失败: %v", err)
+		recordContext := func() {
+			if err := saveContextToFile(ctx, ctx.TraderID); err != nil {
+				log.Printf("⚠️  数据录制失败: %v", err)
+			}
+		}
+		if isStrategyV(ctx) {
+			defer recordContext()
+		} else {
+			recordContext()
 		}
 	}
 	// =====================
@@ -53,6 +59,20 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 		return buildNoMarketDataSkipDecision(ctx, strategy.Name()), nil
 	}
 
+	if isStrategyV(ctx) {
+		ctx.FlatScan = evaluateFlatScan(ctx)
+		if ctx.FlatScan != nil && ctx.FlatScan.Skipped {
+			return flatScanSkipDecision(ctx.FlatScan), nil
+		}
+		for _, detailed := range []bool{true, false} {
+			for _, data := range ctx.MarketDataMap {
+				if isShortTermHeavyData(data) == detailed {
+					data.PrepareShortTermReachability()
+				}
+			}
+		}
+	}
+
 	// 4. 否则构建System/User Prompt，让LLM决策
 	systemPrompt := strategy.BuildSystemPrompt(ctx)
 	userPrompt := strategy.BuildUserPrompt(ctx)
@@ -68,6 +88,12 @@ func GetFullDecision(ctx *Context) (*FullDecision, error) {
 	// Unsafe opens are downgraded to wait, preserving valid risk-reduction
 	// decisions in the same batch. StrategyA/B return through the unchanged path.
 	if isStrategyV(ctx) {
+		for i := range decision.Decisions {
+			d := &decision.Decisions[i]
+			if data := ctx.MarketDataMap[d.Symbol]; data != nil {
+				d.TargetMetrics = MeasureShortTermTarget(d, ctx, data.CurrentPrice)
+			}
+		}
 		for _, guardErr := range guardShortTermDecisionsAtRealtimePrice(decision.Decisions, ctx) {
 			errType := stats.ClassifyDecisionValidateError(guardErr.Error())
 			recordError(errType, guardErr.Error(), "")
@@ -308,6 +334,7 @@ func fetchMarketDataForContext(ctx *Context) error {
 
 	shortTermMode := isStrategyV(ctx)
 	shortTermHeavySymbols := selectShortTermHeavySymbols(ctx, symbolSet, 5)
+	ctx.flatScanDataIncomplete = false
 
 	for symbol := range symbolSet {
 		var data *market.Data
@@ -328,6 +355,9 @@ func fetchMarketDataForContext(ctx *Context) error {
 			data, err = market.Get(symbol)
 		}
 		if err != nil {
+			if shortTermMode && shortTermHeavySymbols[symbol] {
+				ctx.flatScanDataIncomplete = true
+			}
 			// 单个币种失败不影响整体，记录错误
 			log.Printf("⚠️  获取 %s 市场数据失败: %v", symbol, err)
 			continue
@@ -348,6 +378,10 @@ func fetchMarketDataForContext(ctx *Context) error {
 			}
 		}
 
+		if shortTermMode && shortTermHeavySymbols[symbol] &&
+			(data.MidTermContext == nil || !data.ShortTermTargets.Fresh(time.Now())) {
+			ctx.flatScanDataIncomplete = true
+		}
 		ctx.MarketDataMap[symbol] = data
 	}
 

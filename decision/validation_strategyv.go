@@ -389,6 +389,7 @@ func guardShortTermDecisionsAtRealtimePrice(decisions []Decision, ctx *Context) 
 
 		livePrice, err := market.GetRealtimePrice(d.Symbol)
 		if err == nil {
+			d.RealtimeTargetMetrics = MeasureShortTermTarget(d, ctx, livePrice)
 			err = ValidateShortTermExecutionPrice(d, ctx, livePrice)
 		}
 		if err != nil {

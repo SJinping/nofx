@@ -3,6 +3,7 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
+	"nofx/logger"
 	"nofx/market"
 	"os"
 	"time"
@@ -25,10 +26,11 @@ type RecordedContext struct {
 	OITopData  map[string]*OITopData   `json:"oi_top_data"`
 
 	// 配置和绩效
-	BTCETHLeverage     int                  `json:"btc_eth_leverage"`
-	AltcoinLeverage    int                  `json:"altcoin_leverage"`
-	MinPositionSizeUSD float64              `json:"min_position_size_usd,omitempty"`
-	Performance        *PerformanceSnapshot `json:"performance,omitempty"`
+	BTCETHLeverage     int                       `json:"btc_eth_leverage"`
+	AltcoinLeverage    int                       `json:"altcoin_leverage"`
+	MinPositionSizeUSD float64                   `json:"min_position_size_usd,omitempty"`
+	FlatScan           *logger.StrategyVFlatScan `json:"flat_scan,omitempty"`
+	Performance        *PerformanceSnapshot      `json:"performance,omitempty"`
 }
 
 // PerformanceSnapshot 绩效快照（避免使用interface{}）
@@ -53,6 +55,7 @@ func saveContextToFile(ctx *Context, traderID string) error {
 		BTCETHLeverage:     ctx.BTCETHLeverage,
 		AltcoinLeverage:    ctx.AltcoinLeverage,
 		MinPositionSizeUSD: ctx.MinOpenPositionSizeUSD(),
+		FlatScan:           ctx.FlatScan,
 	}
 
 	// 提取Performance（如果有）

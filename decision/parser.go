@@ -85,6 +85,8 @@ func extractDecisions(response string) ([]Decision, error) {
 	// 标记所有LLM生成的决策
 	for i := range decisions {
 		decisions[i].DecisionSource = "llm"
+		decisions[i].TargetMetrics = nil
+		decisions[i].RealtimeTargetMetrics = nil
 	}
 
 	return decisions, nil

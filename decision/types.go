@@ -185,8 +185,12 @@ type Context struct {
 	PaperTradingMode bool `json:"-"`
 
 	// 当前 trader 的最小净风险回报比（<=0 时使用 DefaultMinRiskReward）
-	MinRiskReward      float64 `json:"-"`
-	MinPositionSizeUSD float64 `json:"-"`
+	MinRiskReward                  float64                   `json:"-"`
+	MinPositionSizeUSD             float64                   `json:"-"`
+	DisableStrategyVFlatScanFilter bool                      `json:"-"`
+	FlatScan                       *logger.StrategyVFlatScan `json:"-"`
+	flatScanDataIncomplete         bool
+	PositionsUnconfirmed           bool `json:"-"`
 
 	// 止损最小距离配置（从config层传入，零值时使用默认）
 	StopLossDistance StopLossDistanceConfig `json:"-"`
@@ -300,7 +304,9 @@ type Decision struct {
 	WatchPriority         int     `json:"watch_priority,omitempty"`
 
 	// 决策来源标记: "llm" = LLM生成, "auto_stop_loss" = 自动止损, "auto_take_profit" = 自动止盈
-	DecisionSource string `json:"decision_source,omitempty"`
+	DecisionSource        string                         `json:"decision_source,omitempty"`
+	TargetMetrics         *market.ShortTermTargetMetrics `json:"target_metrics,omitempty"`
+	RealtimeTargetMetrics *market.ShortTermTargetMetrics `json:"realtime_target_metrics,omitempty"`
 	// ValidationError is internal validation state; invalid actions are logged and skipped.
 	ValidationError  string `json:"-"`
 	ExpectedStage    int    `json:"-"` // 自动仓位动作生成时预期的阶段，用于并发幂等校验

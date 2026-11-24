@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
+	"nofx/market"
 	"nofx/mcp"
 	"os"
 	"path/filepath"
@@ -17,23 +18,24 @@ import (
 
 // DecisionRecord 决策记录
 type DecisionRecord struct {
-	Timestamp       time.Time          `json:"timestamp"`       // 决策时间
-	CycleNumber     int                `json:"cycle_number"`    // 周期编号
-	InputPrompt     string             `json:"input_prompt"`    // 发送给AI的输入prompt
-	CoTTrace        string             `json:"cot_trace"`       // AI思维链（输出）
-	DecisionJSON    string             `json:"decision_json"`   // 决策JSON
-	AccountState    AccountSnapshot    `json:"account_state"`   // 账户状态快照
-	Positions       []PositionSnapshot `json:"positions"`       // 持仓快照
-	CandidateCoins  []string           `json:"candidate_coins"` // 候选币种列表
-	Decisions       []DecisionAction   `json:"decisions"`       // 执行的决策
-	ExecutionLog    []string           `json:"execution_log"`   // 执行日志
-	Success         bool               `json:"success"`         // 是否成功
-	ErrorMessage    string             `json:"error_message"`   // 错误信息（如果有）
-	LLMModel        string             `json:"llm_model,omitempty"`
-	LLMResponseID   string             `json:"llm_response_id,omitempty"`
-	LLMFinishReason string             `json:"llm_finish_reason,omitempty"`
-	LLMUsage        *mcp.TokenUsage    `json:"llm_usage,omitempty"`
-	RawAIResponse   string             `json:"raw_ai_response,omitempty"`
+	StrategyVFlatScan *StrategyVFlatScan `json:"strategy_v_flat_scan,omitempty"`
+	Timestamp         time.Time          `json:"timestamp"`       // 决策时间
+	CycleNumber       int                `json:"cycle_number"`    // 周期编号
+	InputPrompt       string             `json:"input_prompt"`    // 发送给AI的输入prompt
+	CoTTrace          string             `json:"cot_trace"`       // AI思维链（输出）
+	DecisionJSON      string             `json:"decision_json"`   // 决策JSON
+	AccountState      AccountSnapshot    `json:"account_state"`   // 账户状态快照
+	Positions         []PositionSnapshot `json:"positions"`       // 持仓快照
+	CandidateCoins    []string           `json:"candidate_coins"` // 候选币种列表
+	Decisions         []DecisionAction   `json:"decisions"`       // 执行的决策
+	ExecutionLog      []string           `json:"execution_log"`   // 执行日志
+	Success           bool               `json:"success"`         // 是否成功
+	ErrorMessage      string             `json:"error_message"`   // 错误信息（如果有）
+	LLMModel          string             `json:"llm_model,omitempty"`
+	LLMResponseID     string             `json:"llm_response_id,omitempty"`
+	LLMFinishReason   string             `json:"llm_finish_reason,omitempty"`
+	LLMUsage          *mcp.TokenUsage    `json:"llm_usage,omitempty"`
+	RawAIResponse     string             `json:"raw_ai_response,omitempty"`
 }
 
 // AccountSnapshot 账户状态快照
@@ -59,17 +61,25 @@ type PositionSnapshot struct {
 
 // DecisionAction 决策动作
 type DecisionAction struct {
-	Action         string    `json:"action"`                    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
-	Symbol         string    `json:"symbol"`                    // 币种
-	DecisionSource string    `json:"decision_source,omitempty"` // 决策来源: llm/auto_stop_loss/auto_take_profit/...
-	Reasoning      string    `json:"reasoning,omitempty"`       // 决策理由（自动止盈/止损时包含触发条件）
-	Quantity       float64   `json:"quantity"`                  // 数量
-	Leverage       int       `json:"leverage"`                  // 杠杆（开仓时）
-	Price          float64   `json:"price"`                     // 执行价格
-	OrderID        int64     `json:"order_id"`                  // 订单ID
-	Timestamp      time.Time `json:"timestamp"`                 // 执行时间
-	Success        bool      `json:"success"`                   // 是否成功
-	Error          string    `json:"error"`                     // 错误信息
+	ExecutionTargetMetrics *market.ShortTermTargetMetrics `json:"execution_target_metrics,omitempty"`
+	Action                 string                         `json:"action"`                    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
+	Symbol                 string                         `json:"symbol"`                    // 币种
+	DecisionSource         string                         `json:"decision_source,omitempty"` // 决策来源: llm/auto_stop_loss/auto_take_profit/...
+	Reasoning              string                         `json:"reasoning,omitempty"`       // 决策理由（自动止盈/止损时包含触发条件）
+	Quantity               float64                        `json:"quantity"`                  // 数量
+	Leverage               int                            `json:"leverage"`                  // 杠杆（开仓时）
+	Price                  float64                        `json:"price"`                     // 执行价格
+	OrderID                int64                          `json:"order_id"`                  // 订单ID
+	Timestamp              time.Time                      `json:"timestamp"`                 // 执行时间
+	Success                bool                           `json:"success"`                   // 是否成功
+	Error                  string                         `json:"error"`                     // 错误信息
+}
+
+type StrategyVFlatScan struct {
+	Skipped bool     `json:"skipped"`
+	Reason  string   `json:"reason"`
+	Checked int      `json:"checked_symbols"`
+	Matches []string `json:"matches,omitempty"`
 }
 
 // DecisionLogger 决策日志记录器

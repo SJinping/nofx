@@ -71,7 +71,8 @@ type TraderConfig struct {
 	MinRiskReward float64 `json:"min_risk_reward,omitempty"`
 
 	// 最小开仓名义金额（USDT）。省略或为 0 时使用默认 50。
-	MinPositionSizeUSD float64 `json:"min_position_size_usd,omitempty"`
+	MinPositionSizeUSD             float64 `json:"min_position_size_usd,omitempty"`
+	DisableStrategyVFlatScanFilter bool    `json:"disable_strategy_v_flat_scan_filter,omitempty"`
 
 	// 新增：Prompt策略选择（A 或 B）
 	PromptStrategy string `json:"prompt_strategy,omitempty"`

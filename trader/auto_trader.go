@@ -80,11 +80,12 @@ type AutoTraderConfig struct {
 	LeverageClip                     decision.LeverageClipConfig
 
 	// 风险控制（仅作为提示，AI可自主决定）
-	MaxDailyLoss       float64       // 最大日亏损百分比（提示）
-	MaxDrawdown        float64       // 最大回撤百分比（提示）
-	StopTradingTime    time.Duration // 触发风控后暂停时长
-	MinPositionSizeUSD float64       // 最小开仓名义金额，USDT
-	MinRiskReward      float64       // 最小风险回报比
+	MaxDailyLoss                   float64       // 最大日亏损百分比（提示）
+	MaxDrawdown                    float64       // 最大回撤百分比（提示）
+	StopTradingTime                time.Duration // 触发风控后暂停时长
+	DisableStrategyVFlatScanFilter bool
+	MinPositionSizeUSD             float64 // 最小开仓名义金额，USDT
+	MinRiskReward                  float64 // 最小风险回报比
 
 	// 纸上交易模式
 	PaperTradingMode         bool     // 是否启用纸上交易模式（只做策略分析，不实际下单）
@@ -1139,8 +1140,9 @@ func (at *AutoTrader) runCycle() error {
 	}
 
 	// 4. 调用AI获取完整决策
-	log.Println("🤖 正在请求AI分析并决策...")
+	log.Println("🤖 正在分析行情并生成决策...")
 	engeinDecision, err := decision.GetFullDecision(ctx)
+	record.StrategyVFlatScan = ctx.FlatScan
 	at.mergeAutoStateObservations(ctx)
 
 	// 记录 LLM 调用费用（即使决策解析失败，token 已消耗）
@@ -1351,6 +1353,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 	// 2. 获取持仓信息（失败时尝试使用缓存）
 	positions, err := at.trader.GetPositions()
+	positionsUnconfirmed := err != nil
 	if err != nil {
 		// 尝试使用缓存数据
 		at.cacheMutex.RLock()
@@ -1681,29 +1684,31 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			PeakEquity:          peakEquity,
 			DrawdownFromPeakPct: drawdownFromPeakPct,
 		},
-		Positions:           positionInfos,
-		CandidateCoins:      candidateCoins,
-		Performance:         performance,
-		LifetimePerformance: lifetimePerformance,
-		PerformanceReset:    performanceReset,
-		PerformanceCooldown: performanceCooldown,
-		RecentAutoEvents:    recentAutoEvents,
-		RecentTrades:        recentTrades,
-		AssumedTakerFeeRate: at.config.AssumedTakerFeeRate,
-		AssumedSlippageRate: at.config.AssumedSlippageRate,
-		PaperTradingMode:    at.config.PaperTradingMode,
-		MinRiskReward:       rcSnap.MinRiskReward,
-		MinPositionSizeUSD:  at.config.MinPositionSizeUSD,
-		StopLossDistance:    rcSnap.StopLossDistance,                           // 从运行时配置读取
-		AutoTakeProfit:      at.effectiveAutoTakeProfit(rcSnap.AutoTakeProfit), // 从运行时配置读取；StrategyV 使用专用档位
-		ScanIntervalMin:     rcSnap.ScanIntervalMin,                            // 用于 prompt 动态时间
-		MinHoldMinutes:      rcSnap.MinHoldMinutes,                             // LLM 最低持仓时间
-		MinOIValueMillions:  rcSnap.MinOIValueMil,                              // OI 价值过滤门槛
-		ShortTermWatchlist:  at.snapshotShortTermWatchlist(),
-		EnableRecording:     at.config.EnableRecording,
-		TraderID:            at.config.ID,
-		AutoState:           &autoStateSnapshot,
-		AI:                  at.aiClient,
+		Positions:                      positionInfos,
+		CandidateCoins:                 candidateCoins,
+		Performance:                    performance,
+		LifetimePerformance:            lifetimePerformance,
+		PerformanceReset:               performanceReset,
+		PerformanceCooldown:            performanceCooldown,
+		RecentAutoEvents:               recentAutoEvents,
+		RecentTrades:                   recentTrades,
+		AssumedTakerFeeRate:            at.config.AssumedTakerFeeRate,
+		AssumedSlippageRate:            at.config.AssumedSlippageRate,
+		PaperTradingMode:               at.config.PaperTradingMode,
+		MinRiskReward:                  rcSnap.MinRiskReward,
+		MinPositionSizeUSD:             at.config.MinPositionSizeUSD,
+		DisableStrategyVFlatScanFilter: at.config.DisableStrategyVFlatScanFilter,
+		PositionsUnconfirmed:           positionsUnconfirmed,
+		StopLossDistance:               rcSnap.StopLossDistance,                           // 从运行时配置读取
+		AutoTakeProfit:                 at.effectiveAutoTakeProfit(rcSnap.AutoTakeProfit), // 从运行时配置读取；StrategyV 使用专用档位
+		ScanIntervalMin:                rcSnap.ScanIntervalMin,                            // 用于 prompt 动态时间
+		MinHoldMinutes:                 rcSnap.MinHoldMinutes,                             // LLM 最低持仓时间
+		MinOIValueMillions:             rcSnap.MinOIValueMil,                              // OI 价值过滤门槛
+		ShortTermWatchlist:             at.snapshotShortTermWatchlist(),
+		EnableRecording:                at.config.EnableRecording,
+		TraderID:                       at.config.ID,
+		AutoState:                      &autoStateSnapshot,
+		AI:                             at.aiClient,
 	}
 
 	// 注入可插拔策略，默认使用 StrategyA
@@ -2084,6 +2089,7 @@ func (at *AutoTrader) executeOpenWithRecord(ctx *decision.Context, dec *decision
 	sizeAtPrice := func(price float64) (float64, error) {
 		actionRecord.Price = price
 		if strategyV {
+			actionRecord.ExecutionTargetMetrics = decision.MeasureShortTermTarget(dec, ctx, price)
 			if err := decision.ValidateShortTermExecutionPrice(dec, ctx, price); err != nil {
 				return 0, err
 			}

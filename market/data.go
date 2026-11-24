@@ -189,6 +189,8 @@ type Data struct {
 	IntradayATR14     float64 // 3分钟K线 ATR14（价格单位）；用于短线止损距离等
 	LongerTermContext *LongerTermData
 	MidTermContext    *MidTermData
+	ShortTermTargets  *ShortTermTargets `json:"short_term_targets,omitempty"`
+	shortTermBars     []Kline
 
 	// NOFX Data API (best-effort, nil = unavailable)
 	NofxAI300   *NofxAI300
@@ -500,10 +502,11 @@ func GetClosedWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 	}
 
 	var midTermData *MidTermData
+	var closed1h []Kline
 	if opt.IncludeMidTermContext {
 		klines1h, fetchErr := GetKlines(symbol, "1h", 80)
 		if fetchErr == nil && len(klines1h) > 0 {
-			closed1h := closedKlinesAt(klines1h, nowMs)
+			closed1h = closedKlinesAt(klines1h, nowMs)
 			if len(closed1h) >= 50 {
 				midTermData = calculateMidTermData(closed1h)
 			}
@@ -525,6 +528,8 @@ func GetClosedWithOptions(symbol string, opt FetchOptions) (*Data, error) {
 		IntradayATR14:     intradayATR14,
 		LongerTermContext: longerTermData,
 		MidTermContext:    midTermData,
+		ShortTermTargets:  newShortTermTargets(closed3m, closed1h),
+		shortTermBars:     closed3m,
 	}, nil
 }
 
@@ -570,15 +575,24 @@ func closedKlinesAt(klines []Kline, nowMs int64) []Kline {
 
 // GetKlines 从Binance获取K线数据
 func GetKlines(symbol, interval string, limit int) ([]Kline, error) {
-	url := fmt.Sprintf("%s/fapi/v1/klines?symbol=%s&interval=%s&limit=%d",
-		fapiBaseURL,
-		symbol, interval, limit)
+	return getKlines(fapiBaseURL, symbol, interval, limit, 0)
+}
+
+func getKlines(baseURL, symbol, interval string, limit int, endTime int64) ([]Kline, error) {
+	params := url.Values{"symbol": {symbol}, "interval": {interval}, "limit": {strconv.Itoa(limit)}}
+	if endTime > 0 {
+		params.Set("endTime", strconv.FormatInt(endTime, 10))
+	}
+	url := baseURL + "/fapi/v1/klines?" + params.Encode()
 
 	resp, err := httpClient.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("klines %s %s: HTTP %d", symbol, interval, resp.StatusCode)
+	}
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -592,22 +606,28 @@ func GetKlines(symbol, interval string, limit int) ([]Kline, error) {
 
 	klines := make([]Kline, len(rawData))
 	for i, item := range rawData {
-		openTime := int64(item[0].(float64))
+		if len(item) < 7 {
+			return nil, fmt.Errorf("klines %s %s: incomplete row", symbol, interval)
+		}
+		openTime, openOK := item[0].(float64)
+		closeTime, closeOK := item[6].(float64)
+		if !openOK || !closeOK || openTime < 0 || closeTime <= openTime {
+			return nil, fmt.Errorf("klines %s %s: invalid timestamps", symbol, interval)
+		}
 		open, _ := parseFloat(item[1])
 		high, _ := parseFloat(item[2])
 		low, _ := parseFloat(item[3])
 		close, _ := parseFloat(item[4])
 		volume, _ := parseFloat(item[5])
-		closeTime := int64(item[6].(float64))
 
 		klines[i] = Kline{
-			OpenTime:  openTime,
+			OpenTime:  int64(openTime),
 			Open:      open,
 			High:      high,
 			Low:       low,
 			Close:     close,
 			Volume:    volume,
-			CloseTime: closeTime,
+			CloseTime: int64(closeTime),
 		}
 	}
 
